@@ -3,52 +3,80 @@ on:
   schedule: [{ cron: "*/15 * * * *" }]
   workflow_dispatch:
 
+# important pour pouvoir pousser des commits + gh-pages
+permissions:
+  contents: write
+
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+        with:
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Install deps
         run: |
           python -m pip install -U pip
           pip install -r requirements.txt
           pip install mkdocs-material mkdocs-jupyter matplotlib pyarrow
+      - name: Debug env
+        run: |
+          python -V
+          pip list | sed -n '1,80p'
 
-      - name: Ingest snapshot (Velib)
-        run: python -m src.ingest
+      - name: Ingest snapshot (retry x3)
+        run: |
+          set -e
+          for i in 1 2 3; do
+            python -m src.ingest && break || (echo "retry $i/3" && sleep 5)
+          done
 
-      - name: Prune warehouse (>30 days) to keep repo light
+      - name: Ensure table + prune >30d
         run: |
           python - << 'PY'
           import duckdb, datetime as dt
           con = duckdb.connect("warehouse.duckdb")
+          con.execute("""
+          CREATE TABLE IF NOT EXISTS velib_snapshots (
+            ts_utc TIMESTAMP, stationcode VARCHAR, name VARCHAR,
+            numbikesavailable DOUBLE, numdocksavailable DOUBLE,
+            mechanical DOUBLE, ebike DOUBLE, capacity DOUBLE,
+            is_installed BOOLEAN, is_renting BOOLEAN, is_returning BOOLEAN,
+            lat DOUBLE, lon DOUBLE
+          );
+          """)
           cutoff = (dt.datetime.utcnow() - dt.timedelta(days=30)).date()
           con.execute("DELETE FROM velib_snapshots WHERE ts_utc::DATE < ?", [cutoff])
           print("Pruned rows before", cutoff)
           PY
 
-      - name: Aggregate hourly + forecast 24h
+      - name: Aggregate & forecast
         run: |
           python -m src.aggregate
           python -m src.run_batch
 
-      - name: Generate docs (Results page)
+      - name: Generate docs
         run: python tools/make_report.py
 
       - name: Build site
-        run: mkdocs build
+        run: python -m mkdocs build
 
-      - name: Commit exports, docs, and warehouse
+      - name: Commit data & docs (if changed)
         run: |
           git config user.name "github-actions"
           git config user.email "actions@users.noreply.github.com"
           git add exports docs warehouse.duckdb || true
-          git commit -m "ci: +snapshot, +hourly, +forecast, +docs" || echo "nothing to commit"
-          git push
+          if git diff --staged --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "ci: +snapshot,+hourly,+forecast,+docs"
+            git push
+          fi
 
       - name: Publish to gh-pages
         uses: peaceiris/actions-gh-pages@v3
