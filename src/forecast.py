@@ -1,11 +1,14 @@
 import pandas as pd, numpy as np
 from lightgbm import LGBMRegressor
 
-def make_features(df_hour: pd.DataFrame) -> pd.DataFrame:
-    df = df_hour.copy()
+def make_features(df):
+    df = df.copy()
     df["hour"] = pd.to_datetime(df["hour_utc"]).dt.hour
     df["dow"] = pd.to_datetime(df["hour_utc"]).dt.dayofweek
+    if "temp_C" in df:
+        df["temp_C"] = df["temp_C"].astype(float)
     return df
+
 
 def train_forecast(df_hour: pd.DataFrame, horizon_h=24) -> pd.DataFrame:
     out = []

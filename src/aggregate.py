@@ -1,4 +1,6 @@
 import duckdb, pandas as pd, numpy as np
+import requests, pandas as pd
+from datetime import datetime, timezone
 
 CON = duckdb.connect("warehouse.duckdb")
 
@@ -41,3 +43,20 @@ if __name__ == "__main__":
     df = hourly_occupancy()
     df.to_parquet("exports/velib_hourly.parquet", index=False)
     print("OK hourly -> exports/velib_hourly.parquet")
+
+
+# enrichir par température Paris (centre) à l'heure
+
+def fetch_temp_series(start, end):
+    url = ("https://archive-api.open-meteo.com/v1/archive"
+           "?latitude=48.8566&longitude=2.3522"
+           f"&start_date={start.date()}&end_date={end.date()}"
+           "&hourly=temperature_2m&timezone=UTC")
+    js = requests.get(url, timeout=30).json()
+    if "hourly" not in js: return pd.DataFrame()
+    t = pd.to_datetime(js["hourly"]["time"], utc=True)
+    v = js["hourly"]["temperature_2m"]
+    return pd.DataFrame({"hour_utc": t, "temp_C": v})
+
+enr = fetch_temp_series(df["hour_utc"].min(), df["hour_utc"].max())
+df = df.merge(enr, on="hour_utc", how="left")
