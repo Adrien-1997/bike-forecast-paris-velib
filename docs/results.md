@@ -10,16 +10,16 @@
 ## Top 10 stations les plus volatiles
 |   stationcode | name                            |   std_occ |
 |--------------:|:--------------------------------|----------:|
-|         19036 | Hôpital Robert Debré            |     0.467 |
-|         17033 | Carnot - Général Lanrezac       |     0.373 |
-|          9038 | Douai - Bruxelles               |     0.338 |
-|         14001 | Edgar Quinet - Gaité            |     0.33  |
-|          5028 | Censier - Jardin des Plantes    |     0.328 |
-|         14113 | Santé - Arago                   |     0.285 |
-|         20010 | Sorbier - Gasnier-Guy           |     0.279 |
-|          5021 | Jussieu - Fossés Saint-Bernard  |     0.269 |
-|         15043 | Brancion - Lefebvre             |     0.267 |
-|         42505 | Charles Frérot - Albert Guilpin |     0.261 |
+|         19036 | Hôpital Robert Debré            |     0.436 |
+|         17033 | Carnot - Général Lanrezac       |     0.347 |
+|         14001 | Edgar Quinet - Gaité            |     0.329 |
+|          9038 | Douai - Bruxelles               |     0.314 |
+|          5028 | Censier - Jardin des Plantes    |     0.307 |
+|         14113 | Santé - Arago                   |     0.259 |
+|         20010 | Sorbier - Gasnier-Guy           |     0.257 |
+|         15043 | Brancion - Lefebvre             |     0.243 |
+|          5021 | Jussieu - Fossés Saint-Bernard  |     0.243 |
+|         42505 | Charles Frérot - Albert Guilpin |     0.243 |
 
 ## Exports
 - [Prévision 24h (CSV)](exports/velib_forecast_24h.csv)
