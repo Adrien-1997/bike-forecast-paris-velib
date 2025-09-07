@@ -1,7 +1,8 @@
 # Results
 
-**Historique couvert** : 2025-09-07 22:00:00 → 2025-09-07 22:00:00  
-**Stations** : 1405
+**Historique couvert** : 2025-09-08 01:00:00+02:00 → 2025-09-08 01:00:00+02:00  
+**Stations** : 1452  
+*(Heure affichée : Europe/Paris)*
 
 ## Example (historique + forecast 24h)
 ![sample](assets/sample_forecast.png)
@@ -10,15 +11,15 @@
 |   stationcode | name                                    |   std_occ |
 |--------------:|:----------------------------------------|----------:|
 |         10003 | Hauteville - Bonne Nouvelle             |       nan |
+|         10004 | Metz - Faubourg Saint-Denis             |       nan |
 |         10005 | Petites Ecuries - Faubourg Poissonnière |       nan |
 |         10006 | Petites Ecuries - Faubourg Saint-Denis  |       nan |
 |         10008 | Cité Riverin - Château d'Eau            |       nan |
 |         10009 | Mairie du 10ème                         |       nan |
+|          1001 | Quai de l'Horloge - Pont Neuf           |       nan |
 |         10010 | Place Jacques Bonsergent                |       nan |
 |         10011 | Bourse du Travail                       |       nan |
 |         10012 | Vinaigriers - Magenta                   |       nan |
-|         10013 | Alibert - Jemmapes                      |       nan |
-|         10014 | Marseille - Beaurepaire                 |       nan |
 
 ## Exports
 - [Prévision 24h (CSV)](exports/velib_forecast_24h.csv)
