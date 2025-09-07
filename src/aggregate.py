@@ -1,5 +1,4 @@
-# src/aggregate.py
-import os, requests, duckdb, pandas as pd
+﻿import os, requests, duckdb, pandas as pd
 
 CON = duckdb.connect("warehouse.duckdb")
 
@@ -57,9 +56,7 @@ def hourly_occupancy(with_weather: bool = True) -> pd.DataFrame:
     df = CON.execute(q).fetchdf()
     if df.empty:
         return df
-
     df["hour_utc"] = _to_utc_naive(df["hour_utc"])
-
     if with_weather:
         enr = _fetch_temp_series(df["hour_utc"].min(), df["hour_utc"].max())
         if not enr.empty:
