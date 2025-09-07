@@ -29,7 +29,7 @@ def train_and_forecast(df_hour: pd.DataFrame, horizon_h: int = 24) -> pd.DataFra
     out = []
     for sc, g in df_hour.groupby("stationcode"):
         g = _make_features(g).dropna(subset=["occ_ratio_hour"])
-        if len(g) < 48:   # ~2 jours mini
+        if len(g) < 12:   # ~2 jours mini
             continue
 
         X_cols = _feature_cols(g)
