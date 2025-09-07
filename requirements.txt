@@ -8,3 +8,5 @@ mkdocs-material
 mkdocs-jupyter
 plotly
 pyarrow
+
+tabulate
