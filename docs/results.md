@@ -1,7 +1,7 @@
 # Results
 
 **Historique couvert** : 2025-09-07 23:00:00 → 2025-09-07 23:00:00  
-**Stations** : 1447
+**Stations** : 1452
 
 ## Example (historique + forecast 24h)
 ![sample](assets/sample_forecast.png)
