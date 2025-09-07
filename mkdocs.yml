@@ -1,0 +1,10 @@
+﻿site_name: Vélib' Paris — Forecast (Batch)
+theme: { name: material }
+nav:
+  - Home: index.md
+  - Results: results.md
+plugins:
+  - mkdocs-jupyter
+markdown_extensions:
+  - admonition
+  - tables

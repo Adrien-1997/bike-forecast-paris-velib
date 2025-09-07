@@ -1,0 +1,10 @@
+duckdb
+pandas
+numpy
+scikit-learn
+lightgbm
+requests
+mkdocs-material
+mkdocs-jupyter
+plotly
+pyarrow
