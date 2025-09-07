@@ -1,5 +1,4 @@
-# src/run_batch.py
-import os, pandas as pd
+﻿import os, pandas as pd
 from src.aggregate import hourly_occupancy
 from src.forecast import train_and_forecast
 
