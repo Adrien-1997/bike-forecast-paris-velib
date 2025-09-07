@@ -1,10 +1,5 @@
 # src/aggregate.py
-import duckdb
-import pandas as pd
-import requests
-import os
-from datetime import datetime, timezone
-
+import os, requests, duckdb, pandas as pd
 
 CON = duckdb.connect("warehouse.duckdb")
 
@@ -85,41 +80,3 @@ if __name__ == "__main__":
             duckdb.sql("COPY out TO 'exports/velib_hourly.parquet' (FORMAT PARQUET);")
         out.to_csv("exports/velib_hourly.csv", index=False)
     print("OK hourly -> exports/velib_hourly.parquet (et .csv)")
-
-
-
-
-# enrichir par température Paris (centre) à l'heure
-
-def to_utc_naive(s: pd.Series) -> pd.Series:
-    # force en timezone-aware UTC puis retire la timezone -> naïf en UTC
-    s = pd.to_datetime(s, errors="coerce", utc=True)
-    return s.dt.tz_localize(None)
-
-def fetch_temp_series(start, end):
-    url = (
-        "https://archive-api.open-meteo.com/v1/archive"
-        f"?latitude=48.8566&longitude=2.3522"
-        f"&start_date={pd.to_datetime(start).date()}"
-        f"&end_date={pd.to_datetime(end).date()}"
-        "&hourly=temperature_2m&timezone=UTC"
-    )
-    js = requests.get(url, timeout=30).json()
-    if "hourly" not in js:
-        return pd.DataFrame()
-    t = pd.to_datetime(js["hourly"]["time"], utc=True)
-    v = pd.Series(js["hourly"]["temperature_2m"], dtype="float64")
-    return pd.DataFrame({"hour_utc": t, "temp_C": v})
-
-# normalise df en UTC naïf
-df["hour_utc"] = to_utc_naive(df["hour_utc"])
-
-# météo (peut être vide)
-enr = fetch_temp_series(df["hour_utc"].min(), df["hour_utc"].max())
-
-if not enr.empty:
-    enr["hour_utc"] = to_utc_naive(enr["hour_utc"])
-    df = df.merge(enr, on="hour_utc", how="left")
-else:
-    df["temp_C"] = pd.NA
-
