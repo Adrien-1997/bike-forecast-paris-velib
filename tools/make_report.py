@@ -198,8 +198,9 @@ def make_results_page(kpis: dict, df_vol: pd.DataFrame) -> None:
         md.write("## Carte (dernier snapshot)\n\n")
         md.write('<iframe src="{{ base_url }}/assets/map.html" width="100%" height="520" style="border:none;"></iframe>\n\n')
         md.write("## Exports\n")
-        md.write("- [Prévision 24h (CSV)](../exports/velib_forecast_24h.csv){ target=_blank }\n")
-        md.write("- [Occupations horaires (échantillon CSV)](../exports/occ_hourly_sample.csv){ target=_blank }\n")
+        md.write("- [Prévision 24h (CSV)](exports/velib_forecast_24h.csv){ target=_blank }\n")
+        md.write("- [Occupations horaires (échantillon CSV)](exports/occ_hourly_sample.csv){ target=_blank }\n")
+
 
 
 def make_monitoring_page(df_psi: pd.DataFrame, df_back: pd.DataFrame) -> None:
