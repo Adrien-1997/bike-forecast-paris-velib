@@ -10,3 +10,7 @@ mkdocs
 mkdocs-material
 mkdocs-jupyter
 folium
+
+requests
+folium
+tabulate
