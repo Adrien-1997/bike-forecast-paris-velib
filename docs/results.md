@@ -1,7 +1,7 @@
 # Results
 
 **Historique couvert** : 2025-09-08 01:00:00+02:00 → 2025-09-08 10:00:00+02:00  
-**Stations** : 1452  
+**Stations** : 1453  
 *(Heure affichée : Europe/Paris)*
 
 ## Example (historique + forecast 24h)
@@ -13,13 +13,13 @@
 |         15056 | Place Balard                      |     0.441 |
 |         12105 | Bercy - Villot                    |     0.439 |
 |          8051 | Batignolles - Rome                |     0.422 |
-|         12027 | Montgallet - Charenton            |     0.408 |
+|         33019 | Madeleine Vionnet                 |     0.405 |
+|         12027 | Montgallet - Charenton            |     0.401 |
 |         12151 | Gare de Lyon - Place Louis Armand |     0.396 |
-|         13204 | Tolbiac - Boussingault            |     0.393 |
 |         15125 | Parc Suzanne Lenglen              |     0.391 |
-|         33019 | Madeleine Vionnet                 |     0.389 |
+|         13204 | Tolbiac - Boussingault            |     0.389 |
+|         12007 | Gare de Lyon - Chalon             |     0.385 |
 |         15050 | Dominique Pado - Croix Nivert     |     0.373 |
-|         13048 | Wurtz - Tolbiac                   |     0.371 |
 
 ## Exports
 - [Prévision 24h (CSV)](exports/velib_forecast_24h.csv)
