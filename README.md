@@ -81,7 +81,7 @@ Exports CSV/Parquet + Site MkDocs (GitHub Pages)
 ```powershell
 # 1) Environnement
 py -3.11 -m venv .venv
-.\.venv\Scriptsctivate
+.\.venv\Scripts\Activate
 py -m pip install -U pip
 py -m pip install -r requirements.txt
 
