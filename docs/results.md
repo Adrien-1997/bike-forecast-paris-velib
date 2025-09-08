@@ -24,5 +24,5 @@
 <iframe src="{{ base_url }}/assets/map.html" width="100%" height="520" style="border:none;"></iframe>
 
 ## Exports
-- [Prévision 24h (CSV)]({{ base_url }}/exports/velib_forecast_24h.csv){ target=_blank }
-- [Occupations horaires (échantillon CSV)]({{ base_url }}/exports/occ_hourly_sample.csv){ target=_blank }
+- [Prévision 24h (CSV)](exports/velib_forecast_24h.csv){ target=_blank }
+- [Occupations horaires (échantillon CSV)](exports/occ_hourly_sample.csv){ target=_blank }
