@@ -8,7 +8,7 @@
 | precip_mm      |   nan |         nan |       0.015 |        nan |      0.048 |        0 |    28440 | n/a        |
 | wind_mps       |   nan |         nan |       9.066 |        nan |      1.387 |        0 |    28440 | n/a        |
 | bikes_avg      |   nan |         nan |      11.903 |        nan |     10.341 |        0 |    28440 | n/a        |
-| docks_avg      |   nan |         nan |      18.995 |        nan |     12.588 |        0 |    28440 | n/a        |
+| docks_avg      |   nan |         nan |      18.995 |        nan |     12.589 |        0 |    28440 | n/a        |
 
 _PSI_: <0.10 OK • 0.10–0.25 Attention • >0.25 Alerte_
 
