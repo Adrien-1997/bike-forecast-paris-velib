@@ -1,0 +1,16 @@
+/* cartes/iframes/images plus propres */
+.md-typeset .viz-card,
+.md-typeset img {
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.08);
+}
+
+/* images (charts) margin */
+.md-typeset img {
+  margin: 12px 0 20px 0;
+}
+
+/* sections compactes */
+.md-typeset h2 {
+  margin-top: 1.2rem;
+}

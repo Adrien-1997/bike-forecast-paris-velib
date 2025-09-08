@@ -157,6 +157,18 @@ if not hour.empty and {"temp_C"}.issubset(hour.columns):
         ax.set_title("Corrélation simple (échantillon)")
         corr_path = _save(fig, "corr_occ_temp.png")
 
+# --- Carte (embed) ---
+map_rel = "../assets/map.html"  # results/ -> assets/
+if (ROOT / "docs" / "assets" / "map.html").exists():
+    print("## Carte (dernier snapshot)\n", file=md)
+    print('<div class="viz-card">', file=md)
+    print(f'<iframe src="{map_rel}" loading="lazy" '
+          'width="100%" height="560" style="border:0;border-radius:12px;"></iframe>', file=md)
+    print("</div>\n", file=md)
+else:
+    print("> Carte non disponible (génère-la avec `py tools\\make_map.py`).\n", file=md)
+
+
 # ---------- Résumé Markdown (peu de texte, visuel) ----------
 md = io.StringIO()
 print(
