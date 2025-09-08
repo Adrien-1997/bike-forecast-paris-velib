@@ -7,8 +7,8 @@
 | temp_C         |   nan |         nan |      20.275 |        nan |      1.911 |        0 |    21175 | n/a        |
 | precip_mm      |   nan |         nan |       0.021 |        nan |      0.055 |        0 |    21175 | n/a        |
 | wind_mps       |   nan |         nan |       8.834 |        nan |      1.477 |        0 |    21175 | n/a        |
-| bikes_avg      |   nan |         nan |      12.209 |        nan |     10.706 |        0 |    21175 | n/a        |
-| docks_avg      |   nan |         nan |      18.827 |        nan |     12.539 |        0 |    21175 | n/a        |
+| bikes_avg      |   nan |         nan |      12.203 |        nan |     10.696 |        0 |    21175 | n/a        |
+| docks_avg      |   nan |         nan |      18.832 |        nan |     12.535 |        0 |    21175 | n/a        |
 
 _PSI_: <0.10 OK • 0.10–0.25 Attention • >0.25 Alerte_
 
