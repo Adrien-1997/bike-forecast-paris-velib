@@ -4,3 +4,9 @@ __pycache__/
 data/*
 !data/README.md
 !warehouse.duckdb
+# build/data artifacts
+exports/*
+!exports/.keep
+site/
+warehouse.duckdb
+data/weather_hourly.parquet
