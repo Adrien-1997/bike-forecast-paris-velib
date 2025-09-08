@@ -75,6 +75,9 @@ jobs:
           python -m tools.make_map
           python -m tools.make_monitoring
 
+      - name: Build LinkedIn share image
+        run: python tools/make_share_image.py
+
       - name: Build site
         run: mkdocs build --strict
 
