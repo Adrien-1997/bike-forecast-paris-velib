@@ -9,6 +9,10 @@
 ## Example (historique + forecast 24h)
 ![sample](assets/sample_forecast.png)
 
+## Corrélation simple
+Relation occ_ratio vs. température (échantillon)
+![occ vs temp](assets/occ_vs_temp.png)
+
 ## Top 10 stations les plus volatiles
 |   stationcode | name                           |   std_occ |
 |--------------:|:-------------------------------|----------:|
