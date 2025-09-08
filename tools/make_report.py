@@ -1,190 +1,204 @@
 ﻿# tools/make_report.py
-import pathlib, duckdb, pandas as pd
-import matplotlib.pyplot as plt, matplotlib.dates as mdates
-from src.forecast import train_and_forecast
-import sys, pathlib
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+# Génère docs/results.md + figures de qualité pour MkDocs (Material)
+import pathlib, io, textwrap
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 
-
+# Seuils rupture
+try:
+    from src.config import RUPTURE_LOW, RUPTURE_HIGH
+except Exception:
+    RUPTURE_LOW, RUPTURE_HIGH = 0.20, 0.80
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-exp  = ROOT / "exports"
-docs = ROOT / "docs"
-(docs / "assets").mkdir(parents=True, exist_ok=True)
-(docs / "exports").mkdir(parents=True, exist_ok=True)
+EXP  = ROOT / "exports"
+DEXP = ROOT / "docs" / "exports"
+ASSETS = ROOT / "docs" / "assets"
+ASSETS.mkdir(parents=True, exist_ok=True)
 
-LOCAL_TZ = "Europe/Paris"
-HIST_WINDOW_H = 36
+def _load_pair(stem: str) -> pd.DataFrame:
+    for p in [EXP/f"{stem}.parquet", EXP/f"{stem}.csv", DEXP/f"{stem}.parquet", DEXP/f"{stem}.csv"]:
+        if p.exists():
+            try:
+                df = pd.read_parquet(p) if p.suffix==".parquet" else pd.read_csv(p)
+                return df
+            except Exception:
+                pass
+    return pd.DataFrame()
 
-# --- Charger hourly ---
-hour_path_parq = exp / "velib_hourly.parquet"
-hour_path_csv  = exp / "velib_hourly.csv"
-if hour_path_parq.exists():
-    hourly = pd.read_parquet(hour_path_parq)
-elif hour_path_csv.exists():
-    hourly = pd.read_csv(hour_path_csv)
-else:
-    raise SystemExit("Aucun fichier hourly trouvé dans exports/")
+def _to_dt(s): return pd.to_datetime(s, errors="coerce")
 
-hourly["hour_utc"] = pd.to_datetime(hourly["hour_utc"], errors="coerce", utc=True)
-hourly["hour_local"] = hourly["hour_utc"].dt.tz_convert(LOCAL_TZ)
+def _nice_fig(w=10, h=4):
+    fig, ax = plt.subplots(figsize=(w, h), dpi=160)
+    return fig, ax
 
-# --- Charger forecast (si présent) ---
-pred_parq = exp / "velib_forecast_24h.parquet"
-pred_csv  = exp / "velib_forecast_24h.csv"
-if pred_parq.exists():
-    preds = pd.read_parquet(pred_parq)
-elif pred_csv.exists():
-    preds = pd.read_csv(pred_csv)
-else:
-    preds = pd.DataFrame(columns=["stationcode","hour_utc","pred_occ"])
-if not preds.empty:
-    preds["hour_utc"] = pd.to_datetime(preds["hour_utc"], errors="coerce", utc=True)
-    preds["hour_local"] = preds["hour_utc"].dt.tz_convert(LOCAL_TZ)
+def _save(fig, name):
+    p = ASSETS / name
+    fig.tight_layout()
+    fig.savefig(p, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+    return f"assets/{name}"
 
-# --- KPIs globaux ---
-n_stations = hourly["stationcode"].nunique()
-dmin_loc, dmax_loc = hourly["hour_local"].min(), hourly["hour_local"].max()
+# --- Load data
+hour = _load_pair("velib_hourly")
+fc   = _load_pair("velib_forecast_24h")
 
-# --- Station exemple avec > points récents ---
-recent = hourly[hourly["hour_local"] > (dmax_loc - pd.Timedelta(hours=HIST_WINDOW_H))]
-coverage = (recent.groupby("stationcode")["occ_ratio_hour"].count().sort_values(ascending=False))
-sc = str(coverage.index[0]) if len(coverage) else str(hourly["stationcode"].astype(str).iloc[0])
+for d in (hour, fc):
+    if not d.empty:
+        d["hour_utc"] = _to_dt(d["hour_utc"])
+        d["stationcode"] = d["stationcode"].astype(str)
 
-hist = (hourly[hourly["stationcode"].astype(str) == sc]
-        .sort_values("hour_local").tail(HIST_WINDOW_H))
-fc = preds[preds.get("stationcode","").astype(str) == sc] if not preds.empty else pd.DataFrame()
+if not hour.empty:
+    hour["capacity_est"] = (hour.get("bikes_avg",0).fillna(0) + hour.get("docks_avg",0).fillna(0)).replace(0, np.nan)
 
-# --- Graphe exemple ---
-out_png = docs / "assets" / "sample_forecast.png"
-plt.figure(figsize=(10, 4))
-if not hist.empty:
-    plt.plot(hist["hour_local"], hist["occ_ratio_hour"], label="historique")
-if not fc.empty:
-    plt.plot(fc["hour_local"], fc["pred_occ"], label="forecast 24h")
-plt.title(f"Occupation ratio — station {sc}")
-plt.xlabel(f"Heure locale ({LOCAL_TZ})"); plt.ylabel("ratio (0–1)")
-if not hist.empty or not fc.empty: plt.legend()
-ax = plt.gca()
-ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m %H:%M'))
-if not hist.empty:
-    plt.xlim(hist["hour_local"].min(), (fc["hour_local"].max() if not fc.empty else hist["hour_local"].max()))
-plt.tight_layout(); plt.savefig(out_png, dpi=150); plt.close()
+# --- KPIs
+n_snap = len(hour) if not hour.empty else 0
+n_st   = hour["stationcode"].nunique() if not hour.empty else 0
+hmin   = hour["hour_utc"].min() if not hour.empty else None
+hmax   = hour["hour_utc"].max() if not hour.empty else None
 
-# --- Health ingestion (DuckDB) ---
-con = duckdb.connect(str(ROOT / "warehouse.duckdb"))
-snap_count = con.sql("SELECT COUNT(*) c FROM velib_snapshots").fetchone()[0]
-last_ts    = con.sql("SELECT max(ts_utc) FROM velib_snapshots").fetchone()[0]
-stations   = con.sql("SELECT COUNT(DISTINCT stationcode) FROM velib_snapshots").fetchone()[0]
-health_md  = f"**Snapshots**: {snap_count}  •  **Stations**: {stations}  •  **Last (UTC)**: {last_ts}"
+# ---------- HERO: historique + forecast + zones seuils ----------
+hero_path = None
+if not hour.empty and not fc.empty:
+    last = hmax
+    lookback = last - pd.Timedelta("18h")
+    hist = hour[(hour["hour_utc"] >= lookback) & (hour["hour_utc"] <= last)].copy()
+    fut  = fc[(fc["hour_utc"] > last) & (fc["hour_utc"] <= last + pd.Timedelta("6h"))].copy()
 
-# --- Corrélation simple occ vs temp (si dispo) ---
-if "temp_C" in hourly.columns and hourly["temp_C"].notna().any():
-    sc_path = docs / "assets" / "occ_vs_temp.png"
-    sample = hourly.dropna(subset=["occ_ratio_hour","temp_C"]).sample(min(5000, len(hourly)), random_state=42)
-    plt.figure(figsize=(6,4))
-    plt.scatter(sample["temp_C"], sample["occ_ratio_hour"], s=6, alpha=0.3)
-    plt.xlabel("Temp (°C)"); plt.ylabel("Occ ratio")
-    plt.tight_layout(); plt.savefig(sc_path, dpi=120); plt.close()
-else:
-    sc_path = None
+    # Retenir une station “lisible”: forte variance récente ou top risque
+    # 1) variance
+    stds = (hist.groupby("stationcode")["occ_ratio_hour"].std().sort_values(ascending=False))
+    sc1 = stds.index[0] if len(stds) else None
+    # 2) risque max T+3h
+    def risk_row(x):
+        # score simple 0..1 centré sur 0.20 / 0.80
+        low  = np.clip((RUPTURE_LOW - x)/RUPTURE_LOW, 0, 1)
+        high = np.clip((x - RUPTURE_HIGH)/(1-RUPTURE_HIGH), 0, 1)
+        return np.maximum(low, high)
+    w3 = fut[fut["hour_utc"] <= last + pd.Timedelta("3h")].copy()
+    if not w3.empty and "pred_occ" in w3.columns:
+        w3["risk"] = risk_row(w3["pred_occ"].astype(float))
+        sc2 = (w3.groupby("stationcode")["risk"].max().sort_values(ascending=False).index[0])
+    else:
+        sc2 = None
+    sc = sc2 or sc1 or (hour["stationcode"].iloc[0] if not hour.empty else "0000")
 
-# --- Top volatilité ---
-def table_md(df: pd.DataFrame) -> str:
-    try:
-        import tabulate as _t  # noqa
-        return df.to_markdown(index=False)
-    except Exception:
-        return "<div>" + df.to_html(index=False, border=0) + "</div>"
+    # séries pour la station choisie
+    hs = hist[hist["stationcode"]==sc].sort_values("hour_utc")
+    fs = fut[fut["stationcode"]==sc].sort_values("hour_utc")
+    name = hs["name"].dropna().iloc[-1] if "name" in hs and len(hs) else sc
 
-top = (hourly.dropna(subset=["occ_ratio_hour"])
-       .groupby(["stationcode","name"], as_index=False)["occ_ratio_hour"]
-       .std().rename(columns={"occ_ratio_hour":"std_occ"})
-       .sort_values("std_occ", ascending=False).head(10))
-top["std_occ"] = top["std_occ"].round(3)
+    fig, ax = _nice_fig(10, 4.2)
+    ax.axhspan(0, RUPTURE_LOW,  color="#ff4d4f", alpha=0.08, label=f"< {RUPTURE_LOW:.0%}")
+    ax.axhspan(RUPTURE_HIGH, 1, color="#ff4d4f", alpha=0.08, label=f"> {RUPTURE_HIGH:.0%}")
+    ax.axvspan(last, hs["hour_utc"].max() + pd.Timedelta("6h"), color="#ddd", alpha=0.12, label="Prévision")
+    ax.plot(hs["hour_utc"], hs["occ_ratio_hour"], lw=2, label="Historique")
+    if "pred_occ" in fs.columns and len(fs):
+        ax.plot(fs["hour_utc"], fs["pred_occ"], lw=2, ls="--", label="Prévision")
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("Occupation (0–1)")
+    ax.set_xlabel("Heure (locale)")
+    ax.set_title(f"Occupation — {name}")
+    ax.legend(loc="upper left", frameon=False)
+    hero_path = _save(fig, "hero_occ.png")
 
-# --- Copier exports (CSV) vers docs/exports ---
-for src in [pred_csv, hour_path_csv]:
-    if src.exists():
-        dst = docs / "exports" / src.name
-        if src.resolve() != dst.resolve():
-            dst.write_bytes(src.read_bytes())
-if not hour_path_csv.exists():
-    hourly.head(5000).to_csv(hour_path_csv, index=False)
-    (docs / "exports" / "velib_hourly.csv").write_bytes(hour_path_csv.read_bytes())
+# ---------- TOP risques T+3h ----------
+top_risk_path = None
+if not fc.empty and not hour.empty and "pred_occ" in fc.columns:
+    last = hmax
+    w3 = fc[(fc["hour_utc"] > last) & (fc["hour_utc"] <= last + pd.Timedelta("3h"))].copy()
+    if not w3.empty:
+        w3["risk"] = w3["pred_occ"].astype(float).pipe(lambda x: np.maximum(
+            np.clip((RUPTURE_LOW - x)/RUPTURE_LOW, 0, 1),
+            np.clip((x - RUPTURE_HIGH)/(1-RUPTURE_HIGH), 0, 1)
+        ))
+        g = (w3.groupby(["stationcode"], as_index=False)
+               .agg(risk=("risk","max"))
+               .sort_values("risk", ascending=False)
+               .head(10))
+        g = g.merge(hour[["stationcode","name"]].drop_duplicates("stationcode"),
+                    on="stationcode", how="left")
+        fig, ax = _nice_fig(8, 4.2)
+        ax.barh(g["name"].fillna(g["stationcode"]).iloc[::-1], g["risk"].iloc[::-1], height=0.55)
+        ax.set_xlim(0, 1); ax.set_xlabel("Risque (0–1)"); ax.set_title("Top risques — T+3 h")
+        top_risk_path = _save(fig, "top_risk.png")
 
-# --- Construction de la page Results ---
-md = []
-md += ["# Results", ""]
-md += [health_md, ""]
-md += [f"**Historique couvert** : {dmin_loc} → {dmax_loc}  "]
-md += [f"**Stations** : {n_stations}  "]
-md += [f"*(Heure affichée : {LOCAL_TZ})*", ""]
-md += ["## Example (historique + forecast 24h)"]
-md += ["![sample](assets/sample_forecast.png)", ""]
-if sc_path:
-    md += ["## Corrélation simple", "Relation occ_ratio vs. température (échantillon)", 
-           "![occ vs temp](assets/occ_vs_temp.png)", ""]
-md += ["## Top 10 stations les plus volatiles", table_md(top), ""]
-md += ["## Exports"]
-if pred_csv.exists(): md += ["- [Prévision 24h (CSV)](exports/velib_forecast_24h.csv)"]
-if (docs / "exports" / "velib_hourly.csv").exists(): md += ["- [Occupations horaires (échantillon CSV)](exports/velib_hourly.csv)"]
+# ---------- TOP volatilité (48h) ----------
+top_vol_path = None
+if not hour.empty:
+    last = hmax
+    h48 = hour[hour["hour_utc"] >= last - pd.Timedelta("48h")]
+    g = (h48.groupby("stationcode")["occ_ratio_hour"].std()
+           .sort_values(ascending=False).head(10).reset_index(name="std_occ"))
+    g = g.merge(hour[["stationcode","name"]].drop_duplicates("stationcode"),
+                on="stationcode", how="left")
+    fig, ax = _nice_fig(8, 4.2)
+    ax.barh(g["name"].fillna(g["stationcode"]).iloc[::-1], g["std_occ"].iloc[::-1], height=0.55)
+    ax.set_xlabel("Écart-type (48 h)"); ax.set_title("Top volatilité — 48 h")
+    top_vol_path = _save(fig, "top_vol.png")
 
-(docs / "results.md").write_text("\n".join(md), encoding="utf-8")
-print("OK — docs/results.md mis à jour.")
-
-# --- Backtest 24h (train jusqu'à D-24h, test = dernières 24h) ---
-from src.forecast import train_and_forecast
-
-def _norm_ser(x):
-    dt = pd.to_datetime(x, errors="coerce", utc=True)
-    # Series -> .dt, DatetimeIndex -> direct
-    try:
-        dt = dt.dt.tz_localize(None)
-    except AttributeError:
-        dt = dt.tz_localize(None)
-    # Force résolution en ns (évite ns vs us)
-    return dt.astype("datetime64[ns]")
-
-BT_MAX_STATIONS = 60  # runtime raisonnable
-
-# Normaliser les timestamps de l'historique
-hourly["hour_utc"] = _norm_ser(hourly["hour_utc"])
-last_naive = hourly["hour_utc"].max()
-
-train_df = hourly[hourly["hour_utc"] <= last_naive - pd.Timedelta("24h")].copy()
-test_df  = hourly[hourly["hour_utc"] >  last_naive - pd.Timedelta("24h")].copy()
-
-# Limiter aux stations bien couvertes
-cover = train_df.groupby("stationcode")["hour_utc"].count().sort_values(ascending=False)
-keep  = list(map(str, cover.index[:BT_MAX_STATIONS]))
-train_df = train_df[train_df["stationcode"].astype(str).isin(keep)]
-test_df  = test_df[test_df["stationcode"].astype(str).isin(keep)]
-
-bt_pred = train_and_forecast(train_df, horizon_h=24)
-
-if bt_pred is not None and not bt_pred.empty and not test_df.empty:
-    # Normaliser aussi côté prédictions + test avant merge
-    bt_pred["hour_utc"] = _norm_ser(bt_pred["hour_utc"])
-    test_df["hour_utc"] = _norm_ser(test_df["hour_utc"])
-
-    bt = bt_pred.merge(
-        test_df[["stationcode","hour_utc","occ_ratio_hour"]],
-        on=["stationcode","hour_utc"], how="inner"
-    )
-
-    if not bt.empty:
-        bt["ae"] = (bt["pred_occ"] - bt["occ_ratio_hour"]).abs()
-        metrics = bt.groupby("stationcode", as_index=False)["ae"].mean().rename(columns={"ae":"mae"})
-        g_mae = metrics["mae"].mean()
-        g_med = metrics["mae"].median()
-        worst = (metrics.sort_values("mae", ascending=False)
-                 .head(10).rename(columns={"stationcode":"Station","mae":"MAE"})
-                 .round({"MAE":3}))
-
-        md += ["", "## Backtest 24h (MAE par station)"]
-        md += [f"**MAE moyenne (top {BT_MAX_STATIONS})** : {g_mae:.3f}  •  **Médiane** : {g_med:.3f}", ""]
+# ---------- Corrélation simple (occ vs température) ----------
+corr_path = None
+if not hour.empty and {"temp_C"}.issubset(hour.columns):
+    sub = hour.dropna(subset=["occ_ratio_hour","temp_C"]).sample(min(5000, len(hour)), random_state=42)
+    if len(sub):
+        fig, ax = _nice_fig(7.5, 4.5)
+        ax.scatter(sub["temp_C"], sub["occ_ratio_hour"], s=8, alpha=0.25)
+        # tendance linéaire
         try:
-            md += [worst.to_markdown(index=False), ""]
+            z = np.polyfit(sub["temp_C"], sub["occ_ratio_hour"], 1)
+            xx = np.linspace(sub["temp_C"].min(), sub["temp_C"].max(), 100)
+            ax.plot(xx, z[0]*xx + z[1], lw=2, alpha=0.8)
         except Exception:
-            md += ["<div>" + worst.to_html(index=False, border=0) + "</div>", ""]
+            pass
+        ax.set_xlabel("Température (°C)")
+        ax.set_ylabel("Occupation (0–1)")
+        ax.set_title("Corrélation simple (échantillon)")
+        corr_path = _save(fig, "corr_occ_temp.png")
+
+# ---------- Résumé Markdown (peu de texte, visuel) ----------
+md = io.StringIO()
+print(
+f"""---
+title: Results
+hide:
+  - toc
+---
+
+# Résultats
+
+**Snapshots** : {n_snap:,} &nbsp;•&nbsp; **Stations** : {n_st} &nbsp;•&nbsp; **Couverture** : {hmin} → {hmax}  
+*(Heure affichée : Europe/Paris)*
+
+""", file=md)
+
+if hero_path:
+    print(f"![Historique + prévision](/{hero_path})\n", file=md)
+
+if top_risk_path:
+    print("## À traiter en priorité (T+3h)\n", file=md)
+    print(f"![Top risques](/{top_risk_path})\n", file=md)
+
+if top_vol_path:
+    print("## Stations les plus volatiles (48 h)\n", file=md)
+    print(f"![Top volatilité](/{top_vol_path})\n", file=md)
+
+if corr_path:
+    print("## Corrélation simple\n", file=md)
+    print(f"![Occ vs Temp](/{corr_path})\n", file=md)
+
+# Liens d’export minimalistes
+exports = []
+for stem, label in [("velib_hourly","Hourly"), ("velib_forecast_24h","Forecast 24h")]:
+    for ext in ["parquet","csv"]:
+        rel = f"exports/{stem}.{ext}"
+        if (DEXP/ f"{stem}.{ext}").exists():
+            exports.append(f"[{label} ({ext})](/exports/{stem}.{ext})")
+
+if exports:
+    print("## Exports\n", file=md)
+    print(" • ".join(exports), file=md)
+
+( ROOT / "docs" / "results.md").write_text(md.getvalue(), encoding="utf-8")
+print("OK — docs/results.md mis à jour.")
