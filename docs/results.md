@@ -1,6 +1,6 @@
 # Results
 
-**Historique couvert** : 2025-09-08 01:00:00+02:00 → 2025-09-08 09:00:00+02:00  
+**Historique couvert** : 2025-09-08 01:00:00+02:00 → 2025-09-08 10:00:00+02:00  
 **Stations** : 1452  
 *(Heure affichée : Europe/Paris)*
 
@@ -10,16 +10,16 @@
 ## Top 10 stations les plus volatiles
 |   stationcode | name                              |   std_occ |
 |--------------:|:----------------------------------|----------:|
-|          8051 | Batignolles - Rome                |     0.419 |
-|         12151 | Gare de Lyon - Place Louis Armand |     0.394 |
-|         15056 | Place Balard                      |     0.372 |
-|         12007 | Gare de Lyon - Chalon             |     0.347 |
-|         12027 | Montgallet - Charenton            |     0.34  |
-|         12105 | Bercy - Villot                    |     0.333 |
-|         15039 | Abbé Groult - Convention          |     0.33  |
-|         43005 | Gare RER de Vincennes             |     0.328 |
-|         15125 | Parc Suzanne Lenglen              |     0.323 |
-|         17106 | Berthier - Porte de Clichy        |     0.315 |
+|         15056 | Place Balard                      |     0.441 |
+|         12105 | Bercy - Villot                    |     0.439 |
+|          8051 | Batignolles - Rome                |     0.422 |
+|         12027 | Montgallet - Charenton            |     0.408 |
+|         12151 | Gare de Lyon - Place Louis Armand |     0.396 |
+|         13204 | Tolbiac - Boussingault            |     0.393 |
+|         15125 | Parc Suzanne Lenglen              |     0.391 |
+|         33019 | Madeleine Vionnet                 |     0.389 |
+|         15050 | Dominique Pado - Croix Nivert     |     0.373 |
+|         13048 | Wurtz - Tolbiac                   |     0.371 |
 
 ## Exports
 - [Prévision 24h (CSV)](exports/velib_forecast_24h.csv)
