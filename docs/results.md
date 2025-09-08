@@ -1,5 +1,7 @@
 # Results
 
+**Snapshots**: 50820  •  **Stations**: 1453  •  **Last (UTC)**: 2025-09-08 08:45:45.991312
+
 **Historique couvert** : 2025-09-08 01:00:00+02:00 → 2025-09-08 10:00:00+02:00  
 **Stations** : 1453  
 *(Heure affichée : Europe/Paris)*
