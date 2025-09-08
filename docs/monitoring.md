@@ -1,13 +1,16 @@
 # Monitoring
 
-## Drift (7 jours vs. 30 jours)
+## Drift (7 jours vs. 30 jours précédents)
+| feature        |   psi |   base_mean |   curr_mean |   base_std |   curr_std |   n_base |   n_curr | psi_flag   |
+|:---------------|------:|------------:|------------:|-----------:|-----------:|---------:|---------:|:-----------|
+| occ_ratio_hour |   nan |         nan |       0.379 |        nan |      0.284 |        0 |    29893 | n/a        |
+| temp_C         |   nan |         nan |      20.423 |        nan |      2.022 |        0 |    29893 | n/a        |
+| precip_mm      |   nan |         nan |       0.015 |        nan |      0.047 |        0 |    29893 | n/a        |
+| wind_mps       |   nan |         nan |       8.96  |        nan |      1.385 |        0 |    29893 | n/a        |
+| bikes_avg      |   nan |         nan |      11.91  |        nan |     10.324 |        0 |    29893 | n/a        |
+| docks_avg      |   nan |         nan |      18.969 |        nan |     12.615 |        0 |    29893 | n/a        |
 
-> Baseline insuffisante — en attente de données de référence.
+_PSI_: <0.10 OK • 0.10–0.25 Attention • >0.25 Alerte_
 
 ## Performance (Backtest 24h)
-
-| metric   | value   |
-|:---------|:--------|
-| MAE      | 2.41    |
-| RMSE     | 3.72    |
-| sMAPE    | 14.2%   |
+(Pas assez de données pour le backtest.)
