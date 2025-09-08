@@ -169,8 +169,8 @@ def make_index_page(kpis: dict) -> None:
         md.write("[:material-chart-line: Résultats](results.md){ .md-button }\n")
         md.write("[:material-heart-pulse: Monitoring](monitoring.md){ .md-button .md-button--secondary }\n\n")
         md.write("!!! tip \"Exports\"\n")
-        md.write("    - [Prévision 24h (CSV)]({{ base_url }}/exports/velib_forecast_24h.csv){ target=_blank }\n")
-        md.write("    - [Occupations horaires (sample CSV)]({{ base_url }}/exports/occ_hourly_sample.csv){ target=_blank }\n\n")
+        md.write("    - [Prévision 24h (CSV)](exports/velib_forecast_24h.csv){ target=_blank }\n")
+        md.write("    - [Occupations horaires (sample CSV)](exports/occ_hourly_sample.csv){ target=_blank }\n\n")
         md.write("**Stack rapide**\n")
         md.write("- Ingestion snapshots → agrégation horaire  \n")
         md.write("- Features : calendaires (+ météo)  \n")
@@ -198,8 +198,9 @@ def make_results_page(kpis: dict, df_vol: pd.DataFrame) -> None:
         md.write("## Carte (dernier snapshot)\n\n")
         md.write('<iframe src="{{ base_url }}/assets/map.html" width="100%" height="520" style="border:none;"></iframe>\n\n')
         md.write("## Exports\n")
-        md.write("- [Prévision 24h (CSV)]({{ base_url }}/exports/velib_forecast_24h.csv){ target=_blank }\n")
-        md.write("- [Occupations horaires (échantillon CSV)]({{ base_url }}/exports/occ_hourly_sample.csv){ target=_blank }\n")
+        md.write("- [Prévision 24h (CSV)](../exports/velib_forecast_24h.csv){ target=_blank }\n")
+        md.write("- [Occupations horaires (échantillon CSV)](../exports/occ_hourly_sample.csv){ target=_blank }\n")
+
 
 def make_monitoring_page(df_psi: pd.DataFrame, df_back: pd.DataFrame) -> None:
     out = DOCS / "monitoring.md"
