@@ -74,26 +74,37 @@ jobs:
         run: |
           python -m tools.make_report
           python -m tools.make_map
+          python -m tools.make_monitoring
 
       - name: Build site
         run: mkdocs build --strict
 
       - name: Commit data & docs (rebase then push if changed)
         run: |
+          set -euxo pipefail
           git config user.name "github-actions"
           git config user.email "actions@users.noreply.github.com"
 
-          # N'ajoute que ce qui est tracké (exports/site/db sont ignorés désormais)
-          git add -A
-
-          if git diff --staged --quiet; then
+          # S'il n'y a aucun changement (ni dans le working tree ni en staging) → on sort
+          if git diff --quiet && git diff --cached --quiet; then
             echo "Nothing to commit."
-          else
-            git fetch origin
-            git rebase origin/main || (git rebase --abort && echo "Rebase failed" && exit 1)
-            git commit -m "ci: update hourly data and docs"
-            git push
+            exit 0
           fi
+
+          # Se mettre à jour en conservant les modifs locales (autostash)
+          git fetch origin
+          git pull --rebase --autostash origin main
+
+          # Stage + commit ce qui a réellement changé
+          git add -A
+          if git diff --staged --quiet; then
+            echo "Nothing to commit after rebase."
+            exit 0
+          fi
+
+          git commit -m "ci: update hourly data and docs"
+          git push
+
 
       - name: Publish to gh-pages
         uses: peaceiris/actions-gh-pages@v3
