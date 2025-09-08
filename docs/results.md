@@ -1,32 +1,23 @@
-# Results
+---
+title: Results
+hide:
+  - toc
+---
 
-**Snapshots**: 69709  •  **Stations**: 1453  •  **Last (UTC)**: 2025-09-08 14:12:50.085877
+# Résultats
 
-**Historique couvert** : 2025-09-08 01:00:00+02:00 → 2025-09-08 16:00:00+02:00  
-**Stations** : 1453  
+**Snapshots** : 19,722 &nbsp;•&nbsp; **Stations** : 1454 &nbsp;•&nbsp; **Couverture** : 2025-09-07 23:00:00 → 2025-09-08 16:00:00  
 *(Heure affichée : Europe/Paris)*
 
-## Example (historique + forecast 24h)
-![sample](assets/sample_forecast.png)
+
+## Stations les plus volatiles (48 h)
+
+![Top volatilité](/assets/top_vol.png)
 
 ## Corrélation simple
-Relation occ_ratio vs. température (échantillon)
-![occ vs temp](assets/occ_vs_temp.png)
 
-## Top 10 stations les plus volatiles
-|   stationcode | name                           |   std_occ |
-|--------------:|:-------------------------------|----------:|
-|         21021 | Enfants du Paradis - Peupliers |     0.517 |
-|         15056 | Place Balard                   |     0.483 |
-|          9023 | Laffitte - Italiens            |     0.468 |
-|          8103 | Artois - Berri                 |     0.448 |
-|         15058 | Place du Moulin de Javel       |     0.447 |
-|          9022 | Rossini - Laffitte             |     0.44  |
-|         15125 | Parc Suzanne Lenglen           |     0.44  |
-|         33019 | Madeleine Vionnet              |     0.438 |
-|         15133 | Saint Lambert - Blomet         |     0.431 |
-|         11003 | Keller - La Roquette           |     0.43  |
+![Occ vs Temp](/assets/corr_occ_temp.png)
 
 ## Exports
-- [Prévision 24h (CSV)](exports/velib_forecast_24h.csv)
-- [Occupations horaires (échantillon CSV)](exports/velib_hourly.csv)
+
+[Hourly (csv)](/exports/velib_hourly.csv) • [Forecast 24h (csv)](/exports/velib_forecast_24h.csv)
