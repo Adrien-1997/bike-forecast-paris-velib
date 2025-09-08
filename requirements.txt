@@ -8,3 +8,4 @@ pandas>=2.2
 numpy>=1.26
 matplotlib>=3.8
 folium>=0.15
+duckdb>=1.0
