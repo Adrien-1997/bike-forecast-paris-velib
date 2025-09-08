@@ -37,9 +37,12 @@ markdown_extensions:
   - tables
   - toc:
       permalink: true
+
+markdown_extensions:
   - pymdownx.emoji:
-      emoji_generator: !!python/name:materialx.emoji.to_svg
-      emoji_index: !!python/name:materialx.emoji.twemoji
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
   - pymdownx.highlight
   - pymdownx.inlinehilite
   - pymdownx.superfences
@@ -50,9 +53,9 @@ markdown_extensions:
 
 plugins:
   - search
-  - mkdocs-jupyter
-  - minify:
-      minify_html: true
+  # - minify
+  # - mkdocs-minify-plugin
+
 
 nav:
   - Home: index.md
