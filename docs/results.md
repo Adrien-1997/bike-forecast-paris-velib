@@ -1,8 +1,8 @@
 # Results
 
-**Snapshots**: 62444  •  **Stations**: 1453  •  **Last (UTC)**: 2025-09-08 13:14:00.136692
+**Snapshots**: 69709  •  **Stations**: 1453  •  **Last (UTC)**: 2025-09-08 14:12:50.085877
 
-**Historique couvert** : 2025-09-08 01:00:00+02:00 → 2025-09-08 15:00:00+02:00  
+**Historique couvert** : 2025-09-08 01:00:00+02:00 → 2025-09-08 16:00:00+02:00  
 **Stations** : 1453  
 *(Heure affichée : Europe/Paris)*
 
@@ -16,16 +16,16 @@ Relation occ_ratio vs. température (échantillon)
 ## Top 10 stations les plus volatiles
 |   stationcode | name                           |   std_occ |
 |--------------:|:-------------------------------|----------:|
-|         21021 | Enfants du Paradis - Peupliers |     0.501 |
-|         15056 | Place Balard                   |     0.499 |
-|         33019 | Madeleine Vionnet              |     0.477 |
-|          9023 | Laffitte - Italiens            |     0.458 |
-|          8049 | Georges V - François 1er       |     0.448 |
-|          8103 | Artois - Berri                 |     0.447 |
-|         15125 | Parc Suzanne Lenglen           |     0.444 |
-|         16201 | Porte Dauphine                 |     0.442 |
-|         12105 | Bercy - Villot                 |     0.435 |
-|         11026 | Chemin Vert - Saint-Maur       |     0.429 |
+|         21021 | Enfants du Paradis - Peupliers |     0.517 |
+|         15056 | Place Balard                   |     0.483 |
+|          9023 | Laffitte - Italiens            |     0.468 |
+|          8103 | Artois - Berri                 |     0.448 |
+|         15058 | Place du Moulin de Javel       |     0.447 |
+|          9022 | Rossini - Laffitte             |     0.44  |
+|         15125 | Parc Suzanne Lenglen           |     0.44  |
+|         33019 | Madeleine Vionnet              |     0.438 |
+|         15133 | Saint Lambert - Blomet         |     0.431 |
+|         11003 | Keller - La Roquette           |     0.43  |
 
 ## Exports
 - [Prévision 24h (CSV)](exports/velib_forecast_24h.csv)
