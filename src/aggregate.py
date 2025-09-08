@@ -1,14 +1,18 @@
-﻿# src/aggregate.py
-import os
-import duckdb
-import pandas as pd
+﻿# src/aggregate.py (extrait)
+import duckdb, pandas as pd
 from src.weather import fetch_history
+from src.weather import fetch_forecast
+
 
 CON = duckdb.connect("warehouse.duckdb")
 
-def _to_utc_naive(s: pd.Series) -> pd.Series:
-    s = pd.to_datetime(s, errors="coerce", utc=True)
-    return s.dt.tz_localize(None)
+def _to_utc_naive_hour(x):
+    s = pd.to_datetime(x, errors="coerce", utc=True)
+    try:
+        s = s.dt.floor("h").dt.tz_localize(None)
+    except AttributeError:
+        s = s.floor("h").tz_localize(None)  # DatetimeIndex
+    return s
 
 def hourly_occupancy(with_weather: bool = True) -> pd.DataFrame:
     q = """
@@ -52,18 +56,49 @@ def hourly_occupancy(with_weather: bool = True) -> pd.DataFrame:
     if df.empty:
         return df
 
-    df["hour_utc"] = _to_utc_naive(df["hour_utc"])
+    # 1) Normaliser -> UTC naïf, arrondi heure
+    df["hour_utc"] = _to_utc_naive_hour(df["hour_utc"])
 
     if with_weather:
-        w = fetch_history(df["hour_utc"].min(), df["hour_utc"].max())
+        # 2) Récup histoire météo sur la fenêtre utile
+        w = pd.DataFrame(columns=["hour_utc","temp_C","precip_mm","wind_mps"])
+        try:
+            wf = fetch_history(df["hour_utc"].min(), df["hour_utc"].max())
+            if wf is not None and not wf.empty:
+                w = wf.copy()
+        except Exception as e:
+            print(f"[weather] fetch_history failed: {e}")
+
+        # 3) Normaliser aussi côté météo (défensif)
         if not w.empty:
+            w["hour_utc"] = _to_utc_naive_hour(w["hour_utc"])
+            # 4) Jointure
             df = df.merge(w, on="hour_utc", how="left")
         else:
-            for c in ["temp_C", "precip_mm", "wind_mps"]:
-                df[c] = pd.NA
+            for c in ["temp_C","precip_mm","wind_mps"]:
+                if c not in df.columns:
+                    df[c] = pd.NA
+
     return df
 
+try:
+    missing = df[["temp_C","precip_mm","wind_mps"]].isna().any(axis=1).any()
+    if missing:
+        fx_start = pd.Timestamp.utcnow().floor("h").tz_localize(None)
+        wf = fetch_forecast(fx_start, 24)
+        if not wf.empty:
+            wf["hour_utc"] = wf["hour_utc"]  # déjà normalisé
+            df = df.merge(wf, on="hour_utc", how="left", suffixes=("", "_fx"))
+            for c in ["temp_C","precip_mm","wind_mps"]:
+                df[c] = df[c].fillna(df.get(f"{c}_fx"))
+            dropcols = [c for c in ["temp_C_fx","precip_mm_fx","wind_mps_fx"] if c in df.columns]
+            if dropcols: df.drop(columns=dropcols, inplace=True)
+except Exception as e:
+    print(f"[weather] forecast backfill skipped: {e}")
+
+
 if __name__ == "__main__":
+    import os
     os.makedirs("exports", exist_ok=True)
     out = hourly_occupancy(with_weather=True)
     if not out.empty:
