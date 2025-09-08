@@ -1,6 +1,6 @@
 # Results
 
-**Historique couvert** : 2025-09-08 01:00:00+02:00 → 2025-09-08 08:00:00+02:00  
+**Historique couvert** : 2025-09-08 01:00:00+02:00 → 2025-09-08 09:00:00+02:00  
 **Stations** : 1452  
 *(Heure affichée : Europe/Paris)*
 
@@ -8,18 +8,18 @@
 ![sample](assets/sample_forecast.png)
 
 ## Top 10 stations les plus volatiles
-|   stationcode | name                                |   std_occ |
-|--------------:|:------------------------------------|----------:|
-|          8051 | Batignolles - Rome                  |     0.443 |
-|         12151 | Gare de Lyon - Place Louis Armand   |     0.37  |
-|         10151 | Gare du Nord - Faubourg Saint-Denis |     0.323 |
-|         12031 | Gabriel Lamé                        |     0.318 |
-|         43005 | Gare RER de Vincennes               |     0.309 |
-|         14101 | Gare Montparnasse - Edgar Quinet    |     0.305 |
-|         12007 | Gare de Lyon - Chalon               |     0.294 |
-|         20045 | Louis Ganne - Davout                |     0.279 |
-|         10027 | Dunkerque - Alsace                  |     0.277 |
-|         22012 | Madeleine Michelis - Roule          |     0.267 |
+|   stationcode | name                              |   std_occ |
+|--------------:|:----------------------------------|----------:|
+|          8051 | Batignolles - Rome                |     0.411 |
+|         12151 | Gare de Lyon - Place Louis Armand |     0.385 |
+|         43005 | Gare RER de Vincennes             |     0.357 |
+|         17106 | Berthier - Porte de Clichy        |     0.353 |
+|         16201 | Porte Dauphine                    |     0.335 |
+|         15039 | Abbé Groult - Convention          |     0.33  |
+|         11014 | Place de la Nation - Taillebourg  |     0.319 |
+|         12105 | Bercy - Villot                    |     0.313 |
+|         15122 | Place Charles Vallin              |     0.306 |
+|         14101 | Gare Montparnasse - Edgar Quinet  |     0.305 |
 
 ## Exports
 - [Prévision 24h (CSV)](exports/velib_forecast_24h.csv)
