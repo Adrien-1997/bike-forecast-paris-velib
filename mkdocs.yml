@@ -3,6 +3,7 @@ theme: { name: material }
 nav:
   - Home: index.md
   - Results: results.md
+  - Monitoring: monitoring.md
 plugins:
   - mkdocs-jupyter
 markdown_extensions:
