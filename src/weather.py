@@ -8,12 +8,16 @@ HIST_PATH = CACHE / "weather_hourly.parquet"
 
 LAT, LON = 48.8566, 2.3522
 
-def _to_utc_naive(s):
-    s = pd.to_datetime(s, errors="coerce", utc=True)
-    return s.dt.tz_localize(None)
+def _to_utc_naive(x):
+    """Accepte list/ndarray/Series/DatetimeIndex; retourne tz-naive en UTC."""
+    dt = pd.to_datetime(x, errors="coerce", utc=True)
+    # DatetimeIndex a .tz_localize mais pas .dt ; Series a .dt.tz_localize
+    try:
+        return dt.tz_localize(None)          # DatetimeIndex
+    except AttributeError:
+        return dt.dt.tz_localize(None)       # Series
 
 def fetch_history(start_ts, end_ts):
-    """Historique horaire temp/precip/vent (UTC naive) + cache parquet (merge/dedup)"""
     start = pd.to_datetime(start_ts).date()
     end   = pd.to_datetime(end_ts).date()
     url = (
@@ -24,7 +28,7 @@ def fetch_history(start_ts, end_ts):
         "&timezone=UTC"
     )
     js = requests.get(url, timeout=30).json()
-    if "hourly" not in js:  # fallback vide
+    if "hourly" not in js:
         return pd.DataFrame(columns=["hour_utc","temp_C","precip_mm","wind_mps"])
 
     df = pd.DataFrame({
@@ -34,7 +38,7 @@ def fetch_history(start_ts, end_ts):
         "wind_mps": pd.to_numeric(js["hourly"]["wind_speed_10m"], errors="coerce"),
     })
 
-    # Cache (append + dedup sur hour_utc)
+    # Cache (append + dedup)
     try:
         if HIST_PATH.exists():
             old = pd.read_parquet(HIST_PATH)
@@ -49,7 +53,6 @@ def fetch_history(start_ts, end_ts):
     return df
 
 def fetch_forecast(start_ts, horizon_h=24):
-    """Prévision horaire prochaine 24h (UTC naive)"""
     url = (
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={LAT}&longitude={LON}"
