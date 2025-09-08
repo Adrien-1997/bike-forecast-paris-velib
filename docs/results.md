@@ -11,15 +11,15 @@
 |   stationcode | name                              |   std_occ |
 |--------------:|:----------------------------------|----------:|
 |          8051 | Batignolles - Rome                |     0.419 |
-|         12151 | Gare de Lyon - Place Louis Armand |     0.393 |
-|         15056 | Place Balard                      |     0.364 |
-|         12007 | Gare de Lyon - Chalon             |     0.351 |
+|         12151 | Gare de Lyon - Place Louis Armand |     0.394 |
+|         15056 | Place Balard                      |     0.372 |
+|         12007 | Gare de Lyon - Chalon             |     0.347 |
 |         12027 | Montgallet - Charenton            |     0.34  |
+|         12105 | Bercy - Villot                    |     0.333 |
 |         15039 | Abbé Groult - Convention          |     0.33  |
-|         43005 | Gare RER de Vincennes             |     0.327 |
+|         43005 | Gare RER de Vincennes             |     0.328 |
 |         15125 | Parc Suzanne Lenglen              |     0.323 |
-|         33102 | Gabriel Péri - Francisco Ferrer   |     0.321 |
-|         18110 | Departement - Pajol               |     0.321 |
+|         17106 | Berthier - Porte de Clichy        |     0.315 |
 
 ## Exports
 - [Prévision 24h (CSV)](exports/velib_forecast_24h.csv)
