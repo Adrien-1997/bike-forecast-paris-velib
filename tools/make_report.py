@@ -1,6 +1,8 @@
 ﻿# tools/make_report.py
 import pathlib, duckdb, pandas as pd
 import matplotlib.pyplot as plt, matplotlib.dates as mdates
+from src.forecast import train_and_forecast
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 exp  = ROOT / "exports"
@@ -131,40 +133,55 @@ print("OK — docs/results.md mis à jour.")
 # --- Backtest 24h (train jusqu'à D-24h, test = dernières 24h) ---
 from src.forecast import train_and_forecast
 
-BT_MAX_STATIONS = 60  # pour garder un runtime raisonnable
-last_naive = pd.to_datetime(hourly["hour_utc"], utc=True).tz_convert(None).max()
-train_df = hourly[pd.to_datetime(hourly["hour_utc"], utc=True).tz_convert(None) <= last_naive - pd.Timedelta("24h")].copy()
-test_df  = hourly[pd.to_datetime(hourly["hour_utc"], utc=True).tz_convert(None) >  last_naive - pd.Timedelta("24h")].copy()
+def _norm_ser(x):
+    dt = pd.to_datetime(x, errors="coerce", utc=True)
+    # Series -> .dt, DatetimeIndex -> direct
+    try:
+        dt = dt.dt.tz_localize(None)
+    except AttributeError:
+        dt = dt.tz_localize(None)
+    # Force résolution en ns (évite ns vs us)
+    return dt.astype("datetime64[ns]")
+
+BT_MAX_STATIONS = 60  # runtime raisonnable
+
+# Normaliser les timestamps de l'historique
+hourly["hour_utc"] = _norm_ser(hourly["hour_utc"])
+last_naive = hourly["hour_utc"].max()
+
+train_df = hourly[hourly["hour_utc"] <= last_naive - pd.Timedelta("24h")].copy()
+test_df  = hourly[hourly["hour_utc"] >  last_naive - pd.Timedelta("24h")].copy()
 
 # Limiter aux stations bien couvertes
-cover = (train_df.groupby("stationcode")["hour_utc"].count().sort_values(ascending=False))
+cover = train_df.groupby("stationcode")["hour_utc"].count().sort_values(ascending=False)
 keep  = list(map(str, cover.index[:BT_MAX_STATIONS]))
 train_df = train_df[train_df["stationcode"].astype(str).isin(keep)]
 test_df  = test_df[test_df["stationcode"].astype(str).isin(keep)]
 
 bt_pred = train_and_forecast(train_df, horizon_h=24)
-# Harmoniser UTC naïf pour merge
-def _naive(x):
-    x = pd.to_datetime(x, errors="coerce", utc=True)
-    try: return x.dt.tz_localize(None)
-    except AttributeError: return x.tz_localize(None)
-bt_pred["hour_utc"] = _naive(bt_pred["hour_utc"])
-test_df["hour_utc"] = _naive(test_df["hour_utc"])
 
-bt = bt_pred.merge(test_df[["stationcode","hour_utc","occ_ratio_hour"]], on=["stationcode","hour_utc"], how="inner")
-if not bt.empty:
-    bt["ae"] = (bt["pred_occ"] - bt["occ_ratio_hour"]).abs()
-    metrics = bt.groupby("stationcode", as_index=False)["ae"].mean().rename(columns={"ae":"mae"})
-    g_mae = metrics["mae"].mean()
-    g_med = metrics["mae"].median()
-    worst = (metrics.sort_values("mae", ascending=False)
-             .head(10).rename(columns={"stationcode":"Station","mae":"MAE"})
-             .round({"MAE":3}))
-    # Injecter dans le markdown
-    md += [""]
-    md += ["## Backtest 24h (MAE par station)"]
-    md += [f"**MAE moyenne (top {BT_MAX_STATIONS})** : {g_mae:.3f}  •  **Médiane** : {g_med:.3f}", ""]
-    try:
-        md += [worst.to_markdown(index=False), ""]
-    except Exception:
-        md += ["<div>" + worst.to_html(index=False, border=0) + "</div>", ""]
+if bt_pred is not None and not bt_pred.empty and not test_df.empty:
+    # Normaliser aussi côté prédictions + test avant merge
+    bt_pred["hour_utc"] = _norm_ser(bt_pred["hour_utc"])
+    test_df["hour_utc"] = _norm_ser(test_df["hour_utc"])
+
+    bt = bt_pred.merge(
+        test_df[["stationcode","hour_utc","occ_ratio_hour"]],
+        on=["stationcode","hour_utc"], how="inner"
+    )
+
+    if not bt.empty:
+        bt["ae"] = (bt["pred_occ"] - bt["occ_ratio_hour"]).abs()
+        metrics = bt.groupby("stationcode", as_index=False)["ae"].mean().rename(columns={"ae":"mae"})
+        g_mae = metrics["mae"].mean()
+        g_med = metrics["mae"].median()
+        worst = (metrics.sort_values("mae", ascending=False)
+                 .head(10).rename(columns={"stationcode":"Station","mae":"MAE"})
+                 .round({"MAE":3}))
+
+        md += ["", "## Backtest 24h (MAE par station)"]
+        md += [f"**MAE moyenne (top {BT_MAX_STATIONS})** : {g_mae:.3f}  •  **Médiane** : {g_med:.3f}", ""]
+        try:
+            md += [worst.to_markdown(index=False), ""]
+        except Exception:
+            md += ["<div>" + worst.to_html(index=False, border=0) + "</div>", ""]
