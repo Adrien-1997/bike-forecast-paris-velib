@@ -9,10 +9,8 @@
       
       
       
-        <link rel="prev" href="..">
+        <link rel="prev" href="../results/">
       
-      
-        <link rel="next" href="../monitoring/">
       
       
       <link rel="icon" href="../assets/images/favicon.png">
@@ -20,7 +18,7 @@
     
     
       
-        <title>Results - Vélib' Paris — Forecast (Batch)</title>
+        <title>Monitoring - Vélib' Paris — Forecast (Batch)</title>
       
     
     
@@ -62,7 +60,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#results" class="md-skip">
+        <a href="#monitoring" class="md-skip">
           Skip to content
         </a>
       
@@ -98,7 +96,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Results
+              Monitoring
             
           </span>
         </div>
@@ -173,6 +171,28 @@
       
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Results
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
     
   
   
@@ -190,7 +210,7 @@
   
   
   <span class="md-ellipsis">
-    Results
+    Monitoring
     
   </span>
   
@@ -203,7 +223,7 @@
   
   
   <span class="md-ellipsis">
-    Results
+    Monitoring
     
   </span>
   
@@ -226,36 +246,18 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#example-historique-forecast-24h" class="md-nav__link">
+  <a href="#drift-7-jours-vs-30-jours-precedents" class="md-nav__link">
     <span class="md-ellipsis">
-      Example (historique + forecast 24h)
+      Drift (7 jours vs. 30 jours précédents)
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#correlation-simple" class="md-nav__link">
+  <a href="#performance-backtest-24h" class="md-nav__link">
     <span class="md-ellipsis">
-      Corrélation simple
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#top-10-stations-les-plus-volatiles" class="md-nav__link">
-    <span class="md-ellipsis">
-      Top 10 stations les plus volatiles
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#exports" class="md-nav__link">
-    <span class="md-ellipsis">
-      Exports
+      Performance (Backtest 24h)
     </span>
   </a>
   
@@ -265,28 +267,6 @@
   
 </nav>
       
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../monitoring/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Monitoring
-    
-  </span>
-  
-
-      </a>
     </li>
   
 
@@ -318,36 +298,18 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#example-historique-forecast-24h" class="md-nav__link">
+  <a href="#drift-7-jours-vs-30-jours-precedents" class="md-nav__link">
     <span class="md-ellipsis">
-      Example (historique + forecast 24h)
+      Drift (7 jours vs. 30 jours précédents)
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#correlation-simple" class="md-nav__link">
+  <a href="#performance-backtest-24h" class="md-nav__link">
     <span class="md-ellipsis">
-      Corrélation simple
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#top-10-stations-les-plus-volatiles" class="md-nav__link">
-    <span class="md-ellipsis">
-      Top 10 stations les plus volatiles
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#exports" class="md-nav__link">
-    <span class="md-ellipsis">
-      Exports
+      Performance (Backtest 24h)
     </span>
   </a>
   
@@ -369,83 +331,94 @@
 
 
 
-<h1 id="results">Results</h1>
-<p><strong>Snapshots</strong>: 71162  •  <strong>Stations</strong>: 1453  •  <strong>Last (UTC)</strong>: 2025-09-08 15:01:19.441745</p>
-<p><strong>Historique couvert</strong> : 2025-09-08 01:00:00+02:00 → 2025-09-08 17:00:00+02:00<br />
-<strong>Stations</strong> : 1453<br />
-<em>(Heure affichée : Europe/Paris)</em></p>
-<h2 id="example-historique-forecast-24h">Example (historique + forecast 24h)</h2>
-<p><img alt="sample" src="../assets/sample_forecast.png" /></p>
-<h2 id="correlation-simple">Corrélation simple</h2>
-<p>Relation occ_ratio vs. température (échantillon)
-<img alt="occ vs temp" src="../assets/occ_vs_temp.png" /></p>
-<h2 id="top-10-stations-les-plus-volatiles">Top 10 stations les plus volatiles</h2>
+<h1 id="monitoring">Monitoring</h1>
+<h2 id="drift-7-jours-vs-30-jours-precedents">Drift (7 jours vs. 30 jours précédents)</h2>
 <table>
 <thead>
 <tr>
-<th style="text-align: right;">stationcode</th>
-<th style="text-align: left;">name</th>
-<th style="text-align: right;">std_occ</th>
+<th style="text-align: left;">feature</th>
+<th style="text-align: right;">psi</th>
+<th style="text-align: right;">base_mean</th>
+<th style="text-align: right;">curr_mean</th>
+<th style="text-align: right;">base_std</th>
+<th style="text-align: right;">curr_std</th>
+<th style="text-align: right;">n_base</th>
+<th style="text-align: right;">n_curr</th>
+<th style="text-align: left;">psi_flag</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td style="text-align: right;">21021</td>
-<td style="text-align: left;">Enfants du Paradis - Peupliers</td>
-<td style="text-align: right;">0.517</td>
+<td style="text-align: left;">occ_ratio_hour</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">0.392</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">0.293</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">19455</td>
+<td style="text-align: left;">n/a</td>
 </tr>
 <tr>
-<td style="text-align: right;">15056</td>
-<td style="text-align: left;">Place Balard</td>
-<td style="text-align: right;">0.475</td>
+<td style="text-align: left;">temp_C</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">20.04</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">1.815</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">19455</td>
+<td style="text-align: left;">n/a</td>
 </tr>
 <tr>
-<td style="text-align: right;">9023</td>
-<td style="text-align: left;">Laffitte - Italiens</td>
-<td style="text-align: right;">0.469</td>
+<td style="text-align: left;">precip_mm</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">0.022</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">0.057</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">19455</td>
+<td style="text-align: left;">n/a</td>
 </tr>
 <tr>
-<td style="text-align: right;">15058</td>
-<td style="text-align: left;">Place du Moulin de Javel</td>
-<td style="text-align: right;">0.444</td>
+<td style="text-align: left;">wind_mps</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">8.94</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">1.487</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">19455</td>
+<td style="text-align: left;">n/a</td>
 </tr>
 <tr>
-<td style="text-align: right;">9022</td>
-<td style="text-align: left;">Rossini - Laffitte</td>
-<td style="text-align: right;">0.441</td>
+<td style="text-align: left;">bikes_avg</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">12.369</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">10.789</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">19455</td>
+<td style="text-align: left;">n/a</td>
 </tr>
 <tr>
-<td style="text-align: right;">8103</td>
-<td style="text-align: left;">Artois - Berri</td>
-<td style="text-align: right;">0.441</td>
-</tr>
-<tr>
-<td style="text-align: right;">15125</td>
-<td style="text-align: left;">Parc Suzanne Lenglen</td>
-<td style="text-align: right;">0.44</td>
-</tr>
-<tr>
-<td style="text-align: right;">11026</td>
-<td style="text-align: left;">Chemin Vert - Saint-Maur</td>
-<td style="text-align: right;">0.431</td>
-</tr>
-<tr>
-<td style="text-align: right;">1025</td>
-<td style="text-align: left;">Oratoire - Rivoli</td>
-<td style="text-align: right;">0.431</td>
-</tr>
-<tr>
-<td style="text-align: right;">11003</td>
-<td style="text-align: left;">Keller - La Roquette</td>
-<td style="text-align: right;">0.43</td>
+<td style="text-align: left;">docks_avg</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">18.639</td>
+<td style="text-align: right;">nan</td>
+<td style="text-align: right;">12.582</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">19455</td>
+<td style="text-align: left;">n/a</td>
 </tr>
 </tbody>
 </table>
-<h2 id="exports">Exports</h2>
-<ul>
-<li><a href="../exports/velib_forecast_24h.csv">Prévision 24h (CSV)</a></li>
-<li><a href="../exports/velib_hourly.csv">Occupations horaires (échantillon CSV)</a></li>
-</ul>
+<p><em>PSI</em>: &lt;0.10 OK • 0.10–0.25 Attention • &gt;0.25 Alerte_</p>
+<h2 id="performance-backtest-24h">Performance (Backtest 24h)</h2>
+<p>(Pas assez de données pour le backtest.)</p>
 
 
 
