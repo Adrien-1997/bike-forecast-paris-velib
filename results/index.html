@@ -43,6 +43,8 @@
       
     
     
+      <link rel="stylesheet" href="../assets/extra.css">
+    
     <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -226,9 +228,9 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#example-historique-forecast-24h" class="md-nav__link">
+  <a href="#exemple-historique-forecast-24h" class="md-nav__link">
     <span class="md-ellipsis">
-      Example (historique + forecast 24h)
+      Exemple (historique + forecast 24h)
     </span>
   </a>
   
@@ -247,6 +249,15 @@
   <a href="#top-10-stations-les-plus-volatiles" class="md-nav__link">
     <span class="md-ellipsis">
       Top 10 stations les plus volatiles
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#carte-dernier-snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      Carte (dernier snapshot)
     </span>
   </a>
   
@@ -318,9 +329,9 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#example-historique-forecast-24h" class="md-nav__link">
+  <a href="#exemple-historique-forecast-24h" class="md-nav__link">
     <span class="md-ellipsis">
-      Example (historique + forecast 24h)
+      Exemple (historique + forecast 24h)
     </span>
   </a>
   
@@ -339,6 +350,15 @@
   <a href="#top-10-stations-les-plus-volatiles" class="md-nav__link">
     <span class="md-ellipsis">
       Top 10 stations les plus volatiles
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#carte-dernier-snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      Carte (dernier snapshot)
     </span>
   </a>
   
@@ -370,15 +390,18 @@
 
 
 <h1 id="results">Results</h1>
-<p><strong>Snapshots</strong>: 91504  •  <strong>Stations</strong>: 1453  •  <strong>Last (UTC)</strong>: 2025-09-08 17:48:19.643452</p>
-<p><strong>Historique couvert</strong> : 2025-09-08 01:00:00+02:00 → 2025-09-08 19:00:00+02:00<br />
-<strong>Stations</strong> : 1453<br />
-<em>(Heure affichée : Europe/Paris)</em></p>
-<h2 id="example-historique-forecast-24h">Example (historique + forecast 24h)</h2>
-<p><img alt="sample" src="../assets/sample_forecast.png" /></p>
+<h2 id="exemple-historique-forecast-24h">Exemple (historique + forecast 24h)</h2>
+<div class="figure">
+  <img src="assets/figs/hist_forecast_24h.png" alt="Historique + prévision 24h">
+  <div class="caption">Historique agrégé + horizon 24h (échantillon de stations).</div>
+</div>
+
 <h2 id="correlation-simple">Corrélation simple</h2>
-<p>Relation occ_ratio vs. température (échantillon)
-<img alt="occ vs temp" src="../assets/occ_vs_temp.png" /></p>
+<div class="figure">
+  <img src="assets/figs/occ_vs_temp.png" alt="Occupation vs Température">
+  <div class="caption">Relation occupation vs température (échantillon horaire).</div>
+</div>
+
 <h2 id="top-10-stations-les-plus-volatiles">Top 10 stations les plus volatiles</h2>
 <table>
 <thead>
@@ -392,59 +415,22 @@
 <tr>
 <td style="text-align: right;">21021</td>
 <td style="text-align: left;">Enfants du Paradis - Peupliers</td>
-<td style="text-align: right;">0.503</td>
+<td style="text-align: right;">0.501</td>
 </tr>
 <tr>
 <td style="text-align: right;">15056</td>
 <td style="text-align: left;">Place Balard</td>
-<td style="text-align: right;">0.47</td>
-</tr>
-<tr>
-<td style="text-align: right;">9023</td>
-<td style="text-align: left;">Laffitte - Italiens</td>
-<td style="text-align: right;">0.442</td>
-</tr>
-<tr>
-<td style="text-align: right;">33019</td>
-<td style="text-align: left;">Madeleine Vionnet</td>
-<td style="text-align: right;">0.438</td>
-</tr>
-<tr>
-<td style="text-align: right;">8103</td>
-<td style="text-align: left;">Artois - Berri</td>
-<td style="text-align: right;">0.42</td>
-</tr>
-<tr>
-<td style="text-align: right;">9022</td>
-<td style="text-align: left;">Rossini - Laffitte</td>
-<td style="text-align: right;">0.42</td>
-</tr>
-<tr>
-<td style="text-align: right;">11026</td>
-<td style="text-align: left;">Chemin Vert - Saint-Maur</td>
-<td style="text-align: right;">0.416</td>
-</tr>
-<tr>
-<td style="text-align: right;">15125</td>
-<td style="text-align: left;">Parc Suzanne Lenglen</td>
-<td style="text-align: right;">0.412</td>
-</tr>
-<tr>
-<td style="text-align: right;">15058</td>
-<td style="text-align: left;">Place du Moulin de Javel</td>
-<td style="text-align: right;">0.408</td>
-</tr>
-<tr>
-<td style="text-align: right;">2009</td>
-<td style="text-align: left;">Filles Saint-Thomas - Place de la Bourse</td>
-<td style="text-align: right;">0.407</td>
+<td style="text-align: right;">0.46</td>
 </tr>
 </tbody>
 </table>
+<h2 id="carte-dernier-snapshot">Carte (dernier snapshot)</h2>
+<iframe src="assets/map.html" width="100%" height="520" style="border:none;"></iframe>
+
 <h2 id="exports">Exports</h2>
 <ul>
-<li><a href="../exports/velib_forecast_24h.csv">Prévision 24h (CSV)</a></li>
-<li><a href="../exports/velib_hourly.csv">Occupations horaires (échantillon CSV)</a></li>
+<li><a href="../exports/velib_forecast_24h.csv">Prévision 24h (CSV)</a>{ target=_blank }</li>
+<li><a href="../exports/occ_hourly_sample.csv">Occupations horaires (échantillon CSV)</a>{ target=_blank }</li>
 </ul>
 
 

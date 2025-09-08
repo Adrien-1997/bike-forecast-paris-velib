@@ -41,6 +41,8 @@
       
     
     
+      <link rel="stylesheet" href="assets/extra.css">
+    
     <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -255,13 +257,29 @@
 
 
 
-<h1 id="velib-paris-batch-forecast">Vélib' Paris — Batch Forecast</h1>
+<h1 id="velib-paris-batch-forecast">Vélib’ Paris — Batch Forecast</h1>
+<blockquote>
+<p>Prédictions d’occupation des stations à l’heure (pipeline batch). Données temps réel Paris Data, features calendaires, baseline LightGBM.</p>
+</blockquote>
+<div class="kpis">
+  <div class="kpi"><div class="label">Snapshots</div><div class="value">87145</div></div>
+  <div class="kpi"><div class="label">Stations</div><div class="value">1453</div></div>
+  <div class="kpi"><div class="label">Dernière maj (Paris)</div><div class="value">2025-09-08 19:10</div></div>
+</div>
+
+<p><a href="results/">:material-chart-line: Résultats</a>{ .md-button }
+<a href="monitoring/">:material-heart-pulse: Monitoring</a>{ .md-button .md-button--secondary }</p>
+<div class="admonition tip">
+<p class="admonition-title">Exports</p>
 <ul>
-<li>Données : snapshots temps réel (Paris Data) agrégées <strong>à l'heure</strong>.</li>
-<li>Modèle : baseline <strong>LightGBM</strong> (features calendaires).</li>
-<li>Exports : \exports/velib_forecast_24h.csv\ (prévision 24h).</li>
+<li><a href="exports/velib_forecast_24h.csv">Prévision 24h (CSV)</a>{ target=_blank }</li>
+<li><a href="exports/occ_hourly_sample.csv">Occupations horaires (sample CSV)</a>{ target=_blank }</li>
 </ul>
-<p>Consultez <strong>Results</strong> pour un résumé et un graphe (historique + forecast).</p>
+</div>
+<p><strong>Stack rapide</strong>
+- Ingestion snapshots → agrégation horaire<br />
+- Features : calendaires (+ météo)<br />
+- Modèle : LightGBM baseline → 24 h rolling forecast</p>
 
 
 
