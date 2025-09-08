@@ -3,9 +3,9 @@
 > Prédictions d’occupation des stations à l’heure (pipeline batch). Données temps réel Paris Data, features calendaires, baseline LightGBM.
 
 <div class="kpis">
-  <div class="kpi"><div class="label">Snapshots</div><div class="value">87145</div></div>
+  <div class="kpi"><div class="label">Snapshots</div><div class="value">22628</div></div>
   <div class="kpi"><div class="label">Stations</div><div class="value">1453</div></div>
-  <div class="kpi"><div class="label">Dernière maj (Paris)</div><div class="value">2025-09-08 19:10</div></div>
+  <div class="kpi"><div class="label">Dernière maj (Paris)</div><div class="value">—</div></div>
 </div>
 
 [:material-chart-line: Résultats](results.md){ .md-button }
