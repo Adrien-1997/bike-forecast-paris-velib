@@ -10,3 +10,11 @@ exports/*
 site/
 warehouse.duckdb
 data/weather_hourly.parquet
+# generated artifacts
+exports/*
+!exports/.keep
+docs/exports/*
+docs/assets/occ_vs_temp.png
+docs/assets/map.html
+site/
+warehouse.duckdb
