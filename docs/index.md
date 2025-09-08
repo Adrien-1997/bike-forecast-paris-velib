@@ -12,8 +12,8 @@
 [:material-heart-pulse: Monitoring](monitoring.md){ .md-button .md-button--secondary }
 
 !!! tip "Exports"
-    - [Prévision 24h (CSV)](exports/velib_forecast_24h.csv){ target=_blank }
-    - [Occupations horaires (sample CSV)](exports/occ_hourly_sample.csv){ target=_blank }
+    - [Prévision 24h (CSV)]({{ base_url }}/exports/velib_forecast_24h.csv){ target=_blank }
+    - [Occupations horaires (sample CSV)]({{ base_url }}/exports/occ_hourly_sample.csv){ target=_blank }
 
 **Stack rapide**
 - Ingestion snapshots → agrégation horaire  
