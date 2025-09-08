@@ -13,12 +13,12 @@
 |          8051 | Batignolles - Rome                |     0.419 |
 |         12151 | Gare de Lyon - Place Louis Armand |     0.393 |
 |         15056 | Place Balard                      |     0.364 |
-|         12007 | Gare de Lyon - Chalon             |     0.359 |
+|         12007 | Gare de Lyon - Chalon             |     0.351 |
 |         12027 | Montgallet - Charenton            |     0.34  |
-|         16201 | Porte Dauphine                    |     0.335 |
-|         43005 | Gare RER de Vincennes             |     0.33  |
 |         15039 | Abbé Groult - Convention          |     0.33  |
-|         15125 | Parc Suzanne Lenglen              |     0.325 |
+|         43005 | Gare RER de Vincennes             |     0.327 |
+|         15125 | Parc Suzanne Lenglen              |     0.323 |
+|         33102 | Gabriel Péri - Francisco Ferrer   |     0.321 |
 |         18110 | Departement - Pajol               |     0.321 |
 
 ## Exports
