@@ -23,7 +23,9 @@ jobs:
         run: |
           python -m pip install -U pip
           pip install -r requirements.txt
-          pip install mkdocs-material mkdocs-jupyter matplotlib pyarrow
+          # compléments nécessaires à la doc & features calendrier
+          pip install mkdocs-material mkdocs-jupyter matplotlib pyarrow holidays tabulate folium
+
       - name: Debug env
         run: |
           python -V
@@ -61,10 +63,14 @@ jobs:
           python -m src.run_batch
 
       - name: Generate docs
-        run: python tools/make_report.py
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python -m tools.make_report
+          python -m tools.make_map
 
       - name: Build site
-        run: python -m mkdocs build
+        run: mkdocs build --strict
 
       - name: Commit data & docs (if changed)
         run: |
