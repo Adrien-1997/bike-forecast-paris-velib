@@ -2,6 +2,9 @@
 import pathlib, duckdb, pandas as pd
 import matplotlib.pyplot as plt, matplotlib.dates as mdates
 from src.forecast import train_and_forecast
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]

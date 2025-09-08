@@ -1,5 +1,8 @@
 ﻿# tools/make_map.py
 import pathlib, requests, pandas as pd, folium
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 exp  = ROOT / "exports"
