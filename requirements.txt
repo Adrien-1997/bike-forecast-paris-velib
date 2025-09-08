@@ -16,3 +16,5 @@ folium
 tabulate
 
 holidays
+
+scikit-learn>=1.3
