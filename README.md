@@ -19,6 +19,11 @@ Pipeline “data → décision” minimal : **ingestion** (OpenData), **agrégat
 
 ---
 
+## Carte des stations
+<iframe src="assets/map.html" width="100%" height="520" style="border:none;"></iframe>
+
+---
+
 ## Features
 
 - Ingestion snapshots temps réel → **DuckDB** (UTC)

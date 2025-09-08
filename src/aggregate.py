@@ -1,5 +1,19 @@
 ﻿import os, requests, duckdb, pandas as pd
+from src.weather import fetch_history, _to_utc_naive as _w_to_utc
+
+# ... dans hourly_occupancy(), après: df = CON.execute(q).fetchdf()
+df["hour_utc"] = _to_utc_naive(df["hour_utc"])
+if not df.empty:
+    w = fetch_history(df["hour_utc"].min(), df["hour_utc"].max())
+    if not w.empty:
+        # w est déjà en UTC naive
+        df = df.merge(w, on="hour_utc", how="left")
+    else:
+        for c in ["temp_C","precip_mm","wind_mps"]:
+            df[c] = pd.NA
+
 CON = duckdb.connect("warehouse.duckdb")
+
 def _to_utc_naive(s: pd.Series) -> pd.Series:
     s = pd.to_datetime(s, errors="coerce", utc=True); return s.dt.tz_localize(None)
 def _fetch_temp_series(start, end) -> pd.DataFrame:

@@ -1,5 +1,26 @@
 ﻿import pandas as pd, numpy as np, requests
 from lightgbm import LGBMRegressor
+from src.weather import fetch_forecast
+
+def _feature_cols(df):
+    cols = ["hour","dow"]
+    for c in ["temp_C","precip_mm","wind_mps"]:
+        if c in df.columns and not df[c].isna().all():
+            cols.append(c)
+    return cols
+
+# ... dans train_and_forecast(), après avoir créé F (futur)
+use_weather = any([c in g.columns and not g[c].isna().all() for c in ["temp_C","precip_mm","wind_mps"]])
+if use_weather:
+    try:
+        wf = fetch_forecast(last, horizon_h)
+        F = F.merge(wf, on="hour_utc", how="left")
+    except Exception:
+        # fallback: propage dernière valeur connue pour chaque var
+        for c in ["temp_C","precip_mm","wind_mps"]:
+            if c in g.columns and g[c].notna().any():
+                F[c] = float(g[c].dropna().iloc[-1])
+
 def _make_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     ts = pd.to_datetime(df["hour_utc"], utc=True)
