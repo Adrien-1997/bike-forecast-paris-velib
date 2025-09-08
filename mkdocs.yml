@@ -1,14 +1,60 @@
-﻿site_name: Vélib' Paris — Forecast (Batch)
-theme: { name: material }
+﻿site_name: Vélib’ Paris — Forecast (Batch)
+site_url: https://adrien-1997.github.io/bike-forecast-paris-velib/
+repo_url: https://github.com/Adrien-1997/bike-forecast-paris-velib
+repo_name: Adrien-1997/bike-forecast-paris-velib
+
+theme:
+  name: material
+  language: fr
+  features:
+    - navigation.expand
+    - navigation.instant
+    - navigation.top
+    - navigation.tracking
+    - toc.follow
+    - content.code.copy
+    - content.tabs.link
+    - content.action.edit
+    - content.action.view
+    - search.highlight
+    - search.suggest
+    - search.share
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - scheme: default
+      primary: blue
+      accent: light blue
+
+extra_css:
+  - assets/extra.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.emoji:
+      emoji_generator: !!python/name:materialx.emoji.to_svg
+      emoji_index: !!python/name:materialx.emoji.twemoji
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.mark
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+plugins:
+  - search
+  - mkdocs-jupyter
+  - minify:
+      minify_html: true
+
 nav:
   - Home: index.md
   - Results: results.md
   - Monitoring: monitoring.md
-plugins:
-  - mkdocs-jupyter
-markdown_extensions:
-  - admonition
-  - tables
-extra_css:
-  - assets/extra.css
-
