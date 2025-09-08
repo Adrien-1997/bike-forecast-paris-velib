@@ -12,14 +12,14 @@
 |--------------:|:------------------------------------|----------:|
 |          8051 | Batignolles - Rome                  |     0.443 |
 |         12151 | Gare de Lyon - Place Louis Armand   |     0.37  |
-|         10151 | Gare du Nord - Faubourg Saint-Denis |     0.359 |
+|         10151 | Gare du Nord - Faubourg Saint-Denis |     0.323 |
 |         12031 | Gabriel Lamé                        |     0.318 |
-|         14101 | Gare Montparnasse - Edgar Quinet    |     0.29  |
-|         20045 | Louis Ganne - Davout                |     0.287 |
+|         43005 | Gare RER de Vincennes               |     0.309 |
+|         14101 | Gare Montparnasse - Edgar Quinet    |     0.305 |
+|         12007 | Gare de Lyon - Chalon               |     0.294 |
+|         20045 | Louis Ganne - Davout                |     0.279 |
 |         10027 | Dunkerque - Alsace                  |     0.277 |
-|         10201 | Magenta - Chabrol                   |     0.266 |
-|         23041 | Général Leclerc - Bièvre            |     0.263 |
-|         20019 | Place du Maquis du Vercors          |     0.261 |
+|         22012 | Madeleine Michelis - Roule          |     0.267 |
 
 ## Exports
 - [Prévision 24h (CSV)](exports/velib_forecast_24h.csv)
