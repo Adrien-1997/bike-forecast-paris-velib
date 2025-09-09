@@ -323,18 +323,9 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#drift-7-jours-vs-30-jours-precedents" class="md-nav__link">
+  <a href="#bandeau-kpi-optionnel" class="md-nav__link">
     <span class="md-ellipsis">
-      Drift (7 jours vs. 30 jours précédents)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#performance-backtest-24h" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance (Backtest 24h)
+      Bandeau KPI (optionnel)
     </span>
   </a>
   
@@ -419,18 +410,9 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#drift-7-jours-vs-30-jours-precedents" class="md-nav__link">
+  <a href="#bandeau-kpi-optionnel" class="md-nav__link">
     <span class="md-ellipsis">
-      Drift (7 jours vs. 30 jours précédents)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#performance-backtest-24h" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance (Backtest 24h)
+      Bandeau KPI (optionnel)
     </span>
   </a>
   
@@ -469,93 +451,24 @@
 
 
 <h1 id="monitoring">Monitoring<a class="headerlink" href="#monitoring" title="Permanent link">&para;</a></h1>
-<h2 id="drift-7-jours-vs-30-jours-precedents">Drift (7 jours vs. 30 jours précédents)<a class="headerlink" href="#drift-7-jours-vs-30-jours-precedents" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th style="text-align: left;">feature</th>
-<th style="text-align: right;">psi</th>
-<th style="text-align: right;">base_mean</th>
-<th style="text-align: right;">curr_mean</th>
-<th style="text-align: right;">base_std</th>
-<th style="text-align: right;">curr_std</th>
-<th style="text-align: right;">n_base</th>
-<th style="text-align: right;">n_curr</th>
-<th style="text-align: left;">psi_flag</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align: left;">occ_ratio_hour</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">0.381</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">0.287</td>
-<td style="text-align: right;">0</td>
-<td style="text-align: right;">32551</td>
-<td style="text-align: left;">n/a</td>
-</tr>
-<tr>
-<td style="text-align: left;">temp_C</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">20.133</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">2.169</td>
-<td style="text-align: right;">0</td>
-<td style="text-align: right;">32551</td>
-<td style="text-align: left;">n/a</td>
-</tr>
-<tr>
-<td style="text-align: left;">precip_mm</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">0.013</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">0.045</td>
-<td style="text-align: right;">0</td>
-<td style="text-align: right;">32551</td>
-<td style="text-align: left;">n/a</td>
-</tr>
-<tr>
-<td style="text-align: left;">wind_mps</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">8.755</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">1.502</td>
-<td style="text-align: right;">0</td>
-<td style="text-align: right;">32551</td>
-<td style="text-align: left;">n/a</td>
-</tr>
-<tr>
-<td style="text-align: left;">bikes_avg</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">11.969</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">10.37</td>
-<td style="text-align: right;">0</td>
-<td style="text-align: right;">32551</td>
-<td style="text-align: left;">n/a</td>
-</tr>
-<tr>
-<td style="text-align: left;">docks_avg</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">18.88</td>
-<td style="text-align: right;">nan</td>
-<td style="text-align: right;">12.711</td>
-<td style="text-align: right;">0</td>
-<td style="text-align: right;">32551</td>
-<td style="text-align: left;">n/a</td>
-</tr>
-</tbody>
-</table>
-<p><em>PSI</em>: &lt;0.10 OK • 0.10–0.25 Attention • &gt;0.25 Alerte_</p>
-<h2 id="performance-backtest-24h">Performance (Backtest 24h)<a class="headerlink" href="#performance-backtest-24h" title="Permanent link">&para;</a></h2>
-<p>(Pas assez de données pour le backtest.)</p>
+<blockquote>
+<p>Carte interactive des stations Vélib’ (état en temps réel).<br />
+Générée par <code>tools/make_map.py</code> → <strong>docs/assets/map.html</strong>.</p>
+</blockquote>
+<div class="map-wrap">
+  <iframe
+    class="map-embed"
+    src="assets/map.html"
+    loading="lazy"
+    referrerpolicy="no-referrer"
+    title="Carte Vélib' – Monitoring"
+  ></iframe>
+</div>
+
+<hr />
+<h2 id="bandeau-kpi-optionnel">Bandeau KPI (optionnel)<a class="headerlink" href="#bandeau-kpi-optionnel" title="Permanent link">&para;</a></h2>
+<p>Si disponible, le bandeau KPI (généré par <code>tools/make_kpi_banner.py</code>) :</p>
+<p><img alt="KPI" src="assets/figs/kpi_banner.png" /></p>
 
 
 
