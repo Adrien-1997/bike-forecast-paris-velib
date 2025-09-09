@@ -1,5 +1,6 @@
 ﻿# src/aggregate.py
 import os
+import time
 import duckdb
 import pandas as pd
 from src.weather import fetch_history, fetch_forecast
@@ -15,41 +16,81 @@ def _to_utc_naive_hour(x):
         return dt.floor("h").tz_localize(None)
 
 def hourly_occupancy(with_weather: bool = True) -> pd.DataFrame:
+    """
+    Agrégat horaire par station avec:
+      - nb_velos_hour (moyenne arrondie)
+      - nb_bornes_hour (moyenne arrondie)
+      - capacity_hour (max/heure)
+      - occ_ratio_hour = nb_velos_hour / capacity_hour (fallback si capacité manquante)
+      - (compat) bikes_avg, docks_avg conservés
+    + Jointure météo (historique + backfill prévision si trous récents).
+    """
     q = """
     WITH base AS (
       SELECT
-        ts_utc::TIMESTAMP AS ts_utc,
-        stationcode, name,
-        COALESCE(numbikesavailable,0) AS bikes,
-        COALESCE(numdocksavailable,0) AS docks,
-        NULLIF(capacity,0) AS capacity,
-        try_cast(lat as DOUBLE)  AS lat,
-        try_cast(lon as DOUBLE)  AS lon
+        ts_utc::TIMESTAMP                         AS ts_utc,
+        stationcode,
+        name,
+        COALESCE(numbikesavailable,0)::INTEGER    AS bikes,
+        COALESCE(numdocksavailable,0)::INTEGER    AS docks,
+        NULLIF(capacity,0)::INTEGER               AS capacity_raw,
+        try_cast(lat AS DOUBLE)                   AS lat,
+        try_cast(lon AS DOUBLE)                   AS lon
       FROM velib_snapshots
     ),
     enriched AS (
-      SELECT *,
+      SELECT
+        *,
+        /* Capacité estimée si non fournie : bikes + docks quand > 0 */
         CASE
-          WHEN capacity IS NOT NULL THEN bikes / capacity
-          WHEN bikes + docks > 0 THEN bikes / (bikes + docks)
+          WHEN capacity_raw IS NOT NULL THEN capacity_raw
+          WHEN (bikes + docks) > 0 THEN (bikes + docks)
           ELSE NULL
-        END AS occ_ratio
+        END AS capacity_est,
+        /* Ratio d'occupation observé au snapshot */
+        CASE
+          WHEN capacity_raw IS NOT NULL AND capacity_raw > 0 THEN bikes::DOUBLE / capacity_raw
+          WHEN (bikes + docks) > 0 THEN bikes::DOUBLE / (bikes + docks)
+          ELSE NULL
+        END AS occ_ratio_snap
       FROM base
     ),
     hourly AS (
       SELECT
-        date_trunc('hour', ts_utc) AS hour_utc,
+        date_trunc('hour', ts_utc)                AS hour_utc,
         stationcode,
-        any_value(name)  AS name,
-        avg(occ_ratio)   AS occ_ratio_hour,
-        avg(bikes)       AS bikes_avg,
-        avg(docks)       AS docks_avg,
-        any_value(lat)   AS lat,
-        any_value(lon)   AS lon
+        any_value(name)                           AS name,
+        CAST(avg(bikes) AS INTEGER)               AS nb_velos_hour,
+        CAST(avg(docks) AS INTEGER)               AS nb_bornes_hour,
+        /* on prend la capacité la plus haute observée sur l'heure */
+        max(capacity_est)                         AS capacity_hour,
+        any_value(lat)                            AS lat,
+        any_value(lon)                            AS lon,
+        /* pour compat et diagnostic */
+        avg(occ_ratio_snap)                       AS occ_ratio_hour_snap_avg
       FROM enriched
       GROUP BY 1,2
     )
-    SELECT * FROM hourly
+    SELECT
+      hour_utc,
+      stationcode,
+      name,
+      nb_velos_hour,
+      nb_bornes_hour,
+      capacity_hour,
+      /* Ratio recalculé avec la capacité d'heure (plus stable) */
+      CASE
+        WHEN capacity_hour IS NOT NULL AND capacity_hour > 0
+          THEN nb_velos_hour::DOUBLE / capacity_hour
+        WHEN (nb_velos_hour + nb_bornes_hour) > 0
+          THEN nb_velos_hour::DOUBLE / (nb_velos_hour + nb_bornes_hour)
+        ELSE NULL
+      END AS occ_ratio_hour,
+      /* alias pour compatibilité aval */
+      nb_velos_hour::DOUBLE                      AS bikes_avg,
+      nb_bornes_hour::DOUBLE                     AS docks_avg,
+      lat, lon
+    FROM hourly
     ORDER BY hour_utc, stationcode;
     """
     df = CON.execute(q).fetchdf()
@@ -82,7 +123,7 @@ def hourly_occupancy(with_weather: bool = True) -> pd.DataFrame:
             if df[["temp_C","precip_mm","wind_mps"]].isna().any(axis=1).any():
                 fx_start = pd.to_datetime(df["hour_utc"].max())  # déjà naïf
                 wf = fetch_forecast(fx_start, 24)
-                if not wf.empty:
+                if wf is not None and not wf.empty:
                     wf["hour_utc"] = _to_utc_naive_hour(wf["hour_utc"])
                     df = df.merge(wf, on="hour_utc", how="left", suffixes=("", "_fx"))
                     for c in ["temp_C","precip_mm","wind_mps"]:
@@ -94,7 +135,36 @@ def hourly_occupancy(with_weather: bool = True) -> pd.DataFrame:
         except Exception as e:
             print(f"[weather] forecast backfill skipped: {e}")
 
+    # Cohérence finale : clamp ratio dans [0,1]
+    if "occ_ratio_hour" in df.columns:
+        df["occ_ratio_hour"] = pd.to_numeric(df["occ_ratio_hour"], errors="coerce").clip(lower=0, upper=1)
+
     return df
+
+def _safe_write_csv(df: pd.DataFrame, path: str, attempts: int = 6, delay: float = 1.0):
+    """
+    Écriture CSV Windows-friendly : fichier temporaire + os.replace + retries.
+    """
+    tmp = f"{path}.tmp"
+    for i in range(attempts):
+        try:
+            df.to_csv(tmp, index=False)
+            os.replace(tmp, path)  # remplace de manière atomique quand possible
+            print(f"[aggregate] CSV écrit → {path}")
+            return
+        except PermissionError:
+            # Nettoyage du tmp si besoin puis retry
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+            print(f"[aggregate] CSV verrouillé (tentative {i+1}/{attempts}). Retry dans {delay}s…")
+            time.sleep(delay)
+        except Exception as e:
+            print(f"[aggregate] CSV erreur inattendue: {e}")
+            break
+    print("[aggregate] CSV encore verrouillé → saut de l’écriture pour cette fois.")
 
 if __name__ == "__main__":
     os.makedirs("exports", exist_ok=True)
@@ -106,5 +176,6 @@ if __name__ == "__main__":
         except Exception:
             duckdb.register("out_tbl", out)
             duckdb.sql("COPY out_tbl TO 'exports/velib_hourly.parquet' (FORMAT PARQUET);")
-        out.to_csv("exports/velib_hourly.csv", index=False)
-    print("OK hourly -> exports/velib_hourly.parquet (et .csv)")
+        # CSV robuste (si verrouillé, on skip sans planter)
+        _safe_write_csv(out, "exports/velib_hourly.csv")
+    print("OK hourly -> exports/velib_hourly.parquet (et .csv si dispo)")

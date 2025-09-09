@@ -18,3 +18,19 @@ docs/assets/occ_vs_temp.png
 docs/assets/map.html
 site/
 warehouse.duckdb
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# Data/Artifacts
+warehouse.duckdb
+exports/
+models/
+site/
+
+# OS/Editors
+.DS_Store
+Thumbs.db
+.vscode/

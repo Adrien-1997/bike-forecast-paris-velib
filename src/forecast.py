@@ -1,44 +1,102 @@
 ﻿# src/forecast.py
+from pathlib import Path
+import numpy as np
 import pandas as pd
-from lightgbm import LGBMRegressor
-from src.weather import fetch_forecast
-from src.cal_features import add_calendar_features, feature_cols
+import joblib
+import lightgbm as lgb
 
-def train_and_forecast(df_hour: pd.DataFrame, horizon_h: int = 24) -> pd.DataFrame:
-    if df_hour is None or df_hour.empty:
-        return pd.DataFrame(columns=["stationcode","hour_utc","pred_occ"])
+from src.features import build_training_frame
 
-    out = []
-    for sc, g in df_hour.groupby("stationcode"):
-        g = g.dropna(subset=["occ_ratio_hour"]).copy()
-        if len(g) < 24:
-            continue
+MODELS_DIR = Path("models")
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Features calendrier + météo (côté historique)
-        g = add_calendar_features(g)
 
-        X = g[feature_cols(g)].values
-        y = g["occ_ratio_hour"].values
-        mdl = LGBMRegressor(random_state=42)
-        mdl.fit(X, y)
+def train(horizon_hours: int = 1, lookback_days: int = 90, num_boost_round: int = 1500):
+    """
+    Entraîne un LightGBM global pour prédire y_nb (nb vélos à t+h) par station.
+    Sauve un bundle joblib: models/lgb_nbvelos_T+{h}h.joblib
+    """
+    df, feat_cols = build_training_frame(horizon_hours=horizon_hours, lookback_days=lookback_days)
 
-        # Futur 24h (UTC naïf)
-        last = pd.to_datetime(g["hour_utc"], utc=True).max()
-        fut  = pd.date_range(last + pd.Timedelta(hours=1), periods=horizon_h, freq="H", tz="UTC").tz_convert(None)
-        F    = pd.DataFrame({"hour_utc": fut, "stationcode": sc})
+    # Features
+    X = df[feat_cols].copy()
+    # on ne veut pas de 'hour_utc' comme feature brute
+    if "hour_utc" in X.columns:
+        X.drop(columns=["hour_utc"], inplace=True)
 
-        # Features calendrier sur le futur
-        F = add_calendar_features(F)
+    # Catégories
+    categorical = []
+    if "stationcode" in X.columns:
+        X["stationcode"] = X["stationcode"].astype("category")
+        categorical.append(X.columns.get_loc("stationcode"))
 
-        # Météo prévisionnelle
-        try:
-            wf = fetch_forecast(last, horizon_h)
-            if not wf.empty:
-                F = F.merge(wf, on="hour_utc", how="left")
-        except Exception:
-            pass
+    # Cible
+    y = df["y_nb"].astype(float).values
 
-        F["pred_occ"] = mdl.predict(F[feature_cols(F)].values).clip(0, 1)
-        out.append(F[["stationcode","hour_utc","pred_occ"]])
+    dtrain = lgb.Dataset(X, label=y, categorical_feature=categorical or None, free_raw_data=False)
 
-    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=["stationcode","hour_utc","pred_occ"])
+    params = dict(
+        objective="regression",
+        metric=["l1", "l2"],
+        learning_rate=0.05,
+        num_leaves=64,
+        feature_fraction=0.9,
+        bagging_fraction=0.8,
+        bagging_freq=1,
+        min_data_in_leaf=50,
+        seed=42,
+        verbosity=-1,
+    )
+
+    model = lgb.train(
+        params,
+        dtrain,
+        num_boost_round=num_boost_round,
+        valid_sets=[dtrain],
+        valid_names=["train"],
+        callbacks=[lgb.early_stopping(stopping_rounds=100), lgb.log_evaluation(100)],
+    )
+
+    bundle = {
+        "model": model,
+        "feat_cols": X.columns.tolist(),
+        "categorical_idx": categorical,
+        "horizon_hours": horizon_hours,
+    }
+    out_path = MODELS_DIR / f"lgb_nbvelos_T+{horizon_hours}h.joblib"
+    joblib.dump(bundle, out_path)
+    print(f"[forecast] saved → {out_path}")
+    return model
+
+
+def predict(horizon_hours: int = 1, lookback_days: int = 90) -> pd.DataFrame:
+    """
+    Charge le modèle T+h et prédit sur le dernier frame de features.
+    Retourne stationcode, hour_utc, capacity_hour, y_nb_pred, occ_ratio_pred.
+    """
+    bundle_path = MODELS_DIR / f"lgb_nbvelos_T+{horizon_hours}h.joblib"
+    if not bundle_path.exists():
+        # entraîne à la volée si nécessaire
+        train(horizon_hours=horizon_hours, lookback_days=lookback_days)
+
+    bundle = joblib.load(bundle_path)
+    model = bundle["model"]
+    feat_cols = bundle["feat_cols"]
+
+    df, _ = build_training_frame(horizon_hours=horizon_hours, lookback_days=lookback_days)
+
+    X = df[feat_cols].copy()
+    if "stationcode" in X.columns:
+        X["stationcode"] = X["stationcode"].astype("category")
+
+    yhat = model.predict(X)
+
+    out = df[["stationcode", "hour_utc", "capacity_hour"]].copy()
+    out["y_nb_pred"] = np.clip(yhat, 0, out["capacity_hour"].fillna(np.inf))
+    out["occ_ratio_pred"] = (out["y_nb_pred"] / out["capacity_hour"]).where(out["capacity_hour"] > 0)
+    return out
+
+
+if __name__ == "__main__":
+    for h in (1, 3, 6):
+        train(h)
