@@ -38,11 +38,18 @@ markdown_extensions:
   - toc:
       permalink: true
 
+site_name: Vélib’ Paris — Forecast (Batch)
+theme:
+  name: material
+
 markdown_extensions:
+  - admonition
+  - pymdownx.snippets:
+      base_path: docs
+      check_paths: true
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
-
   - pymdownx.highlight
   - pymdownx.inlinehilite
   - pymdownx.superfences
@@ -59,5 +66,8 @@ plugins:
 
 nav:
   - Home: index.md
-  - Results: results.md
-  - Monitoring: monitoring.md
+  - Carte temps réel: results.md
+  - Historique: history.md
+  - Prévisions: forecast.md
+  - Conclusion: conclusion.md
+
