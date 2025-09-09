@@ -7,10 +7,14 @@ import holidays
 
 TZ = "Europe/Paris"
 
+# après (robuste série/index)
 def _to_local_hour(x):
-    # entrée: UTC naïf → localisé Paris → arrondi heure
-    dt = pd.to_datetime(x, utc=True).dt.tz_localize("UTC").dt.tz_convert(TZ)
-    return dt.dt.floor("h")
+    # Rend “tz-aware UTC”, convertit en Europe/Paris, arrondit à l’heure
+    try:
+        dt = pd.to_datetime(x, errors="coerce", utc=True).dt.tz_convert(TZ).dt.floor("h")
+    except AttributeError:  # DatetimeIndex / scalar
+        dt = pd.to_datetime(x, errors="coerce", utc=True).tz_convert(TZ).floor("h")
+    return dt
 
 def build_training_frame(db_path="warehouse.duckdb", hourly_path="exports/velib_hourly.parquet",
                          horizon_hours: int = 1, lookback_days: int = 60) -> pd.DataFrame:
