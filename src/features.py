@@ -95,6 +95,31 @@ def build_training_frame(db_path="warehouse.duckdb", hourly_path="exports/velib_
     # ===== Target: y_nb (t + horizon)
     df["y_nb"] = df.groupby("stationcode")["nb_velos_hour"].shift(-horizon_hours)
 
+    # ===== Sélection des features
+    # colonnes à ne jamais utiliser comme features brutes
+    never = {
+        "hour_local", "date_local", "y_nb", "name"  # <- name exclu ici
+    }
+    # point de départ : tout
+    cand = [c for c in df.columns if c not in never]
+
+    # on enlève explicitement les objets texte (sauf stationcode qui sera catégorielle)
+    obj_cols = [c for c in cand if df[c].dtype == "object" and c != "stationcode"]
+    cand = [c for c in cand if c not in obj_cols]
+
+    # on garde éventuellement 'stationcode' (catégorie) + colonnes numériques/bool
+    feat_cols = []
+    for c in cand:
+        if c == "stationcode":
+            feat_cols.append(c)
+        else:
+            if pd.api.types.is_numeric_dtype(df[c]) or pd.api.types.is_bool_dtype(df[c]):
+                feat_cols.append(c)
+
+    # drop lignes sans cible ou sans lags essentiels
+    df = df.dropna(subset=["y_nb", "nb_velos_hour_lag1", "occ_ratio_hour_lag1"]).reset_index(drop=True)
+    return df, feat_cols
+
     # Nettoyage
     feat_cols = [c for c in df.columns if c not in {
         "hour_local","date_local","y_nb"
