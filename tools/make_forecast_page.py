@@ -93,7 +93,7 @@ def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     if preds_parq.exists():
         df = pd.read_parquet(preds_parq)
 
-        # Harmonisation des noms de colonnes
+        # Harmonisation colonnes éventuelles
         ren = {
             "pred_nb_velos": "y_nb_pred",
             "nb_pred": "y_nb_pred",
@@ -103,21 +103,20 @@ def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
             if a in df.columns and b not in df.columns:
                 df[b] = df[a]
 
-        # Types & base
+        # Types de base
         if "stationcode" in df.columns:
             df["stationcode"] = df["stationcode"].astype(str)
         df["hour_utc"] = pd.to_datetime(df["hour_utc"], utc=True, errors="coerce")
         df = df.dropna(subset=["stationcode", "hour_utc"]).reset_index(drop=True)
 
-        # Calcul occ_ratio_pred — SANS alignement par index
-        pred = pd.to_numeric(df.get("y_nb_pred"), errors="coerce").to_numpy()
+        # y_nb_pred sûr
+        if "y_nb_pred" in df.columns:
+            pred = pd.to_numeric(df["y_nb_pred"], errors="coerce").to_numpy()
+        else:
+            pred = np.full(len(df), np.nan)
 
-        cap_col = None
-        if "capacity_hour" in df.columns:
-            cap_col = "capacity_hour"
-        elif "capacity" in df.columns:
-            cap_col = "capacity"
-
+        # Capacité (si dispo)
+        cap_col = "capacity_hour" if "capacity_hour" in df.columns else ("capacity" if "capacity" in df.columns else None)
         if cap_col is not None:
             cap = pd.to_numeric(df[cap_col], errors="coerce").to_numpy()
             with np.errstate(divide="ignore", invalid="ignore"):
@@ -126,14 +125,14 @@ def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
         else:
             df["occ_ratio_pred"] = np.nan
 
-        # Nettoyage numérique
+        # Nettoyage obs/pred
         for c in ["y_nb_obs", "y_nb_pred"]:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
 
         return df
 
-    # -------- Baseline si pas de fichier de prédictions ----------
+    # ---------- Baseline si pas de fichier de prédictions ----------
     hourly = ROOT / "exports" / "velib_hourly.parquet"
     if hourly.exists():
         df = pd.read_parquet(hourly)
@@ -158,7 +157,7 @@ def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     df["hour_utc"] = pd.to_datetime(df["hour_utc"], utc=True, errors="coerce")
     df = df.dropna(subset=["stationcode", "hour_utc"]).reset_index(drop=True)
 
-    # prédiction naïve T+1h = obs actuelle
+    # prédiction naïve T+1h = valeur observée actuelle
     df_pred = df[["stationcode", "hour_utc", "nb_velos_hour"]].copy()
     df_pred["hour_utc"] = df_pred["hour_utc"] + pd.Timedelta(hours=1)
     df_pred = df_pred.rename(columns={"nb_velos_hour": "y_nb_pred"})
@@ -166,15 +165,12 @@ def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     out = df.merge(df_pred, on=["stationcode", "hour_utc"], how="left").reset_index(drop=True)
     out = out.rename(columns={"nb_velos_hour": "y_nb_obs"})
 
-    # occ_ratio_pred safe (positionnel)
-    pred = pd.to_numeric(out.get("y_nb_pred"), errors="coerce").to_numpy()
+    # y_nb_pred sûr (peut être tout NaN si pas de correspondance T+1h)
+    pred = pd.to_numeric(out["y_nb_pred"], errors="coerce") if "y_nb_pred" in out.columns else pd.Series([np.nan] * len(out))
+    pred = pred.to_numpy()
 
-    cap_col = None
-    if "capacity_hour" in out.columns:
-        cap_col = "capacity_hour"
-    elif "capacity" in out.columns:
-        cap_col = "capacity"
-
+    # occ_ratio_pred positionnel
+    cap_col = "capacity_hour" if "capacity_hour" in out.columns else ("capacity" if "capacity" in out.columns else None)
     if cap_col is not None:
         cap = pd.to_numeric(out[cap_col], errors="coerce").to_numpy()
         with np.errstate(divide="ignore", invalid="ignore"):
