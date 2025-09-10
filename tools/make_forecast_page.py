@@ -247,14 +247,30 @@ def main():
 
     def table_md(d):
         d2 = d.copy()
-        d2["Station"] = d2.apply(
-            lambda r: f"{(r['name'] if pd.notna(r['name']) and str(r['name']).strip() else '—')} (`{r['stationcode']}`)",
-            axis=1
+        # garantir name_display même si d est un sous-ensemble
+        if "name_display" not in d2.columns:
+            name_cols = [c for c in d2.columns if str(c).lower().startswith("name")]
+            if name_cols:
+                d2["name_display"] = d2[name_cols].bfill(axis=1).iloc[:, 0]
+            else:
+                d2["name_display"] = np.nan
+
+        def _label(r):
+            nm = r.get("name_display")
+            txt = str(nm).strip() if (nm is not None and pd.notna(nm)) else "—"
+            return f"{txt} (`{r['stationcode']}`)"
+
+        d2["Station"] = d2.apply(_label, axis=1)
+        d2["Prédit T+1h (vélos)"] = (
+            d2["y_nb_pred"].round(0).astype("Int64") if "y_nb_pred" in d2 else pd.NA
         )
-        d2["Prédit T+1h (vélos)"] = d2["y_nb_pred"].round(0).astype("Int64") if "y_nb_pred" in d2 else pd.NA
-        d2["Taux prévu"] = d2["occ_ratio_pred"].map(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "—") if "occ_ratio_pred" in d2 else "—"
+        d2["Taux prévu"] = (
+            d2["occ_ratio_pred"].map(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "—")
+            if "occ_ratio_pred" in d2
+            else "—"
+        )
         d2["Dernière obs."] = d2["when_local"]
-        return d2[["Station","Prédit T+1h (vélos)","Taux prévu","Dernière obs."]].to_markdown(index=False)
+        return d2[["Station", "Prédit T+1h (vélos)", "Taux prévu", "Dernière obs."]].to_markdown(index=False)
 
     # 4) Rédaction Markdown
     buf = io.StringIO()
