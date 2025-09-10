@@ -1,49 +1,106 @@
 # Prévisions
-**Échéance la plus récente** : `2025-09-10 10:00:00` (UTC)
+
+*Dernière heure considérée : **10/09 16h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
-| station | y_nb_pred | occ_ratio_pred |
-|---|---:|---:|
-| `22019` | 0 | 0.00 |
-| `44018` | 0 | 0.00 |
-| `45504` | 0 | 0.00 |
-| `17125` | 0 | 0.00 |
-| `18112` | 0 | 0.00 |
-| `14026` | 0 | 0.00 |
-| `32308` | 0 | 0.00 |
-| `4201` | 0 | 0.00 |
-| `31025` | 0 | 0.01 |
-| `20103` | 0 | 0.01 |
+| Station                                           | Prédit T+1h (vélos)   | Taux prévu   | Dernière obs.   |
+|:--------------------------------------------------|:----------------------|:-------------|:----------------|
+| Hauteville - Bonne Nouvelle (`10003`)             | —                     | —            | 10/09 16h       |
+| Metz - Faubourg Saint-Denis (`10004`)             | —                     | —            | 10/09 16h       |
+| Petites Ecuries - Faubourg Poissonnière (`10005`) | —                     | —            | 10/09 16h       |
+| Petites Ecuries - Faubourg Saint-Denis (`10006`)  | —                     | —            | 10/09 16h       |
+| Cité Riverin - Château d'Eau (`10008`)            | —                     | —            | 10/09 16h       |
+| Mairie du 10ème (`10009`)                         | —                     | —            | 10/09 16h       |
+| Quai de l'Horloge - Pont Neuf (`1001`)            | —                     | —            | 10/09 16h       |
+| Place Jacques Bonsergent (`10010`)                | —                     | —            | 10/09 16h       |
+| Bourse du Travail (`10011`)                       | —                     | —            | 10/09 16h       |
+| Vinaigriers - Magenta (`10012`)                   | —                     | —            | 10/09 16h       |
 
-## Observé vs Prédit (échantillon)
+## Top-10 risque de saturation (taux prévu élevé)
 
-### Station `22019`
+| Station                                           | Prédit T+1h (vélos)   | Taux prévu   | Dernière obs.   |
+|:--------------------------------------------------|:----------------------|:-------------|:----------------|
+| Hauteville - Bonne Nouvelle (`10003`)             | —                     | —            | 10/09 16h       |
+| Metz - Faubourg Saint-Denis (`10004`)             | —                     | —            | 10/09 16h       |
+| Petites Ecuries - Faubourg Poissonnière (`10005`) | —                     | —            | 10/09 16h       |
+| Petites Ecuries - Faubourg Saint-Denis (`10006`)  | —                     | —            | 10/09 16h       |
+| Cité Riverin - Château d'Eau (`10008`)            | —                     | —            | 10/09 16h       |
+| Mairie du 10ème (`10009`)                         | —                     | —            | 10/09 16h       |
+| Quai de l'Horloge - Pont Neuf (`1001`)            | —                     | —            | 10/09 16h       |
+| Place Jacques Bonsergent (`10010`)                | —                     | —            | 10/09 16h       |
+| Bourse du Travail (`10011`)                       | —                     | —            | 10/09 16h       |
+| Vinaigriers - Magenta (`10012`)                   | —                     | —            | 10/09 16h       |
 
-![obs vs pred](assets/figs/obs_pred_22019_T+1h.png)
+## Détails par station (graphiques)
 
-### Station `44018`
+<details>
+<summary><strong>Hauteville - Bonne Nouvelle (10003)</strong></summary>
 
-![obs vs pred](assets/figs/obs_pred_44018_T+1h.png)
+![Hauteville - Bonne Nouvelle (10003)](assets/figs/obs_pred_10003_T+1h_compact.png)
 
-### Station `45504`
+</details>
 
-![obs vs pred](assets/figs/obs_pred_45504_T+1h.png)
+<details>
+<summary><strong>Metz - Faubourg Saint-Denis (10004)</strong></summary>
 
-### Station `42503`
+![Metz - Faubourg Saint-Denis (10004)](assets/figs/obs_pred_10004_T+1h_compact.png)
 
-![obs vs pred](assets/figs/obs_pred_42503_T+1h.png)
+</details>
 
-### Station `12129`
+<details>
+<summary><strong>Petites Ecuries - Faubourg Poissonnière (10005)</strong></summary>
 
-![obs vs pred](assets/figs/obs_pred_12129_T+1h.png)
+![Petites Ecuries - Faubourg Poissonnière (10005)](assets/figs/obs_pred_10005_T+1h_compact.png)
 
+</details>
 
-## Qualité (in-sample, ordre de grandeur)
-- MAE ≈ **1.16** vélos — RMSE ≈ **1.65** vélos
-![residuals](assets/figs/residuals_T+1h.png)
+<details>
+<summary><strong>Petites Ecuries - Faubourg Saint-Denis (10006)</strong></summary>
 
-## Importance des variables
-![importance](assets/figs/feat_importance_T+1h.png)
+![Petites Ecuries - Faubourg Saint-Denis (10006)](assets/figs/obs_pred_10006_T+1h_compact.png)
 
-> Remarque : ces métriques sont in-sample (à raffiner avec une validation temporelle TSSplit).
+</details>
+
+<details>
+<summary><strong>Cité Riverin - Château d'Eau (10008)</strong></summary>
+
+![Cité Riverin - Château d'Eau (10008)](assets/figs/obs_pred_10008_T+1h_compact.png)
+
+</details>
+
+<details>
+<summary><strong>Mairie du 10ème (10009)</strong></summary>
+
+![Mairie du 10ème (10009)](assets/figs/obs_pred_10009_T+1h_compact.png)
+
+</details>
+
+<details>
+<summary><strong>Quai de l'Horloge - Pont Neuf (1001)</strong></summary>
+
+![Quai de l'Horloge - Pont Neuf (1001)](assets/figs/obs_pred_1001_T+1h_compact.png)
+
+</details>
+
+<details>
+<summary><strong>Place Jacques Bonsergent (10010)</strong></summary>
+
+![Place Jacques Bonsergent (10010)](assets/figs/obs_pred_10010_T+1h_compact.png)
+
+</details>
+
+<details>
+<summary><strong>Bourse du Travail (10011)</strong></summary>
+
+![Bourse du Travail (10011)](assets/figs/obs_pred_10011_T+1h_compact.png)
+
+</details>
+
+<details>
+<summary><strong>Vinaigriers - Magenta (10012)</strong></summary>
+
+![Vinaigriers - Magenta (10012)](assets/figs/obs_pred_10012_T+1h_compact.png)
+
+</details>
+
