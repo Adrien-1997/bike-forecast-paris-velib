@@ -1,106 +1,76 @@
 # Prévisions
 
-*Dernière heure considérée : **10/09 17h** (Europe/Paris)*
+*Dernière heure considérée : **10/09 01h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
-| Station                                    |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:-------------------------------------------|----------------------:|:-------------|:----------------|
-| Nanterre - Université (`92004`)            |                     0 | 0.0%         | 10/09 17h       |
-| Le Vau - Maurice Bertaux (`20103`)         |                     0 | 0.0%         | 10/09 17h       |
-| Charonne - Avron (`20043`)                 |                     0 | 0.0%         | 10/09 17h       |
-| Frères Flavien - Porte des Lilas (`20029`) |                     0 | 0.0%         | 10/09 17h       |
-| Pyrénées - Ménilmontant (`20035`)          |                     0 | 0.0%         | 10/09 17h       |
-| Ménilmontant - Pelleport (`20036`)         |                     0 | 0.0%         | 10/09 17h       |
-| Pyrénées - Dagorno (`20011`)               |                     0 | 0.0%         | 10/09 17h       |
-| Dupont de l'Eure - Gambetta (`20202`)      |                     0 | 0.0%         | 10/09 17h       |
-| Benjamin Godard - Victor Hugo (`16107`)    |                     0 | 0.0%         | 10/09 17h       |
-| Saint-Blaise - Mouraud (`20017`)           |                     0 | 0.0%         | 10/09 17h       |
+| Station                                             |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:----------------------------------------------------|----------------------:|:-------------|:----------------|
+| Nanterre - Université (`92004`)                     |                     0 | —            | 10/09 01h       |
+| Théâtre des Amandiers - Palais des sports (`92002`) |                     0 | —            | 10/09 01h       |
+| Pesaro - Préfecture (`92007`)                       |                     0 | —            | 10/09 01h       |
+| Boudreau - Auber (`9106`)                           |                     0 | —            | 10/09 01h       |
+| Rivoli - Musée du Louvre (`1014`)                   |                     0 | —            | 10/09 01h       |
+| Charles de Gaulle (`22019`)                         |                     0 | —            | 10/09 01h       |
+| Charles Robin - Grange aux Belles (`10207`)         |                     0 | —            | 10/09 01h       |
+| Charles de Gaulle - Les Sablons (`22018`)           |                     0 | —            | 10/09 01h       |
+| Commandant Schloesing - Pétrarque (`16202`)         |                     0 | —            | 10/09 01h       |
+| Saint-Honoré - Musée du Louvre (`1023`)             |                     0 | —            | 10/09 01h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
-| Station                                          |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:-------------------------------------------------|----------------------:|:-------------|:----------------|
-| Enfants du Paradis - Peupliers (`21021`)         |                    64 | 160.0%       | 10/09 17h       |
-| Place Balard (`15056`)                           |                    30 | 136.4%       | 10/09 17h       |
-| Saint-Antoine Sévigné (`4010`)                   |                    28 | 107.7%       | 10/09 17h       |
-| Sebastopol - Rambuteau (`4104`)                  |                    17 | 106.2%       | 10/09 17h       |
-| BNF - Bibliothèque Nationale de France (`13123`) |                    44 | 104.8%       | 10/09 17h       |
-| Gare Saint-Lazare - Cour du Havre (`8002`)       |                    45 | 100.0%       | 10/09 17h       |
-| Madeleine Vionnet (`33019`)                      |                    34 | 100.0%       | 10/09 17h       |
-| Belfort - Victor Hugo (`21119`)                  |                    24 | 100.0%       | 10/09 17h       |
-| Belleville -  Pré Saint-Gervais (`19121`)        |                    21 | 100.0%       | 10/09 17h       |
-| Montmartre - Etienne Marcel (`2005`)             |                    16 | 100.0%       | 10/09 17h       |
+| Station                                           |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:--------------------------------------------------|----------------------:|:-------------|:----------------|
+| Hauteville - Bonne Nouvelle (`10003`)             |                     4 | —            | 10/09 01h       |
+| Metz - Faubourg Saint-Denis (`10004`)             |                    20 | —            | 10/09 01h       |
+| Petites Ecuries - Faubourg Poissonnière (`10005`) |                     7 | —            | 10/09 01h       |
+| Petites Ecuries - Faubourg Saint-Denis (`10006`)  |                    13 | —            | 10/09 01h       |
+| Cité Riverin - Château d'Eau (`10008`)            |                     7 | —            | 10/09 01h       |
+| Mairie du 10ème (`10009`)                         |                    11 | —            | 10/09 01h       |
+| Quai de l'Horloge - Pont Neuf (`1001`)            |                     3 | —            | 10/09 01h       |
+| Place Jacques Bonsergent (`10010`)                |                    10 | —            | 10/09 01h       |
+| Bourse du Travail (`10011`)                       |                     6 | —            | 10/09 01h       |
+| Vinaigriers - Magenta (`10012`)                   |                     9 | —            | 10/09 01h       |
 
 ## Détails par station (graphiques)
 
-<details>
-<summary><strong>Nanterre - Université (92004)</strong></summary>
+???+ info "Nanterre - Université (92004)"
 
-![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
+    ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
 
-</details>
+???+ info "Théâtre des Amandiers - Palais des sports (92002)"
 
-<details>
-<summary><strong>Le Vau - Maurice Bertaux (20103)</strong></summary>
+    ![Théâtre des Amandiers - Palais des sports (92002)](assets/figs/obs_pred_92002_T+1h_compact.png)
 
-![Le Vau - Maurice Bertaux (20103)](assets/figs/obs_pred_20103_T+1h_compact.png)
+???+ info "Pesaro - Préfecture (92007)"
 
-</details>
+    ![Pesaro - Préfecture (92007)](assets/figs/obs_pred_92007_T+1h_compact.png)
 
-<details>
-<summary><strong>Charonne - Avron (20043)</strong></summary>
+???+ info "Boudreau - Auber (9106)"
 
-![Charonne - Avron (20043)](assets/figs/obs_pred_20043_T+1h_compact.png)
+    ![Boudreau - Auber (9106)](assets/figs/obs_pred_9106_T+1h_compact.png)
 
-</details>
+???+ info "Rivoli - Musée du Louvre (1014)"
 
-<details>
-<summary><strong>Frères Flavien - Porte des Lilas (20029)</strong></summary>
+    ![Rivoli - Musée du Louvre (1014)](assets/figs/obs_pred_1014_T+1h_compact.png)
 
-![Frères Flavien - Porte des Lilas (20029)](assets/figs/obs_pred_20029_T+1h_compact.png)
+???+ info "Charles de Gaulle (22019)"
 
-</details>
+    ![Charles de Gaulle (22019)](assets/figs/obs_pred_22019_T+1h_compact.png)
 
-<details>
-<summary><strong>Pyrénées - Ménilmontant (20035)</strong></summary>
+???+ info "Charles Robin - Grange aux Belles (10207)"
 
-![Pyrénées - Ménilmontant (20035)](assets/figs/obs_pred_20035_T+1h_compact.png)
+    ![Charles Robin - Grange aux Belles (10207)](assets/figs/obs_pred_10207_T+1h_compact.png)
 
-</details>
+???+ info "Charles de Gaulle - Les Sablons (22018)"
 
-<details>
-<summary><strong>Ménilmontant - Pelleport (20036)</strong></summary>
+    ![Charles de Gaulle - Les Sablons (22018)](assets/figs/obs_pred_22018_T+1h_compact.png)
 
-![Ménilmontant - Pelleport (20036)](assets/figs/obs_pred_20036_T+1h_compact.png)
+???+ info "Commandant Schloesing - Pétrarque (16202)"
 
-</details>
+    ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
 
-<details>
-<summary><strong>Pyrénées - Dagorno (20011)</strong></summary>
+???+ info "Saint-Honoré - Musée du Louvre (1023)"
 
-![Pyrénées - Dagorno (20011)](assets/figs/obs_pred_20011_T+1h_compact.png)
-
-</details>
-
-<details>
-<summary><strong>Dupont de l'Eure - Gambetta (20202)</strong></summary>
-
-![Dupont de l'Eure - Gambetta (20202)](assets/figs/obs_pred_20202_T+1h_compact.png)
-
-</details>
-
-<details>
-<summary><strong>Benjamin Godard - Victor Hugo (16107)</strong></summary>
-
-![Benjamin Godard - Victor Hugo (16107)](assets/figs/obs_pred_16107_T+1h_compact.png)
-
-</details>
-
-<details>
-<summary><strong>Saint-Blaise - Mouraud (20017)</strong></summary>
-
-![Saint-Blaise - Mouraud (20017)](assets/figs/obs_pred_20017_T+1h_compact.png)
-
-</details>
+    ![Saint-Honoré - Musée du Louvre (1023)](assets/figs/obs_pred_1023_T+1h_compact.png)
 
