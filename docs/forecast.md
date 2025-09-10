@@ -1,38 +1,62 @@
 # Prévisions
 
-*Dernière heure considérée : **10/09 22h** (Europe/Paris)*
+*Dernière heure considérée : **10/09 23h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
 | Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:--------------------------------------------|----------------------:|:-------------|:----------------|
-| Batignolles - Rome (`8051`)                 |                     0 | 0.0%         | 10/09 22h       |
-| Gaston Roussel - Commune de Paris (`32308`) |                     0 | 0.0%         | 10/09 22h       |
-| Lieutenant Chauré - Etienne Marey (`20134`) |                     0 | 0.0%         | 10/09 22h       |
-| Parc André Citroën (`15059`)                |                     0 | 0.0%         | 10/09 22h       |
-| Dupont de l'Eure - Gambetta (`20202`)       |                     0 | 0.0%         | 10/09 22h       |
-| La Jarry - Place Diderot (`43010`)          |                     0 | 0.0%         | 10/09 22h       |
-| Stade - Chevilly (`45504`)                  |                     0 | 0.0%         | 10/09 22h       |
-| Place des Ardoines (`44018`)                |                     0 | 0.0%         | 10/09 22h       |
-| Mairie de Romainville (`32301`)             |                     0 | 0.0%         | 10/09 22h       |
-| Saint-Fargeau - Mortier (`20117`)           |                     0 | 0.0%         | 10/09 22h       |
+| Nanterre - Université (`92004`)             |                     0 | 0.0%         | 10/09 23h       |
+| Charles de Gaulle (`22019`)                 |                     0 | 0.0%         | 10/09 23h       |
+| Louis Pasteur - Albert Petit (`22206`)      |                     0 | 0.0%         | 10/09 23h       |
+| Champs-Elysees - Bassano (`8116`)           |                     0 | 0.0%         | 10/09 23h       |
+| Pergolèse - Malakoff (`16002`)              |                     0 | 0.0%         | 10/09 23h       |
+| Flandrin - Henri Martin (`16018`)           |                     0 | 0.0%         | 10/09 23h       |
+| Batignolles - Rome (`8051`)                 |                     0 | 0.0%         | 10/09 23h       |
+| Gaston Roussel - Commune de Paris (`32308`) |                     0 | 0.0%         | 10/09 23h       |
+| Commandant Schloesing - Pétrarque (`16202`) |                     0 | 0.0%         | 10/09 23h       |
+| Marché aux fleurs (`4002`)                  |                     0 | 0.0%         | 10/09 23h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
 | Station                                            |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:---------------------------------------------------|----------------------:|:-------------|:----------------|
-| Westermeyer - Paul Vaillant-Couturier (`42004`)    |                    29 | 116.0%       | 10/09 22h       |
-| Aristide Briand - Place de la Résistance (`21302`) |                    26 | 104.0%       | 10/09 22h       |
-| Paul Vaillant-Couturier - Gare RER (`44002`)       |                    26 | 100.0%       | 10/09 22h       |
-| Place Eustache Deschamps (`42303`)                 |                    20 | 100.0%       | 10/09 22h       |
-| Gare - Aristide Briand (`21329`)                   |                    29 | 100.0%       | 10/09 22h       |
-| Place de l'Eglise - Vitry-sur-Seine (`44004`)      |                    28 | 100.0%       | 10/09 22h       |
-| Pierre Joseph Desault (`13120`)                    |                    19 | 100.0%       | 10/09 22h       |
-| Félix Faure - Convention (`15069`)                 |                    43 | 97.7%        | 10/09 22h       |
-| Jean Jaurès - Jean Baptiste Clément (`21003`)      |                    38 | 97.4%        | 10/09 22h       |
-| Convention - Lourmel (`15062`)                     |                    35 | 97.2%        | 10/09 22h       |
+| Aristide Briand - Place de la Résistance (`21302`) |                    29 | 116.0%       | 10/09 23h       |
+| Westermeyer - Paul Vaillant-Couturier (`42004`)    |                    27 | 108.0%       | 10/09 23h       |
+| Daumesnil - Picpus (`12010`)                       |                    22 | 104.8%       | 10/09 23h       |
+| Place de l'Eglise - Vitry-sur-Seine (`44004`)      |                    28 | 100.0%       | 10/09 23h       |
+| Pierre Joseph Desault (`13120`)                    |                    19 | 100.0%       | 10/09 23h       |
+| Gare - Aristide Briand (`21329`)                   |                    29 | 100.0%       | 10/09 23h       |
+| Charles Tillon - Cimetière Communal (`33015`)      |                    30 | 100.0%       | 10/09 23h       |
+| Paul Vaillant-Couturier - Gare RER (`44002`)       |                    26 | 100.0%       | 10/09 23h       |
+| Léon - Doudeauville (`18014`)                      |                    13 | 100.0%       | 10/09 23h       |
+| Convention - Lourmel (`15062`)                     |                    36 | 100.0%       | 10/09 23h       |
 
 ## Détails par station (graphiques)
+
+???+ info "Nanterre - Université (92004)"
+
+    ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
+
+???+ info "Charles de Gaulle (22019)"
+
+    ![Charles de Gaulle (22019)](assets/figs/obs_pred_22019_T+1h_compact.png)
+
+???+ info "Louis Pasteur - Albert Petit (22206)"
+
+    ![Louis Pasteur - Albert Petit (22206)](assets/figs/obs_pred_22206_T+1h_compact.png)
+
+???+ info "Champs-Elysees - Bassano (8116)"
+
+    ![Champs-Elysees - Bassano (8116)](assets/figs/obs_pred_8116_T+1h_compact.png)
+
+???+ info "Pergolèse - Malakoff (16002)"
+
+    ![Pergolèse - Malakoff (16002)](assets/figs/obs_pred_16002_T+1h_compact.png)
+
+???+ info "Flandrin - Henri Martin (16018)"
+
+    ![Flandrin - Henri Martin (16018)](assets/figs/obs_pred_16018_T+1h_compact.png)
 
 ???+ info "Batignolles - Rome (8051)"
 
@@ -42,35 +66,11 @@
 
     ![Gaston Roussel - Commune de Paris (32308)](assets/figs/obs_pred_32308_T+1h_compact.png)
 
-???+ info "Lieutenant Chauré - Etienne Marey (20134)"
+???+ info "Commandant Schloesing - Pétrarque (16202)"
 
-    ![Lieutenant Chauré - Etienne Marey (20134)](assets/figs/obs_pred_20134_T+1h_compact.png)
+    ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
 
-???+ info "Parc André Citroën (15059)"
+???+ info "Marché aux fleurs (4002)"
 
-    ![Parc André Citroën (15059)](assets/figs/obs_pred_15059_T+1h_compact.png)
-
-???+ info "Dupont de l'Eure - Gambetta (20202)"
-
-    ![Dupont de l'Eure - Gambetta (20202)](assets/figs/obs_pred_20202_T+1h_compact.png)
-
-???+ info "La Jarry - Place Diderot (43010)"
-
-    ![La Jarry - Place Diderot (43010)](assets/figs/obs_pred_43010_T+1h_compact.png)
-
-???+ info "Stade - Chevilly (45504)"
-
-    ![Stade - Chevilly (45504)](assets/figs/obs_pred_45504_T+1h_compact.png)
-
-???+ info "Place des Ardoines (44018)"
-
-    ![Place des Ardoines (44018)](assets/figs/obs_pred_44018_T+1h_compact.png)
-
-???+ info "Mairie de Romainville (32301)"
-
-    ![Mairie de Romainville (32301)](assets/figs/obs_pred_32301_T+1h_compact.png)
-
-???+ info "Saint-Fargeau - Mortier (20117)"
-
-    ![Saint-Fargeau - Mortier (20117)](assets/figs/obs_pred_20117_T+1h_compact.png)
+    ![Marché aux fleurs (4002)](assets/figs/obs_pred_4002_T+1h_compact.png)
 
