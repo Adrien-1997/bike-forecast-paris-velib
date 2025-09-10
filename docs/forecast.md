@@ -1,34 +1,34 @@
 # Prévisions
-**Échéance la plus récente** : `2025-09-09 12:00:00` (UTC)
+**Échéance la plus récente** : `2025-09-10 09:00:00` (UTC)
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
 | station | y_nb_pred | occ_ratio_pred |
 |---|---:|---:|
-| `32308` | 0 | 0.00 |
-| `32601` | 0 | 0.00 |
-| `31203` | 0 | 0.00 |
-| `45504` | 0 | 0.14 |
-| `15018` | 0 | 0.00 |
-| `20016` | 0 | 0.01 |
-| `4201` | 0 | 0.02 |
-| `44018` | 0 | 0.01 |
-| `20037` | 0 | 0.01 |
-| `31024` | 0 | 0.01 |
+| `15039` | 0 | 0.00 |
+| `18112` | 0 | 0.00 |
+| `44018` | 0 | 0.00 |
+| `20035` | 0 | 0.00 |
+| `20027` | 0 | 0.00 |
+| `20019` | 0 | 0.00 |
+| `15047` | 0 | 0.00 |
+| `15041` | 0 | 0.00 |
+| `16108` | 0 | 0.00 |
+| `18137` | 0 | 0.00 |
 
 ## Observé vs Prédit (échantillon)
 
-### Station `32308`
+### Station `15039`
 
-![obs vs pred](assets/figs/obs_pred_32308_T+1h.png)
+![obs vs pred](assets/figs/obs_pred_15039_T+1h.png)
 
-### Station `32601`
+### Station `18112`
 
-![obs vs pred](assets/figs/obs_pred_32601_T+1h.png)
+![obs vs pred](assets/figs/obs_pred_18112_T+1h.png)
 
-### Station `31203`
+### Station `44018`
 
-![obs vs pred](assets/figs/obs_pred_31203_T+1h.png)
+![obs vs pred](assets/figs/obs_pred_44018_T+1h.png)
 
 ### Station `42503`
 
@@ -40,7 +40,7 @@
 
 
 ## Qualité (in-sample, ordre de grandeur)
-- MAE ≈ **1.13** vélos — RMSE ≈ **1.61** vélos
+- MAE ≈ **1.15** vélos — RMSE ≈ **1.63** vélos
 ![residuals](assets/figs/residuals_T+1h.png)
 
 ## Importance des variables
