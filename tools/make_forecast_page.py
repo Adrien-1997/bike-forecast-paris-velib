@@ -1,6 +1,7 @@
 # tools/make_forecast_page.py
 from pathlib import Path
 import io
+import numpy as np
 import duckdb
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -22,9 +23,7 @@ def _paris(dt):
     return dt.dt.tz_convert(TZ).dt.strftime("%d/%m %Hh")
 
 def _station_names(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
-    """
-    Renvoie un DataFrame unique stationcode -> name (dernier nom connu).
-    """
+    """DataFrame stationcode -> name (dernier nom connu)."""
     q = """
     WITH ranked AS (
       SELECT
@@ -41,7 +40,6 @@ def _station_names(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     GROUP BY 1;
     """
     df = con.execute(q).fetchdf()
-    # normalise types
     df["stationcode"] = df["stationcode"].astype(str)
     df["name"] = df["name"].astype(str)
     return df.drop_duplicates(subset=["stationcode"])
@@ -59,16 +57,15 @@ def _plot_obs_pred(df, stationcode, title, out_png):
         return False
     d["hour_utc"] = pd.to_datetime(d["hour_utc"], utc=True, errors="coerce")
     d = d.sort_values("hour_utc")
-
     x = d["hour_utc"].dt.tz_convert(TZ)
 
-    plt.figure(figsize=(8.5, 3.6))
-    if "y_nb_obs" in d:
+    plt.figure(figsize=(8.6, 3.6))
+    if "y_nb_obs" in d and d["y_nb_obs"].notna().any():
         plt.plot(x, d["y_nb_obs"], label="observé (nb vélos)")
-    elif "nb_velos_hour" in d:
+    elif "nb_velos_hour" in d and d["nb_velos_hour"].notna().any():
         plt.plot(x, d["nb_velos_hour"], label="observé (nb vélos)")
 
-    if "y_nb_pred" in d:
+    if "y_nb_pred" in d and d["y_nb_pred"].notna().any():
         plt.plot(x, d["y_nb_pred"], linestyle="--", label="prédit T+1h")
 
     plt.title(title)
@@ -109,16 +106,15 @@ def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
         df["hour_utc"] = pd.to_datetime(df["hour_utc"], utc=True, errors="coerce")
         df = df.dropna(subset=["stationcode", "hour_utc"]).reset_index(drop=True)
 
-        # y_nb_pred sûr
-        if "y_nb_pred" in df.columns:
-            pred = pd.to_numeric(df["y_nb_pred"], errors="coerce").to_numpy()
-        else:
-            pred = np.full(len(df), np.nan)
+        # y_nb_pred sûr -> 1D
+        if "y_nb_pred" not in df.columns:
+            df["y_nb_pred"] = np.nan
+        pred = pd.to_numeric(pd.Series(df["y_nb_pred"]).squeeze(), errors="coerce").to_numpy()
 
         # Capacité (si dispo)
         cap_col = "capacity_hour" if "capacity_hour" in df.columns else ("capacity" if "capacity" in df.columns else None)
         if cap_col is not None:
-            cap = pd.to_numeric(df[cap_col], errors="coerce").to_numpy()
+            cap = pd.to_numeric(pd.Series(df[cap_col]).squeeze(), errors="coerce").to_numpy()
             with np.errstate(divide="ignore", invalid="ignore"):
                 occ = np.where((cap > 0) & np.isfinite(pred), pred / cap, np.nan)
             df["occ_ratio_pred"] = pd.Series(occ)
@@ -165,14 +161,15 @@ def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     out = df.merge(df_pred, on=["stationcode", "hour_utc"], how="left").reset_index(drop=True)
     out = out.rename(columns={"nb_velos_hour": "y_nb_obs"})
 
-    # y_nb_pred sûr (peut être tout NaN si pas de correspondance T+1h)
-    pred = pd.to_numeric(out["y_nb_pred"], errors="coerce") if "y_nb_pred" in out.columns else pd.Series([np.nan] * len(out))
-    pred = pred.to_numpy()
+    # y_nb_pred sûr (existe & 1D)
+    if "y_nb_pred" not in out.columns:
+        out["y_nb_pred"] = np.nan
+    pred = pd.to_numeric(pd.Series(out["y_nb_pred"]).squeeze(), errors="coerce").to_numpy()
 
     # occ_ratio_pred positionnel
     cap_col = "capacity_hour" if "capacity_hour" in out.columns else ("capacity" if "capacity" in out.columns else None)
     if cap_col is not None:
-        cap = pd.to_numeric(out[cap_col], errors="coerce").to_numpy()
+        cap = pd.to_numeric(pd.Series(out[cap_col]).squeeze(), errors="coerce").to_numpy()
         with np.errstate(divide="ignore", invalid="ignore"):
             occ = np.where((cap > 0) & np.isfinite(pred), pred / cap, np.nan)
         out["occ_ratio_pred"] = pd.Series(occ)
@@ -197,24 +194,24 @@ def main():
     df = _load_predictions(con)
     names_df = _station_names(con)  # stationcode -> name
 
-    # fusionne les noms
+    # fusion noms
     df["stationcode"] = df["stationcode"].astype(str)
     df = df.merge(names_df, on="stationcode", how="left")
 
-    # 2) limite la fenêtre à 24h pour lisibilité
+    # 2) fenêtre 24h pour lisibilité
     cutoff = pd.Timestamp.utcnow().tz_localize("UTC") - pd.Timedelta(hours=24)
     df = df[df["hour_utc"] >= cutoff].copy()
 
     if df.empty:
         OUT_MD.write_text("# Prévisions\n\n_Aucune donnée disponible._\n", encoding="utf-8")
-        print(f"[forecast] wrote {OUT_MD} (vide)")
+        print(f"[forecast page] OK → {OUT_MD} (vide)")
         return
 
-    # 3) snapshot dernière heure pour top listes
+    # 3) snapshot dernière heure pour tops
     last_hour = df["hour_utc"].max()
     snap = df[df["hour_utc"] == last_hour].copy()
 
-    # Nettoyage types
+    # clean types
     for c in ["y_nb_pred", "y_nb_obs", "occ_ratio_pred"]:
         if c in snap.columns:
             snap[c] = pd.to_numeric(snap[c], errors="coerce")
@@ -226,19 +223,12 @@ def main():
 
     def table_md(d):
         d2 = d.copy()
-        # libellé station : Nom (code)
         d2["Station"] = d2.apply(
             lambda r: f"{(r['name'] if pd.notna(r['name']) and str(r['name']).strip() else '—')} (`{r['stationcode']}`)",
             axis=1
         )
-        if "y_nb_pred" in d2:
-            d2["Prédit T+1h (vélos)"] = d2["y_nb_pred"].round(0).astype("Int64")
-        else:
-            d2["Prédit T+1h (vélos)"] = pd.NA
-        if "occ_ratio_pred" in d2:
-            d2["Taux prévu"] = d2["occ_ratio_pred"].map(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "—")
-        else:
-            d2["Taux prévu"] = "—"
+        d2["Prédit T+1h (vélos)"] = d2["y_nb_pred"].round(0).astype("Int64") if "y_nb_pred" in d2 else pd.NA
+        d2["Taux prévu"] = d2["occ_ratio_pred"].map(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "—") if "occ_ratio_pred" in d2 else "—"
         d2["Dernière obs."] = d2["when_local"]
         return d2[["Station","Prédit T+1h (vélos)","Taux prévu","Dernière obs."]].to_markdown(index=False)
 
@@ -253,7 +243,7 @@ def main():
     buf.write("## Top-10 risque de saturation (taux prévu élevé)\n\n")
     buf.write(table_md(top_sat) + "\n\n")
 
-    # 5) Graphes repliables (sur un sous-ensemble raisonnable)
+    # 5) Graphes repliables (sous-ensemble raisonnable)
     show_codes = pd.unique(pd.concat([top_low["stationcode"], top_sat["stationcode"]])).tolist()[:10]
     buf.write("## Détails par station (graphiques)\n\n")
     for sc in show_codes:
@@ -270,7 +260,7 @@ def main():
         buf.write("</details>\n\n")
 
     OUT_MD.write_text(buf.getvalue(), encoding="utf-8")
-    print(f"[forecast] wrote {OUT_MD}")
+    print(f"[forecast page] OK → {OUT_MD}")
 
 if __name__ == "__main__":
     main()
