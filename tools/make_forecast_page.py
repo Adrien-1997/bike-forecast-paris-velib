@@ -87,12 +87,13 @@ def _plot_obs_pred(df, stationcode, title, out_png):
 def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """
     Sortie attendue :
-      stationcode (str), hour_utc (UTC), y_nb_pred, y_nb_obs (optionnel), occ_ratio_pred (optionnel)
+      stationcode (str), hour_utc (UTC), y_nb_pred, y_nb_obs (optionnel), occ_ratio_pred (calculé ici)
     """
     preds_parq = ROOT / "exports" / "velib_predictions.parquet"
     if preds_parq.exists():
         df = pd.read_parquet(preds_parq)
-        # harmonise
+
+        # Harmonisation des noms de colonnes
         ren = {
             "pred_nb_velos": "y_nb_pred",
             "nb_pred": "y_nb_pred",
@@ -101,18 +102,43 @@ def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
         for a, b in ren.items():
             if a in df.columns and b not in df.columns:
                 df[b] = df[a]
-        # types
+
+        # Types & base
         if "stationcode" in df.columns:
             df["stationcode"] = df["stationcode"].astype(str)
         df["hour_utc"] = pd.to_datetime(df["hour_utc"], utc=True, errors="coerce")
+        df = df.dropna(subset=["stationcode", "hour_utc"]).reset_index(drop=True)
+
+        # Calcul occ_ratio_pred — SANS alignement par index
+        pred = pd.to_numeric(df.get("y_nb_pred"), errors="coerce").to_numpy()
+
+        cap_col = None
+        if "capacity_hour" in df.columns:
+            cap_col = "capacity_hour"
+        elif "capacity" in df.columns:
+            cap_col = "capacity"
+
+        if cap_col is not None:
+            cap = pd.to_numeric(df[cap_col], errors="coerce").to_numpy()
+            with np.errstate(divide="ignore", invalid="ignore"):
+                occ = np.where((cap > 0) & np.isfinite(pred), pred / cap, np.nan)
+            df["occ_ratio_pred"] = pd.Series(occ)
+        else:
+            df["occ_ratio_pred"] = np.nan
+
+        # Nettoyage numérique
+        for c in ["y_nb_obs", "y_nb_pred"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+
         return df
 
-    # Baseline depuis l'agrégat horaire (persistence model)
+    # -------- Baseline si pas de fichier de prédictions ----------
     hourly = ROOT / "exports" / "velib_hourly.parquet"
     if hourly.exists():
         df = pd.read_parquet(hourly)
     else:
-        # fallback DB 72h
+        # fallback DB ~72h
         q = """
         WITH base AS (
           SELECT
@@ -127,26 +153,38 @@ def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
         """
         df = con.execute(q).fetchdf()
 
-    df = df.rename(columns={"bikes_avg": "nb_velos_hour"})
+    df = df.rename(columns={"bikes_avg": "nb_velos_hour"}).copy()
     df["stationcode"] = df["stationcode"].astype(str)
     df["hour_utc"] = pd.to_datetime(df["hour_utc"], utc=True, errors="coerce")
-    df = df.dropna(subset=["stationcode", "hour_utc"])
+    df = df.dropna(subset=["stationcode", "hour_utc"]).reset_index(drop=True)
 
     # prédiction naïve T+1h = obs actuelle
     df_pred = df[["stationcode", "hour_utc", "nb_velos_hour"]].copy()
     df_pred["hour_utc"] = df_pred["hour_utc"] + pd.Timedelta(hours=1)
     df_pred = df_pred.rename(columns={"nb_velos_hour": "y_nb_pred"})
 
-    out = df.merge(df_pred, on=["stationcode", "hour_utc"], how="left")
+    out = df.merge(df_pred, on=["stationcode", "hour_utc"], how="left").reset_index(drop=True)
     out = out.rename(columns={"nb_velos_hour": "y_nb_obs"})
 
-    # taux prévu si capacité dispo (selon colonne)
+    # occ_ratio_pred safe (positionnel)
+    pred = pd.to_numeric(out.get("y_nb_pred"), errors="coerce").to_numpy()
+
+    cap_col = None
     if "capacity_hour" in out.columns:
-        out["occ_ratio_pred"] = out["y_nb_pred"] / out["capacity_hour"]
+        cap_col = "capacity_hour"
     elif "capacity" in out.columns:
-        out["occ_ratio_pred"] = out["y_nb_pred"] / out["capacity"]
+        cap_col = "capacity"
+
+    if cap_col is not None:
+        cap = pd.to_numeric(out[cap_col], errors="coerce").to_numpy()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            occ = np.where((cap > 0) & np.isfinite(pred), pred / cap, np.nan)
+        out["occ_ratio_pred"] = pd.Series(occ)
     else:
-        out["occ_ratio_pred"] = pd.NA
+        out["occ_ratio_pred"] = np.nan
+
+    out["y_nb_obs"]  = pd.to_numeric(out.get("y_nb_obs"),  errors="coerce")
+    out["y_nb_pred"] = pd.to_numeric(out.get("y_nb_pred"), errors="coerce")
 
     return out
 
