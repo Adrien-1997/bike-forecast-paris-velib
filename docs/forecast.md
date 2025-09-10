@@ -5,30 +5,30 @@
 
 | station | y_nb_pred | occ_ratio_pred |
 |---|---:|---:|
-| `32308` | 0 | 0.00 |
-| `17125` | 0 | 0.00 |
-| `45504` | 0 | 0.00 |
-| `44018` | 0 | 0.00 |
 | `18112` | 0 | 0.00 |
+| `32308` | 0 | 0.00 |
+| `44018` | 0 | 0.00 |
+| `45504` | 0 | 0.00 |
 | `4201` | 0 | 0.00 |
-| `14137` | 0 | 0.00 |
 | `14026` | 0 | 0.00 |
-| `31203` | 0 | 0.00 |
 | `22019` | 0 | 0.00 |
+| `31203` | 0 | 0.00 |
+| `31025` | 0 | 0.01 |
+| `20027` | 0 | 0.02 |
 
 ## Observé vs Prédit (échantillon)
+
+### Station `18112`
+
+![obs vs pred](assets/figs/obs_pred_18112_T+1h.png)
 
 ### Station `32308`
 
 ![obs vs pred](assets/figs/obs_pred_32308_T+1h.png)
 
-### Station `17125`
+### Station `44018`
 
-![obs vs pred](assets/figs/obs_pred_17125_T+1h.png)
-
-### Station `45504`
-
-![obs vs pred](assets/figs/obs_pred_45504_T+1h.png)
+![obs vs pred](assets/figs/obs_pred_44018_T+1h.png)
 
 ### Station `42503`
 
