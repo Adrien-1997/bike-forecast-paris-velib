@@ -1,36 +1,36 @@
 # Prévisions
 
-*Dernière heure considérée : **10/09 18h** (Europe/Paris)*
+*Dernière heure considérée : **10/09 19h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
 | Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:--------------------------------------------|----------------------:|:-------------|:----------------|
-| Nanterre - Université (`92004`)             |                     0 | 0.0%         | 10/09 18h       |
-| Charles Robin - Grange aux Belles (`10207`) |                     0 | 0.0%         | 10/09 18h       |
-| Square Denise Buisson (`31005`)             |                     0 | 0.0%         | 10/09 18h       |
-| Champs-Elysees - Bassano (`8116`)           |                     0 | 0.0%         | 10/09 18h       |
-| Commandant Schloesing - Pétrarque (`16202`) |                     0 | 0.0%         | 10/09 18h       |
-| Amaury Duval - Gabriel Péri (`21219`)       |                     0 | 0.0%         | 10/09 18h       |
-| Vivienne - Petits Champs (`2201`)           |                     0 | 0.0%         | 10/09 18h       |
-| Batignolles - Abel Truchet (`17050`)        |                     0 | 0.0%         | 10/09 18h       |
-| De Gaulle - Moulin (`28002`)                |                     0 | 0.0%         | 10/09 18h       |
-| Place de la Division Leclerc (`22603`)      |                     0 | 0.0%         | 10/09 18h       |
+| Nanterre - Université (`92004`)             |                     0 | 0.0%         | 10/09 19h       |
+| Commandant Schloesing - Pétrarque (`16202`) |                     0 | 0.0%         | 10/09 19h       |
+| Belfort - Voltaire (`11020`)                |                     0 | 0.0%         | 10/09 19h       |
+| Cimetière de Fontenay-sous-Bois (`41209`)   |                     0 | 0.0%         | 10/09 19h       |
+| Le Vau - Maurice Bertaux (`20103`)          |                     0 | 0.0%         | 10/09 19h       |
+| Mairie de Romainville (`32301`)             |                     0 | 0.0%         | 10/09 19h       |
+| Sully - Morland (`4201`)                    |                     0 | 0.0%         | 10/09 19h       |
+| Henri Barbusse (`31203`)                    |                     0 | 0.0%         | 10/09 19h       |
+| De Gaulle - Moulin (`28002`)                |                     0 | 0.0%         | 10/09 19h       |
+| Division Leclerc - Kléber (`23203`)         |                     0 | 0.0%         | 10/09 19h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
 | Station                                          |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:-------------------------------------------------|----------------------:|:-------------|:----------------|
-| Enfants du Paradis - Peupliers (`21021`)         |                    60 | 150.0%       | 10/09 18h       |
-| Place Balard (`15056`)                           |                    28 | 127.3%       | 10/09 18h       |
-| BNF - Bibliothèque Nationale de France (`13123`) |                    43 | 102.4%       | 10/09 18h       |
-| Place de la République - Voltaire (`11046`)      |                    19 | 100.0%       | 10/09 18h       |
-| Belleville -  Pré Saint-Gervais (`19121`)        |                    21 | 100.0%       | 10/09 18h       |
-| Convention - Lourmel (`15062`)                   |                    36 | 100.0%       | 10/09 18h       |
-| Petites Ecuries - Faubourg Saint-Denis (`10006`) |                    28 | 100.0%       | 10/09 18h       |
-| Lassus - Delouvain (`19038`)                     |                    20 | 100.0%       | 10/09 18h       |
-| Belleville - Pyrénées (`19041`)                  |                    41 | 97.6%        | 10/09 18h       |
-| Gare RER - Général de Gaulle (`22302`)           |                    40 | 97.6%        | 10/09 18h       |
+| Convention - Lourmel (`15062`)                   |                    36 | 100.0%       | 10/09 19h       |
+| Gare Saint-Lazare - Cour du Havre (`8002`)       |                    45 | 100.0%       | 10/09 19h       |
+| Paul Vaillant-Couturier - Gare RER (`44002`)     |                    26 | 100.0%       | 10/09 19h       |
+| Place de l'Europe - Quai de Bercy (`42209`)      |                    17 | 100.0%       | 10/09 19h       |
+| BNF - Bibliothèque Nationale de France (`13123`) |                    42 | 100.0%       | 10/09 19h       |
+| Grand Prieuré - Crussol (`11042`)                |                    48 | 98.0%        | 10/09 19h       |
+| Porte Saint-Martin (`3101`)                      |                    33 | 97.1%        | 10/09 19h       |
+| Place de l'Eglise - Vitry-sur-Seine (`44004`)    |                    27 | 96.4%        | 10/09 19h       |
+| Voltaire - Anatole France (`23010`)              |                    26 | 96.3%        | 10/09 19h       |
+| Château - Bineau (`22001`)                       |                    22 | 95.7%        | 10/09 19h       |
 
 ## Détails par station (graphiques)
 
@@ -38,39 +38,39 @@
 
     ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
 
-???+ info "Charles Robin - Grange aux Belles (10207)"
-
-    ![Charles Robin - Grange aux Belles (10207)](assets/figs/obs_pred_10207_T+1h_compact.png)
-
-???+ info "Square Denise Buisson (31005)"
-
-    ![Square Denise Buisson (31005)](assets/figs/obs_pred_31005_T+1h_compact.png)
-
-???+ info "Champs-Elysees - Bassano (8116)"
-
-    ![Champs-Elysees - Bassano (8116)](assets/figs/obs_pred_8116_T+1h_compact.png)
-
 ???+ info "Commandant Schloesing - Pétrarque (16202)"
 
     ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
 
-???+ info "Amaury Duval - Gabriel Péri (21219)"
+???+ info "Belfort - Voltaire (11020)"
 
-    ![Amaury Duval - Gabriel Péri (21219)](assets/figs/obs_pred_21219_T+1h_compact.png)
+    ![Belfort - Voltaire (11020)](assets/figs/obs_pred_11020_T+1h_compact.png)
 
-???+ info "Vivienne - Petits Champs (2201)"
+???+ info "Cimetière de Fontenay-sous-Bois (41209)"
 
-    ![Vivienne - Petits Champs (2201)](assets/figs/obs_pred_2201_T+1h_compact.png)
+    ![Cimetière de Fontenay-sous-Bois (41209)](assets/figs/obs_pred_41209_T+1h_compact.png)
 
-???+ info "Batignolles - Abel Truchet (17050)"
+???+ info "Le Vau - Maurice Bertaux (20103)"
 
-    ![Batignolles - Abel Truchet (17050)](assets/figs/obs_pred_17050_T+1h_compact.png)
+    ![Le Vau - Maurice Bertaux (20103)](assets/figs/obs_pred_20103_T+1h_compact.png)
+
+???+ info "Mairie de Romainville (32301)"
+
+    ![Mairie de Romainville (32301)](assets/figs/obs_pred_32301_T+1h_compact.png)
+
+???+ info "Sully - Morland (4201)"
+
+    ![Sully - Morland (4201)](assets/figs/obs_pred_4201_T+1h_compact.png)
+
+???+ info "Henri Barbusse (31203)"
+
+    ![Henri Barbusse (31203)](assets/figs/obs_pred_31203_T+1h_compact.png)
 
 ???+ info "De Gaulle - Moulin (28002)"
 
     ![De Gaulle - Moulin (28002)](assets/figs/obs_pred_28002_T+1h_compact.png)
 
-???+ info "Place de la Division Leclerc (22603)"
+???+ info "Division Leclerc - Kléber (23203)"
 
-    ![Place de la Division Leclerc (22603)](assets/figs/obs_pred_22603_T+1h_compact.png)
+    ![Division Leclerc - Kléber (23203)](assets/figs/obs_pred_23203_T+1h_compact.png)
 
