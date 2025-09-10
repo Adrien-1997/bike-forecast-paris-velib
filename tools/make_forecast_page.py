@@ -214,7 +214,9 @@ def main():
     df = df.merge(names_df, on="stationcode", how="left")
 
     # 2) fenêtre 24h pour lisibilité
-    cutoff = pd.Timestamp.utcnow().tz_localize("UTC") - pd.Timedelta(hours=24)
+    # APRÈS (robuste)
+    utc_now = pd.Timestamp.now(tz="UTC")
+    cutoff = utc_now - pd.Timedelta(hours=24)
     df = df[df["hour_utc"] >= cutoff].copy()
 
     if df.empty:
