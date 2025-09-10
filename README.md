@@ -36,7 +36,7 @@
 
 ## 🛠️ Pipeline technique
 
-```mermaid
+```
 flowchart LR
     A[Ingestion GBFS/Opendata] --> B[DuckDB snapshots]
     B --> C[Aggregate (hourly)]
@@ -50,7 +50,7 @@ flowchart LR
 ## 🚀 Déploiement
 
 ### Local
-```bash
+```
 python -m src.ingest
 python -m src.aggregate
 python tools/make_report.py
