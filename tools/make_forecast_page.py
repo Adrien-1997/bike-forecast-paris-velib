@@ -316,9 +316,8 @@ def main():
         ok = _plot_obs_pred(df, str(sc), f"{title} — Observé vs Prédit", png)
         if not ok:
             continue
-        buf.write(f"<details>\n<summary><strong>{title}</strong></summary>\n\n")
-        buf.write(f"![{title}](assets/figs/{png.name})\n\n")
-        buf.write("</details>\n\n")
+        buf.write(f'???+ info "{title}"\n\n')
+        buf.write(f"    ![{title}](assets/figs/{png.name})\n\n")
 
     OUT_MD.write_text(buf.getvalue(), encoding="utf-8")
     print(f"[forecast page] OK → {OUT_MD}")
