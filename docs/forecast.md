@@ -1,66 +1,42 @@
 # Prévisions
 
-*Dernière heure considérée : **10/09 19h** (Europe/Paris)*
+*Dernière heure considérée : **10/09 20h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
 | Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:--------------------------------------------|----------------------:|:-------------|:----------------|
-| Nanterre - Université (`92004`)             |                     0 | 0.0%         | 10/09 19h       |
-| Commandant Schloesing - Pétrarque (`16202`) |                     0 | 0.0%         | 10/09 19h       |
-| Belfort - Voltaire (`11020`)                |                     0 | 0.0%         | 10/09 19h       |
-| Cimetière de Fontenay-sous-Bois (`41209`)   |                     0 | 0.0%         | 10/09 19h       |
-| Le Vau - Maurice Bertaux (`20103`)          |                     0 | 0.0%         | 10/09 19h       |
-| Mairie de Romainville (`32301`)             |                     0 | 0.0%         | 10/09 19h       |
-| Sully - Morland (`4201`)                    |                     0 | 0.0%         | 10/09 19h       |
-| Henri Barbusse (`31203`)                    |                     0 | 0.0%         | 10/09 19h       |
-| De Gaulle - Moulin (`28002`)                |                     0 | 0.0%         | 10/09 19h       |
-| Division Leclerc - Kléber (`23203`)         |                     0 | 0.0%         | 10/09 19h       |
+| Charles Robin - Grange aux Belles (`10207`) |                     0 | 0.0%         | 10/09 20h       |
+| Henri Barbusse (`31203`)                    |                     0 | 0.0%         | 10/09 20h       |
+| De Gaulle - Moulin (`28002`)                |                     0 | 0.0%         | 10/09 20h       |
+| Paul Valery - Victor Hugo (`16104`)         |                     0 | 0.0%         | 10/09 20h       |
+| Flandrin - Henri Martin (`16018`)           |                     0 | 0.0%         | 10/09 20h       |
+| Mairie du 16ème (`16013`)                   |                     0 | 0.0%         | 10/09 20h       |
+| Verdun - Carnot (`32306`)                   |                     0 | 0.0%         | 10/09 20h       |
+| Mairie de Romainville (`32301`)             |                     0 | 0.0%         | 10/09 20h       |
+| Place des Ardoines (`44018`)                |                     0 | 0.0%         | 10/09 20h       |
+| Division Leclerc - Kléber (`23203`)         |                     0 | 0.0%         | 10/09 20h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
-| Station                                          |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:-------------------------------------------------|----------------------:|:-------------|:----------------|
-| Convention - Lourmel (`15062`)                   |                    36 | 100.0%       | 10/09 19h       |
-| Gare Saint-Lazare - Cour du Havre (`8002`)       |                    45 | 100.0%       | 10/09 19h       |
-| Paul Vaillant-Couturier - Gare RER (`44002`)     |                    26 | 100.0%       | 10/09 19h       |
-| Place de l'Europe - Quai de Bercy (`42209`)      |                    17 | 100.0%       | 10/09 19h       |
-| BNF - Bibliothèque Nationale de France (`13123`) |                    42 | 100.0%       | 10/09 19h       |
-| Grand Prieuré - Crussol (`11042`)                |                    48 | 98.0%        | 10/09 19h       |
-| Porte Saint-Martin (`3101`)                      |                    33 | 97.1%        | 10/09 19h       |
-| Place de l'Eglise - Vitry-sur-Seine (`44004`)    |                    27 | 96.4%        | 10/09 19h       |
-| Voltaire - Anatole France (`23010`)              |                    26 | 96.3%        | 10/09 19h       |
-| Château - Bineau (`22001`)                       |                    22 | 95.7%        | 10/09 19h       |
+| Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:--------------------------------------------|----------------------:|:-------------|:----------------|
+| Félix Faure - Convention (`15069`)          |                    44 | 100.0%       | 10/09 20h       |
+| Les Planètes (`47008`)                      |                    21 | 100.0%       | 10/09 20h       |
+| Aboukir - Alexandrie (`2016`)               |                    21 | 100.0%       | 10/09 20h       |
+| Belleville - Pyrénées (`19041`)             |                    42 | 100.0%       | 10/09 20h       |
+| Square Emile - Chautemps (`3012`)           |                    25 | 100.0%       | 10/09 20h       |
+| Place de l'Europe - Quai de Bercy (`42209`) |                    17 | 100.0%       | 10/09 20h       |
+| Gare du Stade (`27005`)                     |                    20 | 100.0%       | 10/09 20h       |
+| Gare RER - Général de Gaulle (`22302`)      |                    40 | 97.6%        | 10/09 20h       |
+| Convention - Lourmel (`15062`)              |                    35 | 97.2%        | 10/09 20h       |
+| Temple - Jean-Pierre Timbaud (`11040`)      |                    35 | 97.2%        | 10/09 20h       |
 
 ## Détails par station (graphiques)
 
-???+ info "Nanterre - Université (92004)"
+???+ info "Charles Robin - Grange aux Belles (10207)"
 
-    ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
-
-???+ info "Commandant Schloesing - Pétrarque (16202)"
-
-    ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
-
-???+ info "Belfort - Voltaire (11020)"
-
-    ![Belfort - Voltaire (11020)](assets/figs/obs_pred_11020_T+1h_compact.png)
-
-???+ info "Cimetière de Fontenay-sous-Bois (41209)"
-
-    ![Cimetière de Fontenay-sous-Bois (41209)](assets/figs/obs_pred_41209_T+1h_compact.png)
-
-???+ info "Le Vau - Maurice Bertaux (20103)"
-
-    ![Le Vau - Maurice Bertaux (20103)](assets/figs/obs_pred_20103_T+1h_compact.png)
-
-???+ info "Mairie de Romainville (32301)"
-
-    ![Mairie de Romainville (32301)](assets/figs/obs_pred_32301_T+1h_compact.png)
-
-???+ info "Sully - Morland (4201)"
-
-    ![Sully - Morland (4201)](assets/figs/obs_pred_4201_T+1h_compact.png)
+    ![Charles Robin - Grange aux Belles (10207)](assets/figs/obs_pred_10207_T+1h_compact.png)
 
 ???+ info "Henri Barbusse (31203)"
 
@@ -69,6 +45,30 @@
 ???+ info "De Gaulle - Moulin (28002)"
 
     ![De Gaulle - Moulin (28002)](assets/figs/obs_pred_28002_T+1h_compact.png)
+
+???+ info "Paul Valery - Victor Hugo (16104)"
+
+    ![Paul Valery - Victor Hugo (16104)](assets/figs/obs_pred_16104_T+1h_compact.png)
+
+???+ info "Flandrin - Henri Martin (16018)"
+
+    ![Flandrin - Henri Martin (16018)](assets/figs/obs_pred_16018_T+1h_compact.png)
+
+???+ info "Mairie du 16ème (16013)"
+
+    ![Mairie du 16ème (16013)](assets/figs/obs_pred_16013_T+1h_compact.png)
+
+???+ info "Verdun - Carnot (32306)"
+
+    ![Verdun - Carnot (32306)](assets/figs/obs_pred_32306_T+1h_compact.png)
+
+???+ info "Mairie de Romainville (32301)"
+
+    ![Mairie de Romainville (32301)](assets/figs/obs_pred_32301_T+1h_compact.png)
+
+???+ info "Place des Ardoines (44018)"
+
+    ![Place des Ardoines (44018)](assets/figs/obs_pred_44018_T+1h_compact.png)
 
 ???+ info "Division Leclerc - Kléber (23203)"
 
