@@ -1,151 +1,257 @@
-﻿# tools/make_forecast_page.py
-import sys
+# tools/make_forecast_page.py
 from pathlib import Path
-
-# --- ensure src/ est bien importable
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
+import io
+import numpy as np
 import duckdb
 import pandas as pd
-import numpy as np
-import joblib
 import matplotlib.pyplot as plt
 
-from src.forecast import train, predict
-from src.features import build_training_frame
-
+ROOT = Path(__file__).resolve().parents[1]
+DB   = ROOT / "warehouse.duckdb"
 DOCS = ROOT / "docs"
 FIGS = DOCS / "assets" / "figs"
 FIGS.mkdir(parents=True, exist_ok=True)
-OUT = DOCS / "forecast.md"
+OUT_MD = DOCS / "forecast.md"
 
+TZ = "Europe/Paris"
 
-def _plot_obs_vs_pred(stations, horizon=1):
-    hourly = pd.read_parquet("exports/velib_hourly.parquet")
-    hourly["hour_utc"] = pd.to_datetime(hourly["hour_utc"])
-    dfp = predict(horizon)
-    dfp["hour_utc"] = pd.to_datetime(dfp["hour_utc"])
+# ----------------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------------
+def _paris(dt):
+    dt = pd.to_datetime(dt, utc=True, errors="coerce")
+    return dt.dt.tz_convert(TZ).dt.strftime("%d/%m %Hh")
 
-    md_blocks = []
-    for sc in stations:
-        obs = hourly[hourly["stationcode"] == sc].sort_values("hour_utc")
-        pred = dfp[dfp["stationcode"] == sc].sort_values("hour_utc")
-        if obs.empty or pred.empty:
-            continue
-        dfm = pd.merge(
-            obs[["hour_utc", "nb_velos_hour"]],
-            pred[["hour_utc", "y_nb_pred"]],
-            on="hour_utc",
-            how="inner",
-        )
-        if dfm.empty:
-            continue
-
-        fig = FIGS / f"obs_pred_{sc}_T+{horizon}h.png"
-        plt.figure(figsize=(9, 4))
-        plt.plot(dfm["hour_utc"], dfm["nb_velos_hour"], label="observé (nb_velos_hour)")
-        plt.plot(dfm["hour_utc"], dfm["y_nb_pred"], linestyle="--", label=f"prédit T+{horizon}h")
-        plt.title(f"Station {sc} — Observé vs Prédit")
-        plt.xlabel("UTC")
-        plt.ylabel("nb vélos")
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(fig, dpi=140)
-        plt.close()
-        md_blocks.append(f"### Station `{sc}`\n\n![obs vs pred](assets/figs/{fig.name})\n")
-    return "\n".join(md_blocks)
-
-
-def _plot_feature_importance(h=1):
-    bundle = joblib.load(Path("models") / f"lgb_nbvelos_T+{h}h.joblib")
-    model, feat_cols = bundle["model"], bundle["feat_cols"]
-    imp = pd.DataFrame(
-        {"feature": feat_cols, "gain": model.feature_importance(importance_type="gain")}
+def _station_names(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+    """
+    DataFrame unique stationcode -> name (dernier nom connu).
+    """
+    q = """
+    WITH ranked AS (
+      SELECT
+        stationcode,
+        name,
+        ts_utc,
+        ROW_NUMBER() OVER (PARTITION BY stationcode ORDER BY ts_utc DESC) rn
+      FROM velib_snapshots
+      WHERE name IS NOT NULL
     )
-    imp = imp.sort_values("gain", ascending=False).head(25)
-    fig = FIGS / f"feat_importance_T+{h}h.png"
-    plt.figure(figsize=(8, 6))
-    plt.barh(imp["feature"][::-1], imp["gain"][::-1])
-    plt.title(f"Feature importance (gain) — T+{h}h")
+    SELECT stationcode, ANY_VALUE(name) AS name
+    FROM ranked
+    WHERE rn <= 3
+    GROUP BY 1;
+    """
+    df = con.execute(q).fetchdf()
+    df["stationcode"] = df["stationcode"].astype(str)
+    df["name"] = df["name"].astype(str)
+    return df.drop_duplicates(subset=["stationcode"])
+
+def _nice_title(row):
+    name = row.get("name")
+    sc   = row.get("stationcode")
+    if pd.isna(name) or not str(name).strip():
+        return f"Station {sc}"
+    return f"{name} ({sc})"
+
+def _plot_obs_pred(df, stationcode, title, out_png):
+    d = df[df["stationcode"] == str(stationcode)].copy()
+    if d.empty:
+        return False
+    d["hour_utc"] = pd.to_datetime(d["hour_utc"], utc=True, errors="coerce")
+    d = d.sort_values("hour_utc")
+
+    x = d["hour_utc"].dt.tz_convert(TZ)
+
+    plt.figure(figsize=(8.6, 3.6))
+    if "y_nb_obs" in d and d["y_nb_obs"].notna().any():
+        plt.plot(x, d["y_nb_obs"], label="observé (nb vélos)")
+    elif "nb_velos_hour" in d and d["nb_velos_hour"].notna().any():
+        plt.plot(x, d["nb_velos_hour"], label="observé (nb vélos)")
+
+    if "y_nb_pred" in d and d["y_nb_pred"].notna().any():
+        plt.plot(x, d["y_nb_pred"], linestyle="--", label="prédit T+1h")
+
+    plt.title(title)
+    plt.xlabel("Heure locale (Europe/Paris)")
+    plt.ylabel("Vélos disponibles")
+    plt.grid(True, alpha=0.25)
+    plt.legend(loc="best")
     plt.tight_layout()
-    plt.savefig(fig, dpi=140)
+    plt.savefig(out_png, dpi=140)
     plt.close()
-    return fig.name
+    return True
 
+# ----------------------------------------------------------------------
+# Entrée : prédictions (ou baseline si pas de fichier de prédictions)
+# ----------------------------------------------------------------------
+def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+    """
+    Sortie attendue :
+      stationcode (str), hour_utc (UTC), y_nb_pred, y_nb_obs (optionnel), occ_ratio_pred (calculé ici)
+    """
+    preds_parq = ROOT / "exports" / "velib_predictions.parquet"
+    if preds_parq.exists():
+        df = pd.read_parquet(preds_parq)
+        # harmonisation noms
+        ren = {
+            "pred_nb_velos": "y_nb_pred",
+            "nb_pred": "y_nb_pred",
+            "nb_velos_hour": "y_nb_obs",
+        }
+        for a, b in ren.items():
+            if a in df.columns and b not in df.columns:
+                df[b] = df[a]
+        # types
+        if "stationcode" in df.columns:
+            df["stationcode"] = df["stationcode"].astype(str)
+        df["hour_utc"] = pd.to_datetime(df["hour_utc"], utc=True, errors="coerce")
+        df = df.dropna(subset=["stationcode", "hour_utc"])
+        df = df.reset_index(drop=True)
+        return df
 
-def _plot_residuals(h=1):
-    df, feat = build_training_frame(horizon_hours=h)
-    y = df["y_nb"].astype(float).values
-    X = df[feat].copy()
-    if "stationcode" in X.columns:
-        X["stationcode"] = X["stationcode"].astype("category")
-    bundle = joblib.load(Path("models") / f"lgb_nbvelos_T+{h}h.joblib")
-    model, feat_cols = bundle["model"], bundle["feat_cols"]
-    yhat = model.predict(X[feat_cols])
-    resid = y - yhat
-    fig = FIGS / f"residuals_T+{h}h.png"
-    plt.figure(figsize=(8, 4))
-    plt.hist(resid, bins=40)
-    plt.title(f"Distribution des résidus — T+{h}h")
-    plt.xlabel("y - yhat")
-    plt.ylabel("freq")
-    plt.tight_layout()
-    plt.savefig(fig, dpi=140)
-    plt.close()
-    mae = float(np.mean(np.abs(resid)))
-    rmse = float(np.sqrt(np.mean(resid**2)))
-    return fig.name, mae, rmse
+    # Baseline depuis l'agrégat horaire (persistence model)
+    hourly = ROOT / "exports" / "velib_hourly.parquet"
+    if hourly.exists():
+        df = pd.read_parquet(hourly)
+    else:
+        # fallback DB 72h
+        q = """
+        WITH base AS (
+          SELECT
+            date_trunc('hour', ts_utc) AS hour_utc,
+            stationcode,
+            avg(numbikesavailable) AS nb_velos_hour
+          FROM velib_snapshots
+          WHERE ts_utc >= now() - INTERVAL 72 HOUR
+          GROUP BY 1,2
+        )
+        SELECT * FROM base;
+        """
+        df = con.execute(q).fetchdf()
 
+    df = df.rename(columns={"bikes_avg": "nb_velos_hour"})
+    df["stationcode"] = df["stationcode"].astype(str)
+    df["hour_utc"] = pd.to_datetime(df["hour_utc"], utc=True, errors="coerce")
+    df = df.dropna(subset=["stationcode", "hour_utc"]).reset_index(drop=True)
 
+    # prédiction naïve T+1h = obs actuelle
+    df_pred = df[["stationcode", "hour_utc", "nb_velos_hour"]].copy()
+    df_pred["hour_utc"] = df_pred["hour_utc"] + pd.Timedelta(hours=1)
+    df_pred = df_pred.rename(columns={"nb_velos_hour": "y_nb_pred"})
+
+    out = df.merge(df_pred, on=["stationcode", "hour_utc"], how="left")
+    out = out.rename(columns={"nb_velos_hour": "y_nb_obs"}).reset_index(drop=True)
+
+    # taux prévu si capacité dispo (selon colonne) — calcul sans alignement d'index
+    pred = pd.to_numeric(out.get("y_nb_pred"), errors="coerce").to_numpy()
+
+    cap_col = None
+    if "capacity_hour" in out.columns:
+        cap_col = "capacity_hour"
+    elif "capacity" in out.columns:
+        cap_col = "capacity"
+
+    if cap_col is not None:
+        cap = pd.to_numeric(out[cap_col], errors="coerce").to_numpy()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            occ = np.where((cap > 0) & np.isfinite(pred), pred / cap, np.nan)
+        out["occ_ratio_pred"] = pd.Series(occ)
+    else:
+        out["occ_ratio_pred"] = pd.NA
+
+    # types clean
+    out["y_nb_obs"]  = pd.to_numeric(out.get("y_nb_obs"),  errors="coerce")
+    out["y_nb_pred"] = pd.to_numeric(out.get("y_nb_pred"), errors="coerce")
+
+    return out
+
+# ----------------------------------------------------------------------
+# Génération de la page
+# ----------------------------------------------------------------------
 def main():
-    # entraîne si absent
-    if not Path("models/lgb_nbvelos_T+1h.joblib").exists():
-        train(1)
+    if not DB.exists():
+        raise SystemExit("warehouse.duckdb introuvable. Lance d’abord l’ingestion.")
 
-    df_pred = predict(1)
-    df_pred["hour_utc"] = pd.to_datetime(df_pred["hour_utc"])
-    last_ts = df_pred["hour_utc"].max()
-    snap = df_pred[df_pred["hour_utc"] == last_ts].copy()
-    snap = snap.sort_values("y_nb_pred").head(10)
+    con = duckdb.connect(str(DB))
 
-    stations = list(snap["stationcode"].head(3).unique())
-    obs_pred_md = _plot_obs_vs_pred(stations, horizon=1)
-    fi_png = _plot_feature_importance(1)
-    res_png, mae, rmse = _plot_residuals(1)
+    # 1) données
+    df = _load_predictions(con)
+    names_df = _station_names(con)  # stationcode -> name
 
-    lines = [
-        "# Prévisions",
-        f"**Échéance la plus récente** : `{last_ts}` (UTC)",
-        "",
-        "## Top-10 stations à risque (faible nb vélos prévu T+1h)",
-        "",
-        "| station | y_nb_pred | occ_ratio_pred |",
-        "|---|---:|---:|",
-    ]
-    for r in snap.itertuples():
-        occ = f"{r.occ_ratio_pred:.2f}" if pd.notna(r.occ_ratio_pred) else ""
-        lines.append(f"| `{r.stationcode}` | {int(round(r.y_nb_pred))} | {occ} |")
+    # fusion noms
+    df["stationcode"] = df["stationcode"].astype(str)
+    df = df.merge(names_df, on="stationcode", how="left")
 
-    lines += [
-        "",
-        "## Observé vs Prédit (échantillon)",
-        "",
-        obs_pred_md or "_Aucune série suffisante pour tracer._",
-        "",
-        "## Qualité (in-sample, ordre de grandeur)",
-        f"- MAE ≈ **{mae:.2f}** vélos — RMSE ≈ **{rmse:.2f}** vélos",
-        f"![residuals](assets/figs/{res_png})",
-        "",
-        "## Importance des variables",
-        f"![importance](assets/figs/{fi_png})",
-        "",
-        "> Remarque : métriques in-sample, à raffiner avec TimeSeriesSplit.",
-    ]
-    OUT.write_text("\n".join(lines), encoding="utf-8")
-    print("[forecast page] OK → docs/forecast.md")
+    # 2) fenêtre 24h pour lisibilité
+    cutoff = pd.Timestamp.utcnow().tz_localize("UTC") - pd.Timedelta(hours=24)
+    df = df[df["hour_utc"] >= cutoff].copy()
 
+    if df.empty:
+        OUT_MD.write_text("# Prévisions\n\n_Aucune donnée disponible._\n", encoding="utf-8")
+        print(f"[forecast page] OK → {OUT_MD} (vide)")
+        return
+
+    # 3) snapshot dernière heure pour tops
+    last_hour = df["hour_utc"].max()
+    snap = df[df["hour_utc"] == last_hour].copy()
+
+    # clean types
+    for c in ["y_nb_pred", "y_nb_obs", "occ_ratio_pred"]:
+        if c in snap.columns:
+            snap[c] = pd.to_numeric(snap[c], errors="coerce")
+    snap["when_local"] = _paris(snap["hour_utc"])
+
+    # Top-10 faible dispo & saturation
+    top_low = snap.sort_values("y_nb_pred", ascending=True).head(10).copy()
+    top_sat = snap.sort_values("occ_ratio_pred", ascending=False).head(10).copy()
+
+    def table_md(d):
+        d2 = d.copy()
+        # libellé station : Nom (code)
+        d2["Station"] = d2.apply(
+            lambda r: f"{(r['name'] if pd.notna(r['name']) and str(r['name']).strip() else '—')} (`{r['stationcode']}`)",
+            axis=1
+        )
+        if "y_nb_pred" in d2:
+            d2["Prédit T+1h (vélos)"] = d2["y_nb_pred"].round(0).astype("Int64")
+        else:
+            d2["Prédit T+1h (vélos)"] = pd.NA
+        if "occ_ratio_pred" in d2:
+            d2["Taux prévu"] = d2["occ_ratio_pred"].map(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "—")
+        else:
+            d2["Taux prévu"] = "—"
+        d2["Dernière obs."] = d2["when_local"]
+        return d2[["Station","Prédit T+1h (vélos)","Taux prévu","Dernière obs."]].to_markdown(index=False)
+
+    # 4) Rédaction Markdown
+    buf = io.StringIO()
+    buf.write("# Prévisions\n\n")
+    buf.write(f"*Dernière heure considérée : **{_paris(pd.Series([last_hour]))[0]}** (Europe/Paris)*\n\n")
+
+    buf.write("## Top-10 stations à risque (faible nb vélos prévu T+1h)\n\n")
+    buf.write(table_md(top_low) + "\n\n")
+
+    buf.write("## Top-10 risque de saturation (taux prévu élevé)\n\n")
+    buf.write(table_md(top_sat) + "\n\n")
+
+    # 5) Graphes repliables (sous-ensemble raisonnable)
+    show_codes = pd.unique(pd.concat([top_low["stationcode"], top_sat["stationcode"]])).tolist()[:10]
+    buf.write("## Détails par station (graphiques)\n\n")
+    for sc in show_codes:
+        sub = df[df["stationcode"] == str(sc)]
+        if sub.empty:
+            continue
+        title = _nice_title(sub.iloc[-1])  # utilise name + code
+        png = FIGS / f"obs_pred_{sc}_T+1h_compact.png"
+        ok = _plot_obs_pred(df, str(sc), f"{title} — Observé vs Prédit", png)
+        if not ok:
+            continue
+        buf.write(f"<details>\n<summary><strong>{title}</strong></summary>\n\n")
+        buf.write(f"![{title}](assets/figs/{png.name})\n\n")
+        buf.write("</details>\n\n")
+
+    OUT_MD.write_text(buf.getvalue(), encoding="utf-8")
+    print(f"[forecast page] OK → {OUT_MD}")
 
 if __name__ == "__main__":
     main()
