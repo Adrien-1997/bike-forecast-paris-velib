@@ -1,9 +1,9 @@
 name: pipeline-velib
 on:
-  schedule: [{ cron: "*/15 * * * *" }]
+  schedule:
+    - cron: "*/15 * * * *"   # toutes les 15 min (UTC)
   workflow_dispatch:
 
-# important pour pouvoir pousser des commits + gh-pages
 permissions:
   contents: write
 
@@ -14,7 +14,8 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,87 +30,45 @@ jobs:
         run: |
           python -m pip install -U pip
           pip install -r requirements.txt
-          pip install mkdocs-material mkdocs-jupyter matplotlib pyarrow holidays tabulate folium scikit-learn
-
-      - name: Debug env
-        run: |
-          python -V
-          pip list | sed -n '1,80p'
+          pip install mkdocs-material pymdown-extensions duckdb pandas pyarrow matplotlib lightgbm holidays folium
 
       - name: Ingest snapshot (retry x3)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           set -e
           for i in 1 2 3; do
             python -m src.ingest && break || (echo "retry $i/3" && sleep 5)
           done
 
-      - name: Ensure table + prune >30d
-        run: |
-          python - << 'PY'
-          import duckdb, datetime as dt
-          con = duckdb.connect("warehouse.duckdb")
-          con.execute("""
-          CREATE TABLE IF NOT EXISTS velib_snapshots (
-            ts_utc TIMESTAMP, stationcode VARCHAR, name VARCHAR,
-            numbikesavailable DOUBLE, numdocksavailable DOUBLE,
-            mechanical DOUBLE, ebike DOUBLE, capacity DOUBLE,
-            is_installed BOOLEAN, is_renting BOOLEAN, is_returning BOOLEAN,
-            lat DOUBLE, lon DOUBLE
-          );
-          """)
-          cutoff = (dt.datetime.utcnow() - dt.timedelta(days=30)).date()
-          con.execute("DELETE FROM velib_snapshots WHERE ts_utc::DATE < ?", [cutoff])
-          print("Pruned rows before", cutoff)
-          PY
+      - name: Aggregate hourly + weather
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m src.aggregate
 
-      - name: Aggregate & forecast
-        run: |
-          python -m src.aggregate
-          python -m src.run_batch
-
-      - name: Generate docs
+      - name: Generate docs (map, KPI, history, forecast)
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          python -m tools.make_report
-          python -m tools.make_map
-          python -m tools.make_monitoring
+          python tools/make_map.py
+          python tools/make_kpi_banner.py
+          python tools/make_report.py
+          python tools/make_forecast_page.py
 
-      - name: Build LinkedIn share image
-        run: python tools/make_share_image.py
-
-      - name: Build site
+      - name: Build site (sanity check)
         run: mkdocs build --strict
 
-      - name: Commit data & docs (rebase then push if changed)
+      - name: Commit data & docs if changed
         run: |
           set -euxo pipefail
-          git config user.name "github-actions"
+          git config user.name  "github-actions"
           git config user.email "actions@users.noreply.github.com"
 
-          # S'il n'y a aucun changement (ni dans le working tree ni en staging) → on sort
-          if git diff --quiet && git diff --cached --quiet; then
+          # ne versionne pas la DB si listée dans .gitignore
+          git add -A
+          if git diff --cached --quiet; then
             echo "Nothing to commit."
             exit 0
           fi
-
-          # Se mettre à jour en conservant les modifs locales (autostash)
-          git fetch origin
-          git pull --rebase --autostash origin main
-
-          # Stage + commit ce qui a réellement changé
-          git add -A
-          if git diff --staged --quiet; then
-            echo "Nothing to commit after rebase."
-            exit 0
-          fi
-
           git commit -m "ci: update hourly data and docs"
           git push
-
-
-      - name: Publish to gh-pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./site
