@@ -9,7 +9,7 @@ on:
   # 2) toujours possible à la main
   workflow_dispatch:
 
-  # 3) (optionnel) sur push direct — on évite le double build avec un guard plus bas
+  # 3) (optionnel) sur push direct
   push:
     branches: [ main ]
     paths:
@@ -29,17 +29,16 @@ concurrency:
 
 jobs:
   build-and-deploy:
-    # si déclenché par workflow_run, ne tourner que si le pipeline est "success"
+    # fusionne les conditions en un seul `if`
     if: >
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
-
-    # éviter les doublons quand ce workflow est déclenché par un "push" fait par le bot
-    # (le pipeline-velib commit & push) : on skip dans ce cas
-    # -> retire cette ligne si tu veux aussi builder sur ces push.
-    if: >
-      (github.event_name != 'push') ||
-      (github.event_name == 'push' && github.actor != 'github-actions[bot]')
+      (
+        github.event_name != 'workflow_run' ||
+        github.event.workflow_run.conclusion == 'success'
+      ) &&
+      (
+        github.event_name != 'push' ||
+        github.actor != 'github-actions[bot]'
+      )
 
     runs-on: ubuntu-latest
 
@@ -47,7 +46,6 @@ jobs:
       - name: Checkout repo at the right revision
         uses: actions/checkout@v4
         with:
-          # si on vient de workflow_run, on reconstruit exactement sur le commit du pipeline
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
