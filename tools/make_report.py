@@ -1,4 +1,4 @@
-# tools/make_forecast_page.py
+# tools/make_report.py
 from pathlib import Path
 import io
 import numpy as np
@@ -7,31 +7,29 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parents[1]
-DB   = ROOT / "warehouse.duckdb"
 DOCS = ROOT / "docs"
 FIGS = DOCS / "assets" / "figs"
 FIGS.mkdir(parents=True, exist_ok=True)
-OUT_MD = DOCS / "forecast.md"
+
+DB_PATH = ROOT / "warehouse.duckdb"
+HOURLY_EXPORT = ROOT / "exports" / "velib_hourly.parquet"
+HISTORY_MD = DOCS / "history.md"
+KPI_PARTIAL = DOCS / "partials" / "kpi_results.md"
 
 TZ = "Europe/Paris"
 
-# ----------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Helpers
-# ----------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 def _paris(dt):
     dt = pd.to_datetime(dt, utc=True, errors="coerce")
-    return dt.dt.tz_convert(TZ).dt.strftime("%d/%m %Hh")
+    return dt.tz_convert(TZ)
 
 def _station_names(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
-    """
-    DataFrame unique stationcode -> name (dernier nom connu).
-    """
     q = """
     WITH ranked AS (
       SELECT
-        stationcode,
-        name,
-        ts_utc,
+        stationcode, name, ts_utc,
         ROW_NUMBER() OVER (PARTITION BY stationcode ORDER BY ts_utc DESC) rn
       FROM velib_snapshots
       WHERE name IS NOT NULL
@@ -46,212 +44,260 @@ def _station_names(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     df["name"] = df["name"].astype(str)
     return df.drop_duplicates(subset=["stationcode"])
 
-def _nice_title(row):
-    name = row.get("name")
-    sc   = row.get("stationcode")
-    if pd.isna(name) or not str(name).strip():
-        return f"Station {sc}"
-    return f"{name} ({sc})"
+# -----------------------------------------------------------------------------
+# Latest snapshot for KPI
+# -----------------------------------------------------------------------------
+def _read_latest_snapshot(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+    q = """
+    WITH ranked AS (
+      SELECT
+        stationcode, name, lat, lon, capacity,
+        ts_utc, numbikesavailable AS nb_velos, numdocksavailable AS nb_bornes,
+        ROW_NUMBER() OVER (PARTITION BY stationcode ORDER BY ts_utc DESC) AS rn
+      FROM velib_snapshots
+    )
+    SELECT stationcode, name, lat, lon, capacity, ts_utc, nb_velos, nb_bornes
+    FROM ranked
+    WHERE rn = 1 AND lat IS NOT NULL AND lon IS NOT NULL;
+    """
+    df = con.execute(q).fetchdf()
+    if df.empty:
+        return df
+    # normalize
+    df["capacity"] = pd.to_numeric(df["capacity"], errors="coerce")
+    df["nb_velos"] = pd.to_numeric(df["nb_velos"], errors="coerce").fillna(0)
+    df["nb_bornes"] = pd.to_numeric(df["nb_bornes"], errors="coerce").fillna(0)
+    return df
 
-def _plot_obs_pred(df, stationcode, title, out_png):
-    d = df[df["stationcode"] == str(stationcode)].copy()
-    if d.empty:
+def _kpis_from_latest(df_latest: pd.DataFrame) -> dict:
+    if df_latest.empty:
+        return {
+            "stations": 0,
+            "bikes_total": 0,
+            "docks_total": 0,
+            "occ_mean_pct": 0.0,
+            "ts_latest": None,
+        }
+    df = df_latest.copy()
+    df["occ_ratio"] = (df["nb_velos"] / df["capacity"]).where(df["capacity"] > 0, np.nan)
+    stations = df["stationcode"].nunique()
+    bikes_total = int(df["nb_velos"].sum())
+    docks_total = int(df["nb_bornes"].sum())
+    occ_mean = float(pd.to_numeric(df["occ_ratio"], errors="coerce").dropna().mean() or 0.0)
+    ts_latest = pd.to_datetime(df["ts_utc"], errors="coerce").max()
+    return {
+        "stations": stations,
+        "bikes_total": bikes_total,
+        "docks_total": docks_total,
+        "occ_mean_pct": round(100 * occ_mean, 1),
+        "ts_latest": ts_latest,
+    }
+
+def _write_kpi_partial(k: dict):
+    KPI_PARTIAL.parent.mkdir(parents=True, exist_ok=True)
+    ts = "-" if k["ts_latest"] is None else _paris(pd.Series([k["ts_latest"]]).iloc[0]).strftime("%d/%m %H:%M")
+    buf = io.StringIO()
+    buf.write(f"**Dernier snapshot** : `{ts}` (Europe/Paris)\n\n")
+    buf.write("**KPI (instantané)**\n\n")
+    buf.write(f"- Stations couvertes : **{k['stations']}**\n")
+    buf.write(f"- Vélos disponibles (total) : **{k['bikes_total']}**\n")
+    buf.write(f"- Bornes libres (total) : **{k['docks_total']}**\n")
+    buf.write(f"- Taux moyen d’occupation : **{k['occ_mean_pct']} %**\n")
+    KPI_PARTIAL.write_text(buf.getvalue(), encoding="utf-8")
+    print(f"[kpi] OK -> {KPI_PARTIAL}")
+
+# -----------------------------------------------------------------------------
+# Hourly time series (72h)
+# -----------------------------------------------------------------------------
+def _read_hourly_timeseries(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+    if HOURLY_EXPORT.exists():
+        df = pd.read_parquet(HOURLY_EXPORT)
+        cutoff = pd.Timestamp.utcnow().tz_localize(None) - pd.Timedelta(hours=72)
+        df = df[pd.to_datetime(df["hour_utc"]) >= cutoff].copy()
+        return df
+
+    q = """
+    WITH base AS (
+      SELECT
+        ts_utc::TIMESTAMP AS ts_utc, stationcode,
+        COALESCE(numbikesavailable,0) AS bikes,
+        COALESCE(numdocksavailable,0) AS docks,
+        NULLIF(capacity,0) AS capacity
+      FROM velib_snapshots
+      WHERE ts_utc >= now() - INTERVAL 72 HOUR
+    ),
+    enriched AS (
+      SELECT * ,
+        CASE WHEN capacity IS NOT NULL THEN bikes / capacity
+             WHEN (bikes + docks) > 0 THEN bikes::DOUBLE / (bikes + docks)
+             ELSE NULL END AS occ_ratio
+      FROM base
+    )
+    SELECT
+      date_trunc('hour', ts_utc) AS hour_utc,
+      stationcode,
+      CAST(avg(bikes) AS INTEGER)       AS nb_velos_hour,
+      CAST(avg(docks) AS INTEGER)       AS nb_bornes_hour,
+      max(capacity)                     AS capacity_hour,
+      CASE WHEN max(capacity) > 0 THEN avg(bikes)::DOUBLE / max(capacity)
+           WHEN (avg(bikes)+avg(docks))>0 THEN avg(bikes)::DOUBLE/(avg(bikes)+avg(docks))
+           ELSE NULL END                AS occ_ratio_hour
+    FROM enriched
+    GROUP BY 1,2
+    ORDER BY 1,2;
+    """
+    return con.execute(q).fetchdf()
+
+def _plot_history(df_hourly: pd.DataFrame, out_path: Path):
+    if df_hourly.empty:
         return False
-    d["hour_utc"] = pd.to_datetime(d["hour_utc"], utc=True, errors="coerce")
-    d = d.sort_values("hour_utc")
+    df = df_hourly.copy()
+    df["hour_utc"] = pd.to_datetime(df["hour_utc"], utc=True, errors="coerce")
+    s = df.groupby("hour_utc")["occ_ratio_hour"].mean().sort_index()
+    s_roll = s.rolling(3, min_periods=1).mean()
 
-    x = d["hour_utc"].dt.tz_convert(TZ)
-
-    plt.figure(figsize=(8.6, 3.6))
-    if "y_nb_obs" in d and d["y_nb_obs"].notna().any():
-        plt.plot(x, d["y_nb_obs"], label="observé (nb vélos)")
-    elif "nb_velos_hour" in d and d["nb_velos_hour"].notna().any():
-        plt.plot(x, d["nb_velos_hour"], label="observé (nb vélos)")
-
-    if "y_nb_pred" in d and d["y_nb_pred"].notna().any():
-        plt.plot(x, d["y_nb_pred"], linestyle="--", label="prédit T+1h")
-
-    plt.title(title)
-    plt.xlabel("Heure locale (Europe/Paris)")
-    plt.ylabel("Vélos disponibles")
-    plt.grid(True, alpha=0.25)
+    plt.figure(figsize=(10, 4.5))
+    plt.plot(s.index.tz_convert(TZ), s.values, label="Moyenne horaire (occ)")
+    plt.plot(s_roll.index.tz_convert(TZ), s_roll.values, linestyle="--", label="Lissé (3h)")
+    plt.axhline(0.2, linestyle=":", label="Seuil 20%")
+    plt.axhline(0.8, linestyle=":", label="Seuil 80%")
+    plt.title("Occupation moyenne du réseau — ~72h")
+    plt.xlabel("Heure (Europe/Paris)")
+    plt.ylabel("Taux d’occupation (0–1)")
     plt.legend(loc="best")
     plt.tight_layout()
-    plt.savefig(out_png, dpi=140)
+    plt.savefig(out_path, dpi=150)
     plt.close()
     return True
 
-# ----------------------------------------------------------------------
-# Entrée : prédictions (ou baseline si pas de fichier de prédictions)
-# ----------------------------------------------------------------------
-def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
-    """
-    Sortie attendue :
-      stationcode (str), hour_utc (UTC), y_nb_pred, y_nb_obs (optionnel), occ_ratio_pred (calculé ici)
-    """
-    preds_parq = ROOT / "exports" / "velib_predictions.parquet"
-    if preds_parq.exists():
-        df = pd.read_parquet(preds_parq)
-        # harmonisation noms
-        ren = {
-            "pred_nb_velos": "y_nb_pred",
-            "nb_pred": "y_nb_pred",
-            "nb_velos_hour": "y_nb_obs",
-        }
-        for a, b in ren.items():
-            if a in df.columns and b not in df.columns:
-                df[b] = df[a]
-        # types
-        if "stationcode" in df.columns:
-            df["stationcode"] = df["stationcode"].astype(str)
-        df["hour_utc"] = pd.to_datetime(df["hour_utc"], utc=True, errors="coerce")
-        df = df.dropna(subset=["stationcode", "hour_utc"])
-        df = df.reset_index(drop=True)
-        return df
-
-    # Baseline depuis l'agrégat horaire (persistence model)
-    hourly = ROOT / "exports" / "velib_hourly.parquet"
-    if hourly.exists():
-        df = pd.read_parquet(hourly)
-    else:
-        # fallback DB 72h
-        q = """
-        WITH base AS (
-          SELECT
-            date_trunc('hour', ts_utc) AS hour_utc,
-            stationcode,
-            avg(numbikesavailable) AS nb_velos_hour
-          FROM velib_snapshots
-          WHERE ts_utc >= now() - INTERVAL 72 HOUR
-          GROUP BY 1,2
-        )
-        SELECT * FROM base;
-        """
-        df = con.execute(q).fetchdf()
-
-    df = df.rename(columns={"bikes_avg": "nb_velos_hour"})
-    df["stationcode"] = df["stationcode"].astype(str)
+def _plot_bikes_total(df_hourly: pd.DataFrame, out_path: Path):
+    if df_hourly.empty:
+        return False
+    df = df_hourly.copy()
     df["hour_utc"] = pd.to_datetime(df["hour_utc"], utc=True, errors="coerce")
-    df = df.dropna(subset=["stationcode", "hour_utc"]).reset_index(drop=True)
+    s = df.groupby("hour_utc")["nb_velos_hour"].sum().sort_index()
+    plt.figure(figsize=(10, 4.5))
+    plt.plot(s.index.tz_convert(TZ), s.values)
+    plt.title("Vélos disponibles — total réseau (horaire)")
+    plt.xlabel("Heure (Europe/Paris)")
+    plt.ylabel("Vélos")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+    return True
 
-    # prédiction naïve T+1h = obs actuelle
-    df_pred = df[["stationcode", "hour_utc", "nb_velos_hour"]].copy()
-    df_pred["hour_utc"] = df_pred["hour_utc"] + pd.Timedelta(hours=1)
-    df_pred = df_pred.rename(columns={"nb_velos_hour": "y_nb_pred"})
+# -----------------------------------------------------------------------------
+# (Optionnel) Charger des prédictions si elles existent, mais ne pas planter si absentes
+# -----------------------------------------------------------------------------
+def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame | None:
+    preds_parq = ROOT / "exports" / "velib_predictions.parquet"
+    if not preds_parq.exists():
+        return None
 
-    out = df.merge(df_pred, on=["stationcode", "hour_utc"], how="left")
-    out = out.rename(columns={"nb_velos_hour": "y_nb_obs"}).reset_index(drop=True)
+    df = pd.read_parquet(preds_parq)
+    if df is None or len(df) == 0:
+        return None
 
-    # taux prévu si capacité dispo (selon colonne) — calcul sans alignement d'index
-    pred = pd.to_numeric(out.get("y_nb_pred"), errors="coerce").to_numpy()
+    # Harmonisation
+    ren = {"pred_nb_velos": "y_nb_pred", "nb_pred": "y_nb_pred", "nb_velos_hour": "y_nb_obs"}
+    for a, b in ren.items():
+        if a in df.columns and b not in df.columns:
+            df[b] = df[a]
 
-    cap_col = None
-    if "capacity_hour" in out.columns:
-        cap_col = "capacity_hour"
-    elif "capacity" in out.columns:
-        cap_col = "capacity"
+    # Types & base
+    if "stationcode" in df.columns:
+        df["stationcode"] = df["stationcode"].astype(str)
+    if "hour_utc" not in df.columns:
+        # impossible de tracer / agréger proprement sans timestamp
+        return None
 
-    if cap_col is not None:
-        cap = pd.to_numeric(out[cap_col], errors="coerce").to_numpy()
+    df["hour_utc"] = pd.to_datetime(df["hour_utc"], utc=True, errors="coerce")
+    df = df.dropna(subset=["hour_utc"]).reset_index(drop=True)
+
+    # Calcul occ_ratio_pred (safe)
+    pred_series = df["y_nb_pred"] if "y_nb_pred" in df.columns else None
+    cap_col = "capacity_hour" if "capacity_hour" in df.columns else ("capacity" if "capacity" in df.columns else None)
+
+    if pred_series is not None and cap_col is not None:
+        pred = pd.to_numeric(pred_series, errors="coerce").to_numpy()
+        cap = pd.to_numeric(df[cap_col], errors="coerce").to_numpy()
         with np.errstate(divide="ignore", invalid="ignore"):
             occ = np.where((cap > 0) & np.isfinite(pred), pred / cap, np.nan)
-        out["occ_ratio_pred"] = pd.Series(occ)
+        df["occ_ratio_pred"] = pd.Series(occ)
     else:
-        out["occ_ratio_pred"] = pd.NA
+        # colonne absente -> ne rien casser
+        if "occ_ratio_pred" not in df.columns:
+            df["occ_ratio_pred"] = np.nan
 
-    # types clean
-    out["y_nb_obs"]  = pd.to_numeric(out.get("y_nb_obs"),  errors="coerce")
-    out["y_nb_pred"] = pd.to_numeric(out.get("y_nb_pred"), errors="coerce")
+    # Clean obs/pred en numérique si présents
+    for c in ["y_nb_obs", "y_nb_pred"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    return out
+    return df
 
-# ----------------------------------------------------------------------
-# Génération de la page
-# ----------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Rédaction du rapport "History"
+# -----------------------------------------------------------------------------
+def _write_history_md(kpis: dict, fig_occ: str, fig_bikes: str):
+    CONTENT = f"""# Historique & KPI
+
+**Dernier snapshot** : `{
+    "-" if kpis['ts_latest'] is None else _paris(pd.Series([kpis['ts_latest']]).iloc[0]).strftime("%d/%m %H:%M")
+}` (Europe/Paris)
+
+**KPI (instantané)**
+
+- Stations couvertes : **{kpis['stations']}**
+- Vélos disponibles (total) : **{kpis['bikes_total']}**
+- Bornes libres (total) : **{kpis['docks_total']}**
+- Taux moyen d’occupation : **{kpis['occ_mean_pct']} %**
+
+## Tendance d’occupation
+
+![Mean occupancy](assets/figs/{fig_occ})
+
+## Vélos disponibles — total réseau
+
+![Bikes total](assets/figs/{fig_bikes})
+"""
+    HISTORY_MD.write_text(CONTENT, encoding="utf-8")
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
 def main():
-    if not DB.exists():
-        raise SystemExit("warehouse.duckdb introuvable. Lance d’abord l’ingestion.")
+    if not DB_PATH.exists():
+        raise SystemExit("warehouse.duckdb introuvable. Lance d'abord l'ingestion.")
 
-    con = duckdb.connect(str(DB))
+    con = duckdb.connect(str(DB_PATH))
 
-    # 1) données
-    df = _load_predictions(con)
-    names_df = _station_names(con)  # stationcode -> name
+    # 1) KPI snapshot
+    latest = _read_latest_snapshot(con)
+    kpis = _kpis_from_latest(latest)
+    _write_kpi_partial(kpis)
 
-    # fusion noms
-    df["stationcode"] = df["stationcode"].astype(str)
-    df = df.merge(names_df, on="stationcode", how="left")
+    # 2) Time series (hourly)
+    hourly = _read_hourly_timeseries(con)
+    if hourly is None:
+        hourly = pd.DataFrame()
 
-    # 2) fenêtre 24h pour lisibilité
-    cutoff = pd.Timestamp.utcnow().tz_localize("UTC") - pd.Timedelta(hours=24)
-    df = df[df["hour_utc"] >= cutoff].copy()
+    # 3) Plots
+    fig_occ = "occupancy_last72h.png"
+    fig_bikes = "bikes_total_last72h.png"
+    _plot_history(hourly, FIGS / fig_occ)
+    _plot_bikes_total(hourly, FIGS / fig_bikes)
 
-    if df.empty:
-        OUT_MD.write_text("# Prévisions\n\n_Aucune donnée disponible._\n", encoding="utf-8")
-        print(f"[forecast page] OK → {OUT_MD} (vide)")
-        return
+    # 4) (Optionnel) Charger les prédictions si dispo (mais ne rien imposer)
+    try:
+        _ = _load_predictions(con)  # si besoin, on pourrait écrire des visuels ici
+    except Exception as e:
+        print(f"[report] skip predictions: {e}")
 
-    # 3) snapshot dernière heure pour tops
-    last_hour = df["hour_utc"].max()
-    snap = df[df["hour_utc"] == last_hour].copy()
+    # 5) Write markdown (history.md)
+    _write_history_md(kpis, fig_occ, fig_bikes)
 
-    # clean types
-    for c in ["y_nb_pred", "y_nb_obs", "occ_ratio_pred"]:
-        if c in snap.columns:
-            snap[c] = pd.to_numeric(snap[c], errors="coerce")
-    snap["when_local"] = _paris(snap["hour_utc"])
-
-    # Top-10 faible dispo & saturation
-    top_low = snap.sort_values("y_nb_pred", ascending=True).head(10).copy()
-    top_sat = snap.sort_values("occ_ratio_pred", ascending=False).head(10).copy()
-
-    def table_md(d):
-        d2 = d.copy()
-        # libellé station : Nom (code)
-        d2["Station"] = d2.apply(
-            lambda r: f"{(r['name'] if pd.notna(r['name']) and str(r['name']).strip() else '—')} (`{r['stationcode']}`)",
-            axis=1
-        )
-        if "y_nb_pred" in d2:
-            d2["Prédit T+1h (vélos)"] = d2["y_nb_pred"].round(0).astype("Int64")
-        else:
-            d2["Prédit T+1h (vélos)"] = pd.NA
-        if "occ_ratio_pred" in d2:
-            d2["Taux prévu"] = d2["occ_ratio_pred"].map(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "—")
-        else:
-            d2["Taux prévu"] = "—"
-        d2["Dernière obs."] = d2["when_local"]
-        return d2[["Station","Prédit T+1h (vélos)","Taux prévu","Dernière obs."]].to_markdown(index=False)
-
-    # 4) Rédaction Markdown
-    buf = io.StringIO()
-    buf.write("# Prévisions\n\n")
-    buf.write(f"*Dernière heure considérée : **{_paris(pd.Series([last_hour]))[0]}** (Europe/Paris)*\n\n")
-
-    buf.write("## Top-10 stations à risque (faible nb vélos prévu T+1h)\n\n")
-    buf.write(table_md(top_low) + "\n\n")
-
-    buf.write("## Top-10 risque de saturation (taux prévu élevé)\n\n")
-    buf.write(table_md(top_sat) + "\n\n")
-
-    # 5) Graphes repliables (sous-ensemble raisonnable)
-    show_codes = pd.unique(pd.concat([top_low["stationcode"], top_sat["stationcode"]])).tolist()[:10]
-    buf.write("## Détails par station (graphiques)\n\n")
-    for sc in show_codes:
-        sub = df[df["stationcode"] == str(sc)]
-        if sub.empty:
-            continue
-        title = _nice_title(sub.iloc[-1])  # utilise name + code
-        png = FIGS / f"obs_pred_{sc}_T+1h_compact.png"
-        ok = _plot_obs_pred(df, str(sc), f"{title} — Observé vs Prédit", png)
-        if not ok:
-            continue
-        buf.write(f"<details>\n<summary><strong>{title}</strong></summary>\n\n")
-        buf.write(f"![{title}](assets/figs/{png.name})\n\n")
-        buf.write("</details>\n\n")
-
-    OUT_MD.write_text(buf.getvalue(), encoding="utf-8")
-    print(f"[forecast page] OK → {OUT_MD}")
+    print("[report] OK → docs/history.md + docs/assets/figs/")
 
 if __name__ == "__main__":
     main()
