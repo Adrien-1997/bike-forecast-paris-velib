@@ -1,7 +1,7 @@
 name: pipeline-velib
 on:
   schedule:
-    - cron: "*/15 * * * *"   # toutes les 15 min (UTC)
+    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -63,8 +63,6 @@ jobs:
           set -euxo pipefail
           git config user.name  "github-actions"
           git config user.email "actions@users.noreply.github.com"
-
-          # ne versionne pas la DB si listée dans .gitignore
           git add -A
           if git diff --cached --quiet; then
             echo "Nothing to commit."
