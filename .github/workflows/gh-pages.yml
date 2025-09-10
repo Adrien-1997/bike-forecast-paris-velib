@@ -1,34 +1,57 @@
-name: Deploy MkDocs to GitHub Pages
+name: gh-pages
+
 on:
+  # Lancer manuellement
+  workflow_dispatch:
+  # Rebuild à chaque changement sur les sources du site
   push:
-    branches:
-      - main
+    branches: [ main ]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'tools/**'
+      - 'src/**'
+      - 'exports/**'
+      - '.github/workflows/gh-pages.yml'
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install MkDocs
+      - name: Install deps
         run: |
           python -m pip install -U pip
-          pip install mkdocs-material pymdown-extensions
+          pip install -r requirements.txt || true
+          pip install mkdocs-material mkdocs-jupyter matplotlib pyarrow pandas duckdb lightgbm holidays tabulate folium
+
+      - name: Generate pages (map, history, forecast)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python tools/make_map.py
+          python tools/make_report.py
+          python tools/make_forecast_page.py
 
       - name: Build site
         run: mkdocs build --strict
 
-      - name: Publish to GitHub Pages
+      - name: Publish to gh-pages
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
