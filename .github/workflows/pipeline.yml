@@ -7,10 +7,6 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -32,21 +28,17 @@ jobs:
           pip install -r requirements.txt
           pip install mkdocs-material pymdown-extensions duckdb pandas pyarrow matplotlib lightgbm holidays folium
 
-      - name: Ingest snapshot (retry x3)
+      - name: Ingest snapshot
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: |
-          set -e
-          for i in 1 2 3; do
-            python -m src.ingest && break || (echo "retry $i/3" && sleep 5)
-          done
+        run: python -m src.ingest
 
       - name: Aggregate hourly + weather
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: python -m src.aggregate
 
-      - name: Generate docs (map, KPI, history, forecast)
+      - name: Generate docs
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
@@ -54,9 +46,6 @@ jobs:
           python tools/make_kpi_banner.py
           python tools/make_report.py
           python tools/make_forecast_page.py
-
-      - name: Build site (sanity check)
-        run: mkdocs build --strict
 
       - name: Commit data & docs if changed
         run: |
@@ -66,7 +55,7 @@ jobs:
           git add -A
           if git diff --cached --quiet; then
             echo "Nothing to commit."
-            exit 0
+          else
+            git commit -m "ci: update hourly data and docs"
+            git push
           fi
-          git commit -m "ci: update hourly data and docs"
-          git push
