@@ -211,7 +211,14 @@ def main():
 
     # fusion noms
     df["stationcode"] = df["stationcode"].astype(str)
-    df = df.merge(names_df, on="stationcode", how="left")
+    df = df.merge(names_df, on="stationcode", how="left", suffixes=("", "_nm"))
+
+    # coalesce vers une seule colonne d'affichage
+    name_cols = [c for c in df.columns if c.lower().startswith("name")]
+    if name_cols:
+        df["name_display"] = df[name_cols].bfill(axis=1).iloc[:, 0]
+    else:
+        df["name_display"] = np.nan
 
     # 2) fenêtre 24h pour lisibilité
     # APRÈS (robuste)
