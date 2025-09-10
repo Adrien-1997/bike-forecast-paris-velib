@@ -87,34 +87,51 @@ def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
       stationcode (str), hour_utc (UTC), y_nb_pred, y_nb_obs (optionnel), occ_ratio_pred (calculé ici)
     """
     preds_parq = ROOT / "exports" / "velib_predictions.parquet"
+
+    def _dedup_and_coalesce_pred(df: pd.DataFrame) -> pd.DataFrame:
+        # 1) Supprimer colonnes strictement dupliquées (même nom au sens pandas)
+        if df.columns.duplicated().any():
+            # Essaie de coalescer d'abord les doublons de y_nb_pred
+            ycols = [c for c in df.columns if c == "y_nb_pred" or c.startswith("y_nb_pred.")]
+            if len(ycols) > 1:
+                df["y_nb_pred"] = pd.to_numeric(df[ycols].bfill(axis=1).iloc[:, 0], errors="coerce")
+                # drop toutes les autres colonnes y_nb_pred.* sauf la principale
+                keep = [c for c in df.columns if c not in ycols or c == "y_nb_pred"]
+                df = df[keep]
+            # Ensuite, drop tout doublon de nom restant
+            df = df.loc[:, ~df.columns.duplicated()].copy()
+
+        # Si y_nb_pred n'existe toujours pas, crée-la
+        if "y_nb_pred" not in df.columns:
+            df["y_nb_pred"] = np.nan
+
+        # Forcer en numérique (1D)
+        df["y_nb_pred"] = pd.to_numeric(df["y_nb_pred"], errors="coerce")
+        return df
+
     if preds_parq.exists():
         df = pd.read_parquet(preds_parq)
 
         # Harmonisation colonnes éventuelles
-        ren = {
-            "pred_nb_velos": "y_nb_pred",
-            "nb_pred": "y_nb_pred",
-            "nb_velos_hour": "y_nb_obs",
-        }
+        ren = {"pred_nb_velos": "y_nb_pred", "nb_pred": "y_nb_pred", "nb_velos_hour": "y_nb_obs"}
         for a, b in ren.items():
             if a in df.columns and b not in df.columns:
                 df[b] = df[a]
 
-        # Types de base
+        # Types & nettoyage de base
         if "stationcode" in df.columns:
             df["stationcode"] = df["stationcode"].astype(str)
         df["hour_utc"] = pd.to_datetime(df["hour_utc"], utc=True, errors="coerce")
         df = df.dropna(subset=["stationcode", "hour_utc"]).reset_index(drop=True)
 
-        # y_nb_pred sûr -> 1D
-        if "y_nb_pred" not in df.columns:
-            df["y_nb_pred"] = np.nan
-        pred = pd.to_numeric(pd.Series(df["y_nb_pred"]).squeeze(), errors="coerce").to_numpy()
+        # Dédup & coalesce
+        df = _dedup_and_coalesce_pred(df)
 
-        # Capacité (si dispo)
+        # Capacité (si dispo) → calcul positionnel
         cap_col = "capacity_hour" if "capacity_hour" in df.columns else ("capacity" if "capacity" in df.columns else None)
         if cap_col is not None:
-            cap = pd.to_numeric(pd.Series(df[cap_col]).squeeze(), errors="coerce").to_numpy()
+            cap = pd.to_numeric(df[cap_col], errors="coerce").to_numpy()
+            pred = df["y_nb_pred"].to_numpy()
             with np.errstate(divide="ignore", invalid="ignore"):
                 occ = np.where((cap > 0) & np.isfinite(pred), pred / cap, np.nan)
             df["occ_ratio_pred"] = pd.Series(occ)
@@ -133,7 +150,6 @@ def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     if hourly.exists():
         df = pd.read_parquet(hourly)
     else:
-        # fallback DB ~72h
         q = """
         WITH base AS (
           SELECT
@@ -161,15 +177,14 @@ def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     out = df.merge(df_pred, on=["stationcode", "hour_utc"], how="left").reset_index(drop=True)
     out = out.rename(columns={"nb_velos_hour": "y_nb_obs"})
 
-    # y_nb_pred sûr (existe & 1D)
-    if "y_nb_pred" not in out.columns:
-        out["y_nb_pred"] = np.nan
-    pred = pd.to_numeric(pd.Series(out["y_nb_pred"]).squeeze(), errors="coerce").to_numpy()
+    # Dédup & coalesce (au cas où)
+    out = _dedup_and_coalesce_pred(out)
 
     # occ_ratio_pred positionnel
     cap_col = "capacity_hour" if "capacity_hour" in out.columns else ("capacity" if "capacity" in out.columns else None)
     if cap_col is not None:
-        cap = pd.to_numeric(pd.Series(out[cap_col]).squeeze(), errors="coerce").to_numpy()
+        cap = pd.to_numeric(out[cap_col], errors="coerce").to_numpy()
+        pred = out["y_nb_pred"].to_numpy()
         with np.errstate(divide="ignore", invalid="ignore"):
             occ = np.where((cap > 0) & np.isfinite(pred), pred / cap, np.nan)
         out["occ_ratio_pred"] = pd.Series(occ)
