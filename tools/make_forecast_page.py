@@ -18,12 +18,13 @@ TZ = "Europe/Paris"
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
-def _paris(dt):
-    dt = pd.to_datetime(dt, utc=True, errors="coerce")
-    return dt.dt.tz_convert(TZ).dt.strftime("%d/%m %Hh")
+def _paris_fmt(dt) -> pd.Series:
+    """Retourne une Series de str 'dd/mm HHh' en Europe/Paris depuis timestamps UTC."""
+    s = pd.to_datetime(dt, utc=True, errors="coerce")
+    return s.dt.tz_convert(TZ).dt.strftime("%d/%m %Hh")
 
 def _station_names(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
-    """DataFrame stationcode -> name (dernier nom connu)."""
+    """DataFrame stationcode -> name (dernier nom connu, robuste)."""
     q = """
     WITH ranked AS (
       SELECT
@@ -40,14 +41,17 @@ def _station_names(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     GROUP BY 1;
     """
     df = con.execute(q).fetchdf()
+    if df.empty:
+        return pd.DataFrame({"stationcode": [], "name": []})
     df["stationcode"] = df["stationcode"].astype(str)
-    df["name"] = df["name"].astype(str)
-    return df.drop_duplicates(subset=["stationcode"])
+    df["name"] = df["name"].astype("string[python]").str.strip()
+    df = df.drop_duplicates(subset=["stationcode"])
+    return df
 
 def _nice_title(row):
-    name = row.get("name")
+    name = row.get("name_display") or row.get("name")
     sc   = row.get("stationcode")
-    if pd.isna(name) or not str(name).strip():
+    if name is None or not str(name).strip():
         return f"Station {sc}"
     return f"{name} ({sc})"
 
@@ -56,15 +60,16 @@ def _plot_obs_pred(df, stationcode, title, out_png):
     if d.empty:
         return False
     d["hour_utc"] = pd.to_datetime(d["hour_utc"], utc=True, errors="coerce")
-    d = d.sort_values("hour_utc")
+    d = d.dropna(subset=["hour_utc"]).sort_values("hour_utc")
     x = d["hour_utc"].dt.tz_convert(TZ)
 
     plt.figure(figsize=(8.6, 3.6))
+    # Observé
     if "y_nb_obs" in d and d["y_nb_obs"].notna().any():
         plt.plot(x, d["y_nb_obs"], label="observé (nb vélos)")
     elif "nb_velos_hour" in d and d["nb_velos_hour"].notna().any():
         plt.plot(x, d["nb_velos_hour"], label="observé (nb vélos)")
-
+    # Prédit
     if "y_nb_pred" in d and d["y_nb_pred"].notna().any():
         plt.plot(x, d["y_nb_pred"], linestyle="--", label="prédit T+1h")
 
@@ -79,7 +84,7 @@ def _plot_obs_pred(df, stationcode, title, out_png):
     return True
 
 # ----------------------------------------------------------------------
-# Entrée : prédictions (ou baseline si pas de fichier de prédictions)
+# Prédictions (ou baseline si pas de fichier de prédictions)
 # ----------------------------------------------------------------------
 def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """
@@ -89,23 +94,19 @@ def _load_predictions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     preds_parq = ROOT / "exports" / "velib_predictions.parquet"
 
     def _dedup_and_coalesce_pred(df: pd.DataFrame) -> pd.DataFrame:
-        # 1) Supprimer colonnes strictement dupliquées (même nom au sens pandas)
+        # Si colonnes dupliquées (par nom), commence par coalescer y_nb_pred.* si nécessaire
+        ycols = [c for c in df.columns if c == "y_nb_pred" or str(c).startswith("y_nb_pred.")]
+        if len(ycols) > 1:
+            block = df[ycols].apply(pd.to_numeric, errors="coerce")
+            df["y_nb_pred"] = block.bfill(axis=1).iloc[:, 0]
+            keep = [c for c in df.columns if (c not in ycols) or (c == "y_nb_pred")]
+            df = df[keep]
+        # Drop tout doublon résiduel
         if df.columns.duplicated().any():
-            # Essaie de coalescer d'abord les doublons de y_nb_pred
-            ycols = [c for c in df.columns if c == "y_nb_pred" or c.startswith("y_nb_pred.")]
-            if len(ycols) > 1:
-                df["y_nb_pred"] = pd.to_numeric(df[ycols].bfill(axis=1).iloc[:, 0], errors="coerce")
-                # drop toutes les autres colonnes y_nb_pred.* sauf la principale
-                keep = [c for c in df.columns if c not in ycols or c == "y_nb_pred"]
-                df = df[keep]
-            # Ensuite, drop tout doublon de nom restant
             df = df.loc[:, ~df.columns.duplicated()].copy()
-
-        # Si y_nb_pred n'existe toujours pas, crée-la
+        # Garantir existence + numeric 1D
         if "y_nb_pred" not in df.columns:
             df["y_nb_pred"] = np.nan
-
-        # Forcer en numérique (1D)
         df["y_nb_pred"] = pd.to_numeric(df["y_nb_pred"], errors="coerce")
         return df
 
@@ -207,75 +208,93 @@ def main():
 
     # 1) données
     df = _load_predictions(con)
+    if df is None or df.empty:
+        OUT_MD.write_text("# Prévisions\n\n_Aucune donnée disponible._\n", encoding="utf-8")
+        print(f"[forecast page] OK → {OUT_MD} (vide)")
+        return
+
     names_df = _station_names(con)  # stationcode -> name
 
     # fusion noms
     df["stationcode"] = df["stationcode"].astype(str)
     df = df.merge(names_df, on="stationcode", how="left", suffixes=("", "_nm"))
 
-    # coalesce vers une seule colonne d'affichage
-    name_cols = [c for c in df.columns if c.lower().startswith("name")]
+    # coalesce vers une seule colonne d'affichage, sans FutureWarning
+    name_cols = [c for c in df.columns if str(c).lower().startswith("name")]
     if name_cols:
-        df["name_display"] = df[name_cols].bfill(axis=1).iloc[:, 0]
+        name_block = df[name_cols].astype("string[python]").bfill(axis=1)
+        df["name_display"] = name_block.iloc[:, 0].astype(str).str.strip()
     else:
-        df["name_display"] = np.nan
+        df["name_display"] = "—"
 
     # 2) fenêtre 24h pour lisibilité
-    # APRÈS (robuste)
     utc_now = pd.Timestamp.now(tz="UTC")
     cutoff = utc_now - pd.Timedelta(hours=24)
     df = df[df["hour_utc"] >= cutoff].copy()
 
     if df.empty:
-        OUT_MD.write_text("# Prévisions\n\n_Aucune donnée disponible._\n", encoding="utf-8")
+        OUT_MD.write_text("# Prévisions\n\n_Aucune donnée disponible sur 24h._\n", encoding="utf-8")
         print(f"[forecast page] OK → {OUT_MD} (vide)")
         return
 
     # 3) snapshot dernière heure pour tops
-    last_hour = df["hour_utc"].max()
+    last_hour = pd.to_datetime(df["hour_utc"], utc=True, errors="coerce").max()
     snap = df[df["hour_utc"] == last_hour].copy()
 
     # clean types
     for c in ["y_nb_pred", "y_nb_obs", "occ_ratio_pred"]:
         if c in snap.columns:
             snap[c] = pd.to_numeric(snap[c], errors="coerce")
-    snap["when_local"] = _paris(snap["hour_utc"])
+    snap["when_local"] = _paris_fmt(snap["hour_utc"])
 
     # Top-10 faible dispo & saturation
-    top_low = snap.sort_values("y_nb_pred", ascending=True).head(10).copy()
-    top_sat = snap.sort_values("occ_ratio_pred", ascending=False).head(10).copy()
+    top_low = snap.sort_values("y_nb_pred", ascending=True, na_position="last").head(10).copy()
+    top_sat = snap.sort_values("occ_ratio_pred", ascending=False, na_position="last").head(10).copy()
 
+    # -------- tables Markdown (safe pour tabulate) ----------
     def table_md(d):
         d2 = d.copy()
         # garantir name_display même si d est un sous-ensemble
         if "name_display" not in d2.columns:
             name_cols = [c for c in d2.columns if str(c).lower().startswith("name")]
             if name_cols:
-                d2["name_display"] = d2[name_cols].bfill(axis=1).iloc[:, 0]
+                name_block = d2[name_cols].astype("string[python]").bfill(axis=1)
+                d2["name_display"] = name_block.iloc[:, 0].astype(str).str.strip()
             else:
-                d2["name_display"] = np.nan
+                d2["name_display"] = "—"
 
+        # libellé Station
         def _label(r):
             nm = r.get("name_display")
             txt = str(nm).strip() if (nm is not None and pd.notna(nm)) else "—"
             return f"{txt} (`{r['stationcode']}`)"
 
         d2["Station"] = d2.apply(_label, axis=1)
-        d2["Prédit T+1h (vélos)"] = (
-            d2["y_nb_pred"].round(0).astype("Int64") if "y_nb_pred" in d2 else pd.NA
-        )
-        d2["Taux prévu"] = (
-            d2["occ_ratio_pred"].map(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "—")
-            if "occ_ratio_pred" in d2
-            else "—"
-        )
-        d2["Dernière obs."] = d2["when_local"]
-        return d2[["Station", "Prédit T+1h (vélos)", "Taux prévu", "Dernière obs."]].to_markdown(index=False)
+
+        # colonnes affichées
+        if "y_nb_pred" in d2.columns:
+            d2["Prédit T+1h (vélos)"] = pd.to_numeric(d2["y_nb_pred"], errors="coerce").round(0).astype("Int64")
+        else:
+            d2["Prédit T+1h (vélos)"] = pd.Series([pd.NA] * len(d2), dtype="Int64")
+
+        if "occ_ratio_pred" in d2.columns:
+            d2["Taux prévu"] = d2["occ_ratio_pred"].map(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "—")
+        else:
+            d2["Taux prévu"] = "—"
+
+        d2["Dernière obs."] = d2["when_local"] if "when_local" in d2.columns else "—"
+
+        # Eviter pd.NA dans to_markdown/tabulate -> tout convertir en string propre
+        view = d2[["Station", "Prédit T+1h (vélos)", "Taux prévu", "Dernière obs."]].copy()
+        for c in view.columns:
+            view[c] = view[c].astype("string[python]").fillna("—")
+
+        return view.to_markdown(index=False)
 
     # 4) Rédaction Markdown
     buf = io.StringIO()
     buf.write("# Prévisions\n\n")
-    buf.write(f"*Dernière heure considérée : **{_paris(pd.Series([last_hour]))[0]}** (Europe/Paris)*\n\n")
+    buf.write(f"*Dernière heure considérée : **{_paris_fmt(pd.Series([last_hour]))[0]}** (Europe/Paris)*\n\n")
 
     buf.write("## Top-10 stations à risque (faible nb vélos prévu T+1h)\n\n")
     buf.write(table_md(top_low) + "\n\n")
@@ -290,7 +309,9 @@ def main():
         sub = df[df["stationcode"] == str(sc)]
         if sub.empty:
             continue
-        title = _nice_title(sub.iloc[-1])  # utilise name + code
+        # Prend la dernière ligne connue pour le titre (avec name_display)
+        last_row = sub.iloc[-1]
+        title = _nice_title(last_row)
         png = FIGS / f"obs_pred_{sc}_T+1h_compact.png"
         ok = _plot_obs_pred(df, str(sc), f"{title} — Observé vs Prédit", png)
         if not ok:
