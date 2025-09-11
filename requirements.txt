@@ -21,6 +21,11 @@ mkdocs-jupyter
 # App
 streamlit>=1.36
 streamlit-folium>=0.17
+streamlit-js-eval
 
 # Images
 Pillow>=10.0
+
+#Docs
+mkdocsmkdocs-material
+mkdocs-jupyter
