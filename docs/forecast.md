@@ -1,76 +1,76 @@
 # Prévisions
 
-*Dernière heure considérée : **11/09 19h** (Europe/Paris)*
+*Dernière heure considérée : **11/09 20h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
-| Station                                          |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:-------------------------------------------------|----------------------:|:-------------|:----------------|
-| Faubourg Poissonnière - Dunkerque (`9114`)       |                     0 | 0.0%         | 11/09 19h       |
-| Charles Robin - Grange aux Belles (`10207`)      |                     0 | 0.0%         | 11/09 19h       |
-| Estienne d'Orves - Henri Ginoux (`21204`)        |                     0 | 0.0%         | 11/09 19h       |
-| Crevaux - Bugeaud (`16105`)                      |                     0 | 0.0%         | 11/09 19h       |
-| Commandant Schloesing - Pétrarque (`16202`)      |                     0 | 0.0%         | 11/09 19h       |
-| Charles de Gaulle (`22019`)                      |                     0 | 0.0%         | 11/09 19h       |
-| Vivienne - Petits Champs (`2201`)                |                     0 | 0.0%         | 11/09 19h       |
-| Jean Oestreicher - Porte de Champerret (`17032`) |                     0 | 0.0%         | 11/09 19h       |
-| Place de la Division Leclerc (`22603`)           |                     0 | 0.0%         | 11/09 19h       |
-| Place du 8 Mai 1945 (`25008`)                    |                     0 | 0.0%         | 11/09 19h       |
+| Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:--------------------------------------------|----------------------:|:-------------|:----------------|
+| Vivienne - Petits Champs (`2201`)           |                     0 | 0.0%         | 11/09 20h       |
+| Place de la Division Leclerc (`22603`)      |                     0 | 0.0%         | 11/09 20h       |
+| Marcelle - Thalie (`35020`)                 |                     0 | 0.0%         | 11/09 20h       |
+| Parc André Citroën (`15059`)                |                     0 | 0.0%         | 11/09 20h       |
+| Sully - Morland (`4201`)                    |                     0 | 0.0%         | 11/09 20h       |
+| Gare de Sèvres - Ville d'Avray (`23107`)    |                     0 | 0.0%         | 11/09 20h       |
+| Charles Robin - Grange aux Belles (`10207`) |                     0 | 0.0%         | 11/09 20h       |
+| Maréchal Joffre - Verdun (`41205`)          |                     0 | 0.0%         | 11/09 20h       |
+| Belles Feuilles - Place de Mexico (`16010`) |                     0 | 0.0%         | 11/09 20h       |
+| Ranelagh - Mozart (`16026`)                 |                     0 | 0.0%         | 11/09 20h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
 | Station                                            |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:---------------------------------------------------|----------------------:|:-------------|:----------------|
-| BNF - Bibliothèque Nationale de France (`13123`)   |                    54 | 128.6%       | 11/09 19h       |
-| Enfants du Paradis - Peupliers (`21021`)           |                    42 | 105.0%       | 11/09 19h       |
-| Château - Bineau (`22001`)                         |                    23 | 100.0%       | 11/09 19h       |
-| Jean Bouin - Gouverneur Général Eboué (`21327`)    |                    30 | 96.8%        | 11/09 19h       |
-| Lucien Lanternier - Le Luth (`22303`)              |                    26 | 96.3%        | 11/09 19h       |
-| Lavandieres Sainte Opportune - Rivoli (`1120`)     |                    26 | 96.3%        | 11/09 19h       |
-| Aristide Briand - Place de la Résistance (`21302`) |                    24 | 96.0%        | 11/09 19h       |
-| Boutroux - Porte de Vitry (`13047`)                |                    47 | 95.9%        | 11/09 19h       |
-| Kléber - Gouverneur Général Eboué (`21310`)        |                    23 | 95.8%        | 11/09 19h       |
-| Payenne - Square George Caïn (`3201`)              |                    23 | 95.8%        | 11/09 19h       |
+| BNF - Bibliothèque Nationale de France (`13123`)   |                    53 | 126.2%       | 11/09 20h       |
+| Aristide Briand - Place de la Résistance (`21302`) |                    26 | 104.0%       | 11/09 20h       |
+| Temple - Jean-Pierre Timbaud (`11040`)             |                    36 | 100.0%       | 11/09 20h       |
+| Pont de Lodi - Dauphine (`6014`)                   |                    23 | 100.0%       | 11/09 20h       |
+| Lucien Lanternier - Le Luth (`22303`)              |                    27 | 100.0%       | 11/09 20h       |
+| André Mazet - Saint-André des Arts (`6015`)        |                    54 | 98.2%        | 11/09 20h       |
+| Turbigo - Réaumur (`3011`)                         |                    30 | 96.8%        | 11/09 20h       |
+| Saint-Bon - Rivoli (`4018`)                        |                    30 | 96.8%        | 11/09 20h       |
+| Balzac - Champs Elysées (`8052`)                   |                    29 | 96.7%        | 11/09 20h       |
+| Jacques Callot - Mazarine (`6013`)                 |                    27 | 96.4%        | 11/09 20h       |
 
 ## Détails par station (graphiques)
-
-???+ info "Faubourg Poissonnière - Dunkerque (9114)"
-
-    ![Faubourg Poissonnière - Dunkerque (9114)](assets/figs/obs_pred_9114_T+1h_compact.png)
-
-???+ info "Charles Robin - Grange aux Belles (10207)"
-
-    ![Charles Robin - Grange aux Belles (10207)](assets/figs/obs_pred_10207_T+1h_compact.png)
-
-???+ info "Estienne d'Orves - Henri Ginoux (21204)"
-
-    ![Estienne d'Orves - Henri Ginoux (21204)](assets/figs/obs_pred_21204_T+1h_compact.png)
-
-???+ info "Crevaux - Bugeaud (16105)"
-
-    ![Crevaux - Bugeaud (16105)](assets/figs/obs_pred_16105_T+1h_compact.png)
-
-???+ info "Commandant Schloesing - Pétrarque (16202)"
-
-    ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
-
-???+ info "Charles de Gaulle (22019)"
-
-    ![Charles de Gaulle (22019)](assets/figs/obs_pred_22019_T+1h_compact.png)
 
 ???+ info "Vivienne - Petits Champs (2201)"
 
     ![Vivienne - Petits Champs (2201)](assets/figs/obs_pred_2201_T+1h_compact.png)
 
-???+ info "Jean Oestreicher - Porte de Champerret (17032)"
-
-    ![Jean Oestreicher - Porte de Champerret (17032)](assets/figs/obs_pred_17032_T+1h_compact.png)
-
 ???+ info "Place de la Division Leclerc (22603)"
 
     ![Place de la Division Leclerc (22603)](assets/figs/obs_pred_22603_T+1h_compact.png)
 
-???+ info "Place du 8 Mai 1945 (25008)"
+???+ info "Marcelle - Thalie (35020)"
 
-    ![Place du 8 Mai 1945 (25008)](assets/figs/obs_pred_25008_T+1h_compact.png)
+    ![Marcelle - Thalie (35020)](assets/figs/obs_pred_35020_T+1h_compact.png)
+
+???+ info "Parc André Citroën (15059)"
+
+    ![Parc André Citroën (15059)](assets/figs/obs_pred_15059_T+1h_compact.png)
+
+???+ info "Sully - Morland (4201)"
+
+    ![Sully - Morland (4201)](assets/figs/obs_pred_4201_T+1h_compact.png)
+
+???+ info "Gare de Sèvres - Ville d'Avray (23107)"
+
+    ![Gare de Sèvres - Ville d'Avray (23107)](assets/figs/obs_pred_23107_T+1h_compact.png)
+
+???+ info "Charles Robin - Grange aux Belles (10207)"
+
+    ![Charles Robin - Grange aux Belles (10207)](assets/figs/obs_pred_10207_T+1h_compact.png)
+
+???+ info "Maréchal Joffre - Verdun (41205)"
+
+    ![Maréchal Joffre - Verdun (41205)](assets/figs/obs_pred_41205_T+1h_compact.png)
+
+???+ info "Belles Feuilles - Place de Mexico (16010)"
+
+    ![Belles Feuilles - Place de Mexico (16010)](assets/figs/obs_pred_16010_T+1h_compact.png)
+
+???+ info "Ranelagh - Mozart (16026)"
+
+    ![Ranelagh - Mozart (16026)](assets/figs/obs_pred_16026_T+1h_compact.png)
 
