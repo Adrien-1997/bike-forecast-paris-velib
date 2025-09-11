@@ -1,36 +1,36 @@
 # Prévisions
 
-*Dernière heure considérée : **11/09 15h** (Europe/Paris)*
+*Dernière heure considérée : **11/09 16h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
-| Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:--------------------------------------------|----------------------:|:-------------|:----------------|
-| Nanterre - Université (`92004`)             |                     0 | 0.0%         | 11/09 15h       |
-| Marché Saint-Quentin (`10021`)              |                     0 | 0.0%         | 11/09 15h       |
-| Square Denise Buisson (`31005`)             |                     0 | 0.0%         | 11/09 15h       |
-| Jean Jaurès - Gare de Clamart (`21404`)     |                     0 | 0.0%         | 11/09 15h       |
-| Porte des Lilas - Faidherbe (`32601`)       |                     0 | 0.0%         | 11/09 15h       |
-| Gaston Roussel - Commune de Paris (`32308`) |                     0 | 0.0%         | 11/09 15h       |
-| Barbès - Monique Maunoury (`42026`)         |                     0 | 0.0%         | 11/09 15h       |
-| Sully - Morland (`4201`)                    |                     0 | 0.0%         | 11/09 15h       |
-| Pyrénées - Dagorno (`20011`)                |                     0 | 0.0%         | 11/09 15h       |
-| Sorbier - Gasnier-Guy (`20010`)             |                     0 | 0.0%         | 11/09 15h       |
+| Station                                         |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:------------------------------------------------|----------------------:|:-------------|:----------------|
+| Nanterre - Université (`92004`)                 |                     0 | 0.0%         | 11/09 16h       |
+| Pierre et Marie Curie - Julien Grimau (`31702`) |                     0 | 0.0%         | 11/09 16h       |
+| Champs-Elysees - Bassano (`8116`)               |                     0 | 0.0%         | 11/09 16h       |
+| Charles Robin - Grange aux Belles (`10207`)     |                     0 | 0.0%         | 11/09 16h       |
+| Londres - Europe (`8202`)                       |                     0 | 0.0%         | 11/09 16h       |
+| Choisy - Pointe d'Ivry (`13205`)                |                     0 | 0.0%         | 11/09 16h       |
+| Manin - Secrétan (`19114`)                      |                     0 | 0.0%         | 11/09 16h       |
+| Hautpoul - Jean Jaurès (`19016`)                |                     0 | 0.0%         | 11/09 16h       |
+| Sibelle - Alésia (`14012`)                      |                     0 | 0.0%         | 11/09 16h       |
+| Poissonniers - Nord (`18137`)                   |                     0 | 0.0%         | 11/09 16h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
 | Station                                          |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:-------------------------------------------------|----------------------:|:-------------|:----------------|
-| Enfants du Paradis - Peupliers (`21021`)         |                    69 | 172.5%       | 11/09 15h       |
-| Tremblay - Lac des Minimes (`12127`)             |                    65 | 135.4%       | 11/09 15h       |
-| BNF - Bibliothèque Nationale de France (`13123`) |                    56 | 133.3%       | 11/09 15h       |
-| Place Balard (`15056`)                           |                    29 | 131.8%       | 11/09 15h       |
-| Madeleine Vionnet (`33019`)                      |                    44 | 129.4%       | 11/09 15h       |
-| Bercy - Villot (`12105`)                         |                    41 | 124.2%       | 11/09 15h       |
-| Saint-Antoine Sévigné (`4010`)                   |                    32 | 123.1%       | 11/09 15h       |
-| Malesherbes - Place de la Madeleine (`8004`)     |                    78 | 116.4%       | 11/09 15h       |
-| Place du Moulin de Javel (`15058`)               |                    52 | 115.6%       | 11/09 15h       |
-| Square Pierre Lazareff (`2004`)                  |                    16 | 100.0%       | 11/09 15h       |
+| Enfants du Paradis - Peupliers (`21021`)         |                    71 | 177.5%       | 11/09 16h       |
+| Tremblay - Lac des Minimes (`12127`)             |                    67 | 139.6%       | 11/09 16h       |
+| BNF - Bibliothèque Nationale de France (`13123`) |                    58 | 138.1%       | 11/09 16h       |
+| Place Balard (`15056`)                           |                    28 | 127.3%       | 11/09 16h       |
+| Bercy - Villot (`12105`)                         |                    40 | 121.2%       | 11/09 16h       |
+| Madeleine Vionnet (`33019`)                      |                    41 | 120.6%       | 11/09 16h       |
+| Place du Moulin de Javel (`15058`)               |                    52 | 115.6%       | 11/09 16h       |
+| Saint-Antoine Sévigné (`4010`)                   |                    30 | 115.4%       | 11/09 16h       |
+| Malesherbes - Place de la Madeleine (`8004`)     |                    75 | 111.9%       | 11/09 16h       |
+| Caumartin - Provence (`9104`)                    |                    22 | 100.0%       | 11/09 16h       |
 
 ## Détails par station (graphiques)
 
@@ -38,39 +38,39 @@
 
     ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
 
-???+ info "Marché Saint-Quentin (10021)"
+???+ info "Pierre et Marie Curie - Julien Grimau (31702)"
 
-    ![Marché Saint-Quentin (10021)](assets/figs/obs_pred_10021_T+1h_compact.png)
+    ![Pierre et Marie Curie - Julien Grimau (31702)](assets/figs/obs_pred_31702_T+1h_compact.png)
 
-???+ info "Square Denise Buisson (31005)"
+???+ info "Champs-Elysees - Bassano (8116)"
 
-    ![Square Denise Buisson (31005)](assets/figs/obs_pred_31005_T+1h_compact.png)
+    ![Champs-Elysees - Bassano (8116)](assets/figs/obs_pred_8116_T+1h_compact.png)
 
-???+ info "Jean Jaurès - Gare de Clamart (21404)"
+???+ info "Charles Robin - Grange aux Belles (10207)"
 
-    ![Jean Jaurès - Gare de Clamart (21404)](assets/figs/obs_pred_21404_T+1h_compact.png)
+    ![Charles Robin - Grange aux Belles (10207)](assets/figs/obs_pred_10207_T+1h_compact.png)
 
-???+ info "Porte des Lilas - Faidherbe (32601)"
+???+ info "Londres - Europe (8202)"
 
-    ![Porte des Lilas - Faidherbe (32601)](assets/figs/obs_pred_32601_T+1h_compact.png)
+    ![Londres - Europe (8202)](assets/figs/obs_pred_8202_T+1h_compact.png)
 
-???+ info "Gaston Roussel - Commune de Paris (32308)"
+???+ info "Choisy - Pointe d'Ivry (13205)"
 
-    ![Gaston Roussel - Commune de Paris (32308)](assets/figs/obs_pred_32308_T+1h_compact.png)
+    ![Choisy - Pointe d'Ivry (13205)](assets/figs/obs_pred_13205_T+1h_compact.png)
 
-???+ info "Barbès - Monique Maunoury (42026)"
+???+ info "Manin - Secrétan (19114)"
 
-    ![Barbès - Monique Maunoury (42026)](assets/figs/obs_pred_42026_T+1h_compact.png)
+    ![Manin - Secrétan (19114)](assets/figs/obs_pred_19114_T+1h_compact.png)
 
-???+ info "Sully - Morland (4201)"
+???+ info "Hautpoul - Jean Jaurès (19016)"
 
-    ![Sully - Morland (4201)](assets/figs/obs_pred_4201_T+1h_compact.png)
+    ![Hautpoul - Jean Jaurès (19016)](assets/figs/obs_pred_19016_T+1h_compact.png)
 
-???+ info "Pyrénées - Dagorno (20011)"
+???+ info "Sibelle - Alésia (14012)"
 
-    ![Pyrénées - Dagorno (20011)](assets/figs/obs_pred_20011_T+1h_compact.png)
+    ![Sibelle - Alésia (14012)](assets/figs/obs_pred_14012_T+1h_compact.png)
 
-???+ info "Sorbier - Gasnier-Guy (20010)"
+???+ info "Poissonniers - Nord (18137)"
 
-    ![Sorbier - Gasnier-Guy (20010)](assets/figs/obs_pred_20010_T+1h_compact.png)
+    ![Poissonniers - Nord (18137)](assets/figs/obs_pred_18137_T+1h_compact.png)
 
