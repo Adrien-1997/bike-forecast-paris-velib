@@ -1,76 +1,76 @@
 # Prévisions
 
-*Dernière heure considérée : **11/09 01h** (Europe/Paris)*
+*Dernière heure considérée : **11/09 04h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
-| Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:--------------------------------------------|----------------------:|:-------------|:----------------|
-| Charles de Gaulle (`22019`)                 |                     0 | 0.0%         | 11/09 01h       |
-| Gare de Sèvres - Ville d'Avray (`23107`)    |                     0 | 0.0%         | 11/09 01h       |
-| Henri Barbusse (`31203`)                    |                     0 | 0.0%         | 11/09 01h       |
-| Vivienne - Petits Champs (`2201`)           |                     0 | 0.0%         | 11/09 01h       |
-| De Gaulle - Moulin (`28002`)                |                     0 | 0.0%         | 11/09 01h       |
-| Place Aimé Césaire (`21402`)                |                     0 | 0.0%         | 11/09 01h       |
-| Charles Robin - Grange aux Belles (`10207`) |                     0 | 0.0%         | 11/09 01h       |
-| Gaston Roussel - Commune de Paris (`32308`) |                     0 | 0.0%         | 11/09 01h       |
-| Gambetta - Père Lachaise (`20024`)          |                     0 | 0.0%         | 11/09 01h       |
-| Danielle Casanova - Opéra (`2020`)          |                     0 | 0.0%         | 11/09 01h       |
+| Station                                           | Prédit T+1h (vélos)   | Taux prévu   | Dernière obs.   |
+|:--------------------------------------------------|:----------------------|:-------------|:----------------|
+| Hauteville - Bonne Nouvelle (`10003`)             | —                     | —            | 11/09 04h       |
+| Metz - Faubourg Saint-Denis (`10004`)             | —                     | —            | 11/09 04h       |
+| Petites Ecuries - Faubourg Poissonnière (`10005`) | —                     | —            | 11/09 04h       |
+| Petites Ecuries - Faubourg Saint-Denis (`10006`)  | —                     | —            | 11/09 04h       |
+| Cité Riverin - Château d'Eau (`10008`)            | —                     | —            | 11/09 04h       |
+| Mairie du 10ème (`10009`)                         | —                     | —            | 11/09 04h       |
+| Quai de l'Horloge - Pont Neuf (`1001`)            | —                     | —            | 11/09 04h       |
+| Place Jacques Bonsergent (`10010`)                | —                     | —            | 11/09 04h       |
+| Bourse du Travail (`10011`)                       | —                     | —            | 11/09 04h       |
+| Vinaigriers - Magenta (`10012`)                   | —                     | —            | 11/09 04h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
-| Station                                         |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:------------------------------------------------|----------------------:|:-------------|:----------------|
-| Westermeyer - Paul Vaillant-Couturier (`42004`) |                    26 | 104.0%       | 11/09 01h       |
-| Pierre Joseph Desault (`13120`)                 |                    19 | 100.0%       | 11/09 01h       |
-| Belfort - Victor Hugo (`21119`)                 |                    24 | 100.0%       | 11/09 01h       |
-| Cadix - Hameau (`15128`)                        |                    37 | 100.0%       | 11/09 01h       |
-| Général Leclerc - République (`22701`)          |                    30 | 100.0%       | 11/09 01h       |
-| Jules Guesdes - Carnot (`32020`)                |                    16 | 100.0%       | 11/09 01h       |
-| Daumesnil - Picpus (`12010`)                    |                    21 | 100.0%       | 11/09 01h       |
-| Faidherbe - Dahomey (`11107`)                   |                    44 | 100.0%       | 11/09 01h       |
-| Amelot - Saint-Sébastien (`11047`)              |                    30 | 100.0%       | 11/09 01h       |
-| Place du 17 Octobre (`22306`)                   |                    20 | 100.0%       | 11/09 01h       |
+| Station                                           | Prédit T+1h (vélos)   | Taux prévu   | Dernière obs.   |
+|:--------------------------------------------------|:----------------------|:-------------|:----------------|
+| Hauteville - Bonne Nouvelle (`10003`)             | —                     | —            | 11/09 04h       |
+| Metz - Faubourg Saint-Denis (`10004`)             | —                     | —            | 11/09 04h       |
+| Petites Ecuries - Faubourg Poissonnière (`10005`) | —                     | —            | 11/09 04h       |
+| Petites Ecuries - Faubourg Saint-Denis (`10006`)  | —                     | —            | 11/09 04h       |
+| Cité Riverin - Château d'Eau (`10008`)            | —                     | —            | 11/09 04h       |
+| Mairie du 10ème (`10009`)                         | —                     | —            | 11/09 04h       |
+| Quai de l'Horloge - Pont Neuf (`1001`)            | —                     | —            | 11/09 04h       |
+| Place Jacques Bonsergent (`10010`)                | —                     | —            | 11/09 04h       |
+| Bourse du Travail (`10011`)                       | —                     | —            | 11/09 04h       |
+| Vinaigriers - Magenta (`10012`)                   | —                     | —            | 11/09 04h       |
 
 ## Détails par station (graphiques)
 
-???+ info "Charles de Gaulle (22019)"
+???+ info "Hauteville - Bonne Nouvelle (10003)"
 
-    ![Charles de Gaulle (22019)](assets/figs/obs_pred_22019_T+1h_compact.png)
+    ![Hauteville - Bonne Nouvelle (10003)](assets/figs/obs_pred_10003_T+1h_compact.png)
 
-???+ info "Gare de Sèvres - Ville d'Avray (23107)"
+???+ info "Metz - Faubourg Saint-Denis (10004)"
 
-    ![Gare de Sèvres - Ville d'Avray (23107)](assets/figs/obs_pred_23107_T+1h_compact.png)
+    ![Metz - Faubourg Saint-Denis (10004)](assets/figs/obs_pred_10004_T+1h_compact.png)
 
-???+ info "Henri Barbusse (31203)"
+???+ info "Petites Ecuries - Faubourg Poissonnière (10005)"
 
-    ![Henri Barbusse (31203)](assets/figs/obs_pred_31203_T+1h_compact.png)
+    ![Petites Ecuries - Faubourg Poissonnière (10005)](assets/figs/obs_pred_10005_T+1h_compact.png)
 
-???+ info "Vivienne - Petits Champs (2201)"
+???+ info "Petites Ecuries - Faubourg Saint-Denis (10006)"
 
-    ![Vivienne - Petits Champs (2201)](assets/figs/obs_pred_2201_T+1h_compact.png)
+    ![Petites Ecuries - Faubourg Saint-Denis (10006)](assets/figs/obs_pred_10006_T+1h_compact.png)
 
-???+ info "De Gaulle - Moulin (28002)"
+???+ info "Cité Riverin - Château d'Eau (10008)"
 
-    ![De Gaulle - Moulin (28002)](assets/figs/obs_pred_28002_T+1h_compact.png)
+    ![Cité Riverin - Château d'Eau (10008)](assets/figs/obs_pred_10008_T+1h_compact.png)
 
-???+ info "Place Aimé Césaire (21402)"
+???+ info "Mairie du 10ème (10009)"
 
-    ![Place Aimé Césaire (21402)](assets/figs/obs_pred_21402_T+1h_compact.png)
+    ![Mairie du 10ème (10009)](assets/figs/obs_pred_10009_T+1h_compact.png)
 
-???+ info "Charles Robin - Grange aux Belles (10207)"
+???+ info "Quai de l'Horloge - Pont Neuf (1001)"
 
-    ![Charles Robin - Grange aux Belles (10207)](assets/figs/obs_pred_10207_T+1h_compact.png)
+    ![Quai de l'Horloge - Pont Neuf (1001)](assets/figs/obs_pred_1001_T+1h_compact.png)
 
-???+ info "Gaston Roussel - Commune de Paris (32308)"
+???+ info "Place Jacques Bonsergent (10010)"
 
-    ![Gaston Roussel - Commune de Paris (32308)](assets/figs/obs_pred_32308_T+1h_compact.png)
+    ![Place Jacques Bonsergent (10010)](assets/figs/obs_pred_10010_T+1h_compact.png)
 
-???+ info "Gambetta - Père Lachaise (20024)"
+???+ info "Bourse du Travail (10011)"
 
-    ![Gambetta - Père Lachaise (20024)](assets/figs/obs_pred_20024_T+1h_compact.png)
+    ![Bourse du Travail (10011)](assets/figs/obs_pred_10011_T+1h_compact.png)
 
-???+ info "Danielle Casanova - Opéra (2020)"
+???+ info "Vinaigriers - Magenta (10012)"
 
-    ![Danielle Casanova - Opéra (2020)](assets/figs/obs_pred_2020_T+1h_compact.png)
+    ![Vinaigriers - Magenta (10012)](assets/figs/obs_pred_10012_T+1h_compact.png)
 
