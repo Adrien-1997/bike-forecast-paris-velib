@@ -1,13 +1,13 @@
 # Historique & KPI
 
-**Dernier snapshot** : `11/09 11:15` (Europe/Paris)
+**Dernier snapshot** : `11/09 11:33` (Europe/Paris)
 
 **KPI (instantané)**
 
 - Stations couvertes : **1469**
-- Vélos disponibles (total) : **18321**
-- Bornes libres (total) : **27506**
-- Taux moyen d’occupation : **38.1 %**
+- Vélos disponibles (total) : **18294**
+- Bornes libres (total) : **27536**
+- Taux moyen d’occupation : **38.0 %**
 
 ## Tendance d’occupation
 
