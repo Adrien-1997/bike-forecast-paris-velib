@@ -1,76 +1,76 @@
 # Prévisions
 
-*Dernière heure considérée : **11/09 09h** (Europe/Paris)*
+*Dernière heure considérée : **11/09 10h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
 | Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:--------------------------------------------|----------------------:|:-------------|:----------------|
-| Nanterre - Université (`92004`)             |                     0 | 0.0%         | 11/09 09h       |
-| Place des Fêtes - Solitaires (`19210`)      |                     0 | 0.0%         | 11/09 09h       |
-| Sorbier - Gasnier-Guy (`20010`)             |                     0 | 0.0%         | 11/09 09h       |
-| Sully - Morland (`4201`)                    |                     0 | 0.0%         | 11/09 09h       |
-| Mairie du 20ème (`20106`)                   |                     0 | 0.0%         | 11/09 09h       |
-| La Jarry - Place Diderot (`43010`)          |                     0 | 0.0%         | 11/09 09h       |
-| Boyer - Ménilmontant (`20121`)              |                     0 | 0.0%         | 11/09 09h       |
-| Piat - Parc de Belleville (`20113`)         |                     0 | 0.0%         | 11/09 09h       |
-| Commandant Schloesing - Pétrarque (`16202`) |                     0 | 0.0%         | 11/09 09h       |
-| Place de Passy (`16043`)                    |                     0 | 0.0%         | 11/09 09h       |
+| Douai - Bruxelles (`9038`)                  |                     0 | 0.0%         | 11/09 10h       |
+| Nanterre - Université (`92004`)             |                     0 | 0.0%         | 11/09 10h       |
+| Récollets - Square Villemin (`10016`)       |                     0 | 0.0%         | 11/09 10h       |
+| Charles Robin - Grange aux Belles (`10207`) |                     0 | 0.0%         | 11/09 10h       |
+| Champs-Elysees - Bassano (`8116`)           |                     0 | 0.0%         | 11/09 10h       |
+| Place du 14 Juillet (`22408`)               |                     0 | 0.0%         | 11/09 10h       |
+| Commandant Schloesing - Pétrarque (`16202`) |                     0 | 0.0%         | 11/09 10h       |
+| Jacques Kellner - Saint-Ouen (`17003`)      |                     0 | 0.0%         | 11/09 10h       |
+| Legendre - Clichy (`17004`)                 |                     0 | 0.0%         | 11/09 10h       |
+| Charles de Gaulle (`22019`)                 |                     0 | 0.0%         | 11/09 10h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
-| Station                                    |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:-------------------------------------------|----------------------:|:-------------|:----------------|
-| Place Balard (`15056`)                     |                    26 | 118.2%       | 11/09 09h       |
-| Bercy - Villot (`12105`)                   |                    34 | 103.0%       | 11/09 09h       |
-| Gare RER - Général de Gaulle (`22302`)     |                    41 | 100.0%       | 11/09 09h       |
-| Bercy. (`12108`)                           |                    65 | 98.5%        | 11/09 09h       |
-| Square Georges Melies (`12154`)            |                    39 | 97.5%        | 11/09 09h       |
-| Place de la Bastille - Bourdon (`4007`)    |                    34 | 97.1%        | 11/09 09h       |
-| Gare de Lyon - Van Gogh (`12006`)          |                    39 | 95.1%        | 11/09 09h       |
-| Notre-Dame-des-Champs - Stanislas (`6006`) |                    18 | 94.7%        | 11/09 09h       |
-| Convention - Lourmel (`15062`)             |                    34 | 94.4%        | 11/09 09h       |
-| Place Ginette Hamelin (`12026`)            |                    48 | 94.1%        | 11/09 09h       |
+| Station                                      |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:---------------------------------------------|----------------------:|:-------------|:----------------|
+| Place Balard (`15056`)                       |                    37 | 168.2%       | 11/09 10h       |
+| Bercy - Villot (`12105`)                     |                    40 | 121.2%       | 11/09 10h       |
+| Tremblay - Lac des Minimes (`12127`)         |                    56 | 116.7%       | 11/09 10h       |
+| Place du Moulin de Javel (`15058`)           |                    52 | 115.6%       | 11/09 10h       |
+| Madeleine Vionnet (`33019`)                  |                    38 | 111.8%       | 11/09 10h       |
+| Malesherbes - Place de la Madeleine (`8004`) |                    69 | 103.0%       | 11/09 10h       |
+| Parc Suzanne Lenglen (`15125`)               |                    52 | 100.0%       | 11/09 10h       |
+| Bruneseau - Quai d'Ivry (`13121`)            |                    46 | 100.0%       | 11/09 10h       |
+| Hôpital Bégin (`43003`)                      |                    26 | 100.0%       | 11/09 10h       |
+| Laffitte - Italiens (`9023`)                 |                    33 | 100.0%       | 11/09 10h       |
 
 ## Détails par station (graphiques)
+
+???+ info "Douai - Bruxelles (9038)"
+
+    ![Douai - Bruxelles (9038)](assets/figs/obs_pred_9038_T+1h_compact.png)
 
 ???+ info "Nanterre - Université (92004)"
 
     ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
 
-???+ info "Place des Fêtes - Solitaires (19210)"
+???+ info "Récollets - Square Villemin (10016)"
 
-    ![Place des Fêtes - Solitaires (19210)](assets/figs/obs_pred_19210_T+1h_compact.png)
+    ![Récollets - Square Villemin (10016)](assets/figs/obs_pred_10016_T+1h_compact.png)
 
-???+ info "Sorbier - Gasnier-Guy (20010)"
+???+ info "Charles Robin - Grange aux Belles (10207)"
 
-    ![Sorbier - Gasnier-Guy (20010)](assets/figs/obs_pred_20010_T+1h_compact.png)
+    ![Charles Robin - Grange aux Belles (10207)](assets/figs/obs_pred_10207_T+1h_compact.png)
 
-???+ info "Sully - Morland (4201)"
+???+ info "Champs-Elysees - Bassano (8116)"
 
-    ![Sully - Morland (4201)](assets/figs/obs_pred_4201_T+1h_compact.png)
+    ![Champs-Elysees - Bassano (8116)](assets/figs/obs_pred_8116_T+1h_compact.png)
 
-???+ info "Mairie du 20ème (20106)"
+???+ info "Place du 14 Juillet (22408)"
 
-    ![Mairie du 20ème (20106)](assets/figs/obs_pred_20106_T+1h_compact.png)
-
-???+ info "La Jarry - Place Diderot (43010)"
-
-    ![La Jarry - Place Diderot (43010)](assets/figs/obs_pred_43010_T+1h_compact.png)
-
-???+ info "Boyer - Ménilmontant (20121)"
-
-    ![Boyer - Ménilmontant (20121)](assets/figs/obs_pred_20121_T+1h_compact.png)
-
-???+ info "Piat - Parc de Belleville (20113)"
-
-    ![Piat - Parc de Belleville (20113)](assets/figs/obs_pred_20113_T+1h_compact.png)
+    ![Place du 14 Juillet (22408)](assets/figs/obs_pred_22408_T+1h_compact.png)
 
 ???+ info "Commandant Schloesing - Pétrarque (16202)"
 
     ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
 
-???+ info "Place de Passy (16043)"
+???+ info "Jacques Kellner - Saint-Ouen (17003)"
 
-    ![Place de Passy (16043)](assets/figs/obs_pred_16043_T+1h_compact.png)
+    ![Jacques Kellner - Saint-Ouen (17003)](assets/figs/obs_pred_17003_T+1h_compact.png)
+
+???+ info "Legendre - Clichy (17004)"
+
+    ![Legendre - Clichy (17004)](assets/figs/obs_pred_17004_T+1h_compact.png)
+
+???+ info "Charles de Gaulle (22019)"
+
+    ![Charles de Gaulle (22019)](assets/figs/obs_pred_22019_T+1h_compact.png)
 
