@@ -1,76 +1,76 @@
 # Prévisions
 
-*Dernière heure considérée : **11/09 22h** (Europe/Paris)*
+*Dernière heure considérée : **11/09 23h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
-| Station                                             |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:----------------------------------------------------|----------------------:|:-------------|:----------------|
-| Nanterre - Université (`92004`)                     |                     0 | 0.0%         | 11/09 22h       |
-| Récollets - Square Villemin (`10016`)               |                     0 | 0.0%         | 11/09 22h       |
-| Gaston Roussel - Commune de Paris (`32308`)         |                     0 | 0.0%         | 11/09 22h       |
-| Square du Théâtre du Garde-Chasse (`32604`)         |                     0 | 0.0%         | 11/09 22h       |
-| Gare de l'Est - Place du 11 Novembre 1918 (`10165`) |                     0 | 0.0%         | 11/09 22h       |
-| Henri Barbusse (`31203`)                            |                     0 | 0.0%         | 11/09 22h       |
-| Douai - Bruxelles (`9038`)                          |                     0 | 0.0%         | 11/09 22h       |
-| Chemin Vert - Fraternité (`32302`)                  |                     0 | 0.0%         | 11/09 22h       |
-| Division Leclerc - Kléber (`23203`)                 |                     0 | 0.0%         | 11/09 22h       |
-| Charles de Gaulle (`22019`)                         |                     0 | 0.0%         | 11/09 22h       |
+| Station                                          |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:-------------------------------------------------|----------------------:|:-------------|:----------------|
+| Place du 14 Juillet (`22408`)                    |                     0 | 0.0%         | 11/09 23h       |
+| Vivienne - Petits Champs (`2201`)                |                     0 | 0.0%         | 11/09 23h       |
+| Charles Robin - Grange aux Belles (`10207`)      |                     0 | 0.0%         | 11/09 23h       |
+| Gardenat Lapostol - Franklin Roosevelt (`21509`) |                     0 | 0.0%         | 11/09 23h       |
+| Sablons - Georges Mandel (`16108`)               |                     0 | 0.0%         | 11/09 23h       |
+| Commandant Schloesing - Pétrarque (`16202`)      |                     0 | 0.0%         | 11/09 23h       |
+| La Jarry - Place Diderot (`43010`)               |                     0 | 0.0%         | 11/09 23h       |
+| Porte de la Muette (`16019`)                     |                     0 | 0.0%         | 11/09 23h       |
+| Place des Ardoines (`44018`)                     |                     0 | 0.0%         | 11/09 23h       |
+| Stade - Chevilly (`45504`)                       |                     0 | 0.0%         | 11/09 23h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
 | Station                                            |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:---------------------------------------------------|----------------------:|:-------------|:----------------|
-| BNF - Bibliothèque Nationale de France (`13123`)   |                    51 | 121.4%       | 11/09 22h       |
-| Westermeyer - Paul Vaillant-Couturier (`42004`)    |                    28 | 112.0%       | 11/09 22h       |
-| Aristide Briand - Place de la Résistance (`21302`) |                    26 | 104.0%       | 11/09 22h       |
-| Boutroux - Porte de Vitry (`13047`)                |                    49 | 100.0%       | 11/09 22h       |
-| Place de Verdun (`43402`)                          |                    39 | 97.5%        | 11/09 22h       |
-| Hôtel de Ville de Sèvres (`23102`)                 |                    31 | 96.9%        | 11/09 22h       |
-| Gare - Aristide Briand (`21329`)                   |                    28 | 96.6%        | 11/09 22h       |
-| Quai de Sèvres - Manufacture Nationale (`23104`)   |                    27 | 96.4%        | 11/09 22h       |
-| André Mazet - Saint-André des Arts (`6015`)        |                    53 | 96.4%        | 11/09 22h       |
-| Poissy - Saint-Germain (`5019`)                    |                    24 | 96.0%        | 11/09 22h       |
+| Westermeyer - Paul Vaillant-Couturier (`42004`)    |                    34 | 136.0%       | 11/09 23h       |
+| BNF - Bibliothèque Nationale de France (`13123`)   |                    48 | 114.3%       | 11/09 23h       |
+| Aristide Briand - Place de la Résistance (`21302`) |                    28 | 112.0%       | 11/09 23h       |
+| Oratoire - Rivoli (`1025`)                         |                    18 | 100.0%       | 11/09 23h       |
+| Convention - Lourmel (`15062`)                     |                    36 | 100.0%       | 11/09 23h       |
+| Boutroux - Porte de Vitry (`13047`)                |                    49 | 100.0%       | 11/09 23h       |
+| Hôtel de Ville de Sèvres (`23102`)                 |                    31 | 96.9%        | 11/09 23h       |
+| Gare - Aristide Briand (`21329`)                   |                    28 | 96.6%        | 11/09 23h       |
+| Quai Marcel Boyer - Victor Hugo (`42011`)          |                    28 | 96.6%        | 11/09 23h       |
+| Quai de Sèvres - Manufacture Nationale (`23104`)   |                    27 | 96.4%        | 11/09 23h       |
 
 ## Détails par station (graphiques)
 
-???+ info "Nanterre - Université (92004)"
+???+ info "Place du 14 Juillet (22408)"
 
-    ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
+    ![Place du 14 Juillet (22408)](assets/figs/obs_pred_22408_T+1h_compact.png)
 
-???+ info "Récollets - Square Villemin (10016)"
+???+ info "Vivienne - Petits Champs (2201)"
 
-    ![Récollets - Square Villemin (10016)](assets/figs/obs_pred_10016_T+1h_compact.png)
+    ![Vivienne - Petits Champs (2201)](assets/figs/obs_pred_2201_T+1h_compact.png)
 
-???+ info "Gaston Roussel - Commune de Paris (32308)"
+???+ info "Charles Robin - Grange aux Belles (10207)"
 
-    ![Gaston Roussel - Commune de Paris (32308)](assets/figs/obs_pred_32308_T+1h_compact.png)
+    ![Charles Robin - Grange aux Belles (10207)](assets/figs/obs_pred_10207_T+1h_compact.png)
 
-???+ info "Square du Théâtre du Garde-Chasse (32604)"
+???+ info "Gardenat Lapostol - Franklin Roosevelt (21509)"
 
-    ![Square du Théâtre du Garde-Chasse (32604)](assets/figs/obs_pred_32604_T+1h_compact.png)
+    ![Gardenat Lapostol - Franklin Roosevelt (21509)](assets/figs/obs_pred_21509_T+1h_compact.png)
 
-???+ info "Gare de l'Est - Place du 11 Novembre 1918 (10165)"
+???+ info "Sablons - Georges Mandel (16108)"
 
-    ![Gare de l'Est - Place du 11 Novembre 1918 (10165)](assets/figs/obs_pred_10165_T+1h_compact.png)
+    ![Sablons - Georges Mandel (16108)](assets/figs/obs_pred_16108_T+1h_compact.png)
 
-???+ info "Henri Barbusse (31203)"
+???+ info "Commandant Schloesing - Pétrarque (16202)"
 
-    ![Henri Barbusse (31203)](assets/figs/obs_pred_31203_T+1h_compact.png)
+    ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
 
-???+ info "Douai - Bruxelles (9038)"
+???+ info "La Jarry - Place Diderot (43010)"
 
-    ![Douai - Bruxelles (9038)](assets/figs/obs_pred_9038_T+1h_compact.png)
+    ![La Jarry - Place Diderot (43010)](assets/figs/obs_pred_43010_T+1h_compact.png)
 
-???+ info "Chemin Vert - Fraternité (32302)"
+???+ info "Porte de la Muette (16019)"
 
-    ![Chemin Vert - Fraternité (32302)](assets/figs/obs_pred_32302_T+1h_compact.png)
+    ![Porte de la Muette (16019)](assets/figs/obs_pred_16019_T+1h_compact.png)
 
-???+ info "Division Leclerc - Kléber (23203)"
+???+ info "Place des Ardoines (44018)"
 
-    ![Division Leclerc - Kléber (23203)](assets/figs/obs_pred_23203_T+1h_compact.png)
+    ![Place des Ardoines (44018)](assets/figs/obs_pred_44018_T+1h_compact.png)
 
-???+ info "Charles de Gaulle (22019)"
+???+ info "Stade - Chevilly (45504)"
 
-    ![Charles de Gaulle (22019)](assets/figs/obs_pred_22019_T+1h_compact.png)
+    ![Stade - Chevilly (45504)](assets/figs/obs_pred_45504_T+1h_compact.png)
 
