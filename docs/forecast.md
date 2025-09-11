@@ -1,36 +1,36 @@
 # Prévisions
 
-*Dernière heure considérée : **11/09 17h** (Europe/Paris)*
+*Dernière heure considérée : **11/09 18h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
-| Station                                       |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:----------------------------------------------|----------------------:|:-------------|:----------------|
-| Nanterre - Université (`92004`)               |                     0 | 0.0%         | 11/09 17h       |
-| Douai - Bruxelles (`9038`)                    |                     0 | 0.0%         | 11/09 17h       |
-| Lepic - Armée d'Orient (`18113`)              |                     0 | 0.0%         | 11/09 17h       |
-| Charles Robin - Grange aux Belles (`10207`)   |                     0 | 0.0%         | 11/09 17h       |
-| Clignancourt - Sofia (`18141`)                |                     0 | 0.0%         | 11/09 17h       |
-| Londres - Europe (`8202`)                     |                     0 | 0.0%         | 11/09 17h       |
-| Champs-Elysees - Bassano (`8116`)             |                     0 | 0.0%         | 11/09 17h       |
-| Edouard Pailleron - Simon Bolivar (`19039`)   |                     0 | 0.0%         | 11/09 17h       |
-| Place des Fêtes - Solitaires (`19210`)        |                     0 | 0.0%         | 11/09 17h       |
-| Charonne - Robert et Sonia Delaunay (`11104`) |                     0 | 0.0%         | 11/09 17h       |
+| Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:--------------------------------------------|----------------------:|:-------------|:----------------|
+| Nanterre - Université (`92004`)             |                     0 | 0.0%         | 11/09 18h       |
+| Vivienne - Petits Champs (`2201`)           |                     0 | 0.0%         | 11/09 18h       |
+| Charles Robin - Grange aux Belles (`10207`) |                     0 | 0.0%         | 11/09 18h       |
+| Charcot - Benfleet (`32304`)                |                     0 | 0.0%         | 11/09 18h       |
+| Champs-Elysees - Bassano (`8116`)           |                     0 | 0.0%         | 11/09 18h       |
+| Londres - Europe (`8202`)                   |                     0 | 0.0%         | 11/09 18h       |
+| Henri Barbusse (`31203`)                    |                     0 | 0.0%         | 11/09 18h       |
+| Charles de Gaulle (`22019`)                 |                     0 | 0.0%         | 11/09 18h       |
+| Gaston Roussel - Commune de Paris (`32308`) |                     0 | 0.0%         | 11/09 18h       |
+| Porte des Lilas - Faidherbe (`32601`)       |                     0 | 0.0%         | 11/09 18h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
 | Station                                          |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:-------------------------------------------------|----------------------:|:-------------|:----------------|
-| Enfants du Paradis - Peupliers (`21021`)         |                    73 | 182.5%       | 11/09 17h       |
-| BNF - Bibliothèque Nationale de France (`13123`) |                    58 | 138.1%       | 11/09 17h       |
-| Place Balard (`15056`)                           |                    29 | 131.8%       | 11/09 17h       |
-| Tremblay - Lac des Minimes (`12127`)             |                    62 | 129.2%       | 11/09 17h       |
-| Bercy - Villot (`12105`)                         |                    38 | 115.2%       | 11/09 17h       |
-| Madeleine Vionnet (`33019`)                      |                    39 | 114.7%       | 11/09 17h       |
-| Malesherbes - Place de la Madeleine (`8004`)     |                    76 | 113.4%       | 11/09 17h       |
-| Place du Moulin de Javel (`15058`)               |                    49 | 108.9%       | 11/09 17h       |
-| Saint-Antoine Sévigné (`4010`)                   |                    27 | 103.8%       | 11/09 17h       |
-| Place Denfert-Rochereau (`21002`)                |                    20 | 100.0%       | 11/09 17h       |
+| Enfants du Paradis - Peupliers (`21021`)         |                    70 | 175.0%       | 11/09 18h       |
+| BNF - Bibliothèque Nationale de France (`13123`) |                    55 | 131.0%       | 11/09 18h       |
+| Place Balard (`15056`)                           |                    26 | 118.2%       | 11/09 18h       |
+| Bercy - Villot (`12105`)                         |                    36 | 109.1%       | 11/09 18h       |
+| Tremblay - Lac des Minimes (`12127`)             |                    52 | 108.3%       | 11/09 18h       |
+| Malesherbes - Place de la Madeleine (`8004`)     |                    72 | 107.5%       | 11/09 18h       |
+| Madeleine Vionnet (`33019`)                      |                    36 | 105.9%       | 11/09 18h       |
+| Saint-Antoine Sévigné (`4010`)                   |                    27 | 103.8%       | 11/09 18h       |
+| Gare d'Austerlitz - Quai Saint-Bernard (`13104`) |                    27 | 100.0%       | 11/09 18h       |
+| Sebastopol - Rambuteau (`4104`)                  |                    16 | 100.0%       | 11/09 18h       |
 
 ## Détails par station (graphiques)
 
@@ -38,39 +38,39 @@
 
     ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
 
-???+ info "Douai - Bruxelles (9038)"
+???+ info "Vivienne - Petits Champs (2201)"
 
-    ![Douai - Bruxelles (9038)](assets/figs/obs_pred_9038_T+1h_compact.png)
-
-???+ info "Lepic - Armée d'Orient (18113)"
-
-    ![Lepic - Armée d'Orient (18113)](assets/figs/obs_pred_18113_T+1h_compact.png)
+    ![Vivienne - Petits Champs (2201)](assets/figs/obs_pred_2201_T+1h_compact.png)
 
 ???+ info "Charles Robin - Grange aux Belles (10207)"
 
     ![Charles Robin - Grange aux Belles (10207)](assets/figs/obs_pred_10207_T+1h_compact.png)
 
-???+ info "Clignancourt - Sofia (18141)"
+???+ info "Charcot - Benfleet (32304)"
 
-    ![Clignancourt - Sofia (18141)](assets/figs/obs_pred_18141_T+1h_compact.png)
-
-???+ info "Londres - Europe (8202)"
-
-    ![Londres - Europe (8202)](assets/figs/obs_pred_8202_T+1h_compact.png)
+    ![Charcot - Benfleet (32304)](assets/figs/obs_pred_32304_T+1h_compact.png)
 
 ???+ info "Champs-Elysees - Bassano (8116)"
 
     ![Champs-Elysees - Bassano (8116)](assets/figs/obs_pred_8116_T+1h_compact.png)
 
-???+ info "Edouard Pailleron - Simon Bolivar (19039)"
+???+ info "Londres - Europe (8202)"
 
-    ![Edouard Pailleron - Simon Bolivar (19039)](assets/figs/obs_pred_19039_T+1h_compact.png)
+    ![Londres - Europe (8202)](assets/figs/obs_pred_8202_T+1h_compact.png)
 
-???+ info "Place des Fêtes - Solitaires (19210)"
+???+ info "Henri Barbusse (31203)"
 
-    ![Place des Fêtes - Solitaires (19210)](assets/figs/obs_pred_19210_T+1h_compact.png)
+    ![Henri Barbusse (31203)](assets/figs/obs_pred_31203_T+1h_compact.png)
 
-???+ info "Charonne - Robert et Sonia Delaunay (11104)"
+???+ info "Charles de Gaulle (22019)"
 
-    ![Charonne - Robert et Sonia Delaunay (11104)](assets/figs/obs_pred_11104_T+1h_compact.png)
+    ![Charles de Gaulle (22019)](assets/figs/obs_pred_22019_T+1h_compact.png)
+
+???+ info "Gaston Roussel - Commune de Paris (32308)"
+
+    ![Gaston Roussel - Commune de Paris (32308)](assets/figs/obs_pred_32308_T+1h_compact.png)
+
+???+ info "Porte des Lilas - Faidherbe (32601)"
+
+    ![Porte des Lilas - Faidherbe (32601)](assets/figs/obs_pred_32601_T+1h_compact.png)
 
