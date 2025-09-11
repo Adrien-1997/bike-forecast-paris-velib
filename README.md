@@ -1,9 +1,11 @@
 # 🚲 Vélib’ Paris — Forecast & Risk (T+3h/T+6h)
 
 [![CI — pipeline](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/pipeline.yml/badge.svg)](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/pipeline.yml)
-[![Docs — GitHub Pages](https://img.shields.io/badge/docs-GitHub%20Pages-2962FF)](https://adrien-1997.github.io/bike-forecast-paris-velib/)
-![Python](https://img.shields.io/badge/Python-3.11+-3776AB)
+[![Docs](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/gh-pages.yml/badge.svg)](https://adrien-1997.github.io/bike-forecast-paris-velib/)
+[![Version](https://img.shields.io/badge/version-v1.0.0-blue.svg)](https://github.com/Adrien-1997/bike-forecast-paris-velib/releases/tag/v1.0.0)
 ![License](https://img.shields.io/badge/License-MIT-black)
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB)
+
 
 ![Carte réseau](docs/assets/map.png)
 
