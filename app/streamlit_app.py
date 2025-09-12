@@ -36,13 +36,11 @@ st.session_state.setdefault("map_highlight", None)
 # CSS
 st.markdown("""
 <style>
-/* Titres : respiration supplémentaire */
-h2, h3 {
-  margin-top: 1rem !important;   /* espace haut */
-  margin-bottom: .6rem !important;
-}
+/* ===== Base spacing & typography ===== */
+h2, h3 { margin-top: 1rem !important; margin-bottom: .6rem !important; }
+.block-container { padding-top: 1.2rem; padding-bottom: .75rem; max-width: 1300px; }
 
-/* KPI cards : plus d’espace */
+/* KPI cards */
 .kpi-row { margin: 1rem 0 !important; }
 .kpi-card {
   background: var(--background-color);
@@ -52,77 +50,75 @@ h2, h3 {
   text-align: center;
   box-shadow: 0 1px 3px rgba(0,0,0,.08);
 }
-.kpi-title {
-  color: var(--text-muted);
-  font-size: .85rem;
-  margin-bottom: .35rem;
-}
-.kpi-value {
-  font-size: 1.35rem;
-  font-weight: 700;
-  color: var(--text-strong);
-}
+.kpi-title { color: var(--text-muted); font-size: .85rem; margin-bottom: .35rem; }
+.kpi-value { font-size: 1.35rem; font-weight: 700; color: var(--text-strong); }
 
-/* Badges : petits coussins + couleurs neutres */
-.badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: .8rem;            /* ⬅️ espace horizontal/vertical entre badges */
-  margin: .5rem 0 1rem;  /* ⬅️ ajoute un peu d’espace autour du bloc */
-}
-
+/* Badges */
+.badges { display:flex; flex-wrap:wrap; gap:.8rem; margin:.5rem 0 1rem; }
 .badge {
-  display: inline-block;
-  padding: .35rem .8rem;
-  border-radius: 999px;
-  font-size: .80rem;
-  border: 1px solid var(--border-color);
-  background: var(--badge-bg);
-  color: var(--text-strong);
+  display:inline-block; padding:.35rem .8rem; border-radius:999px; font-size:.80rem;
+  border:1px solid var(--border-color); background:var(--badge-bg); color:var(--text-strong);
 }
 
+/* Finder (Carte) : alignements propres */
+.finder-card [data-testid="column"]{ display:flex; align-items:flex-end; gap:.5rem; }
+.finder-card .stButton > button{ height:42px !important; margin-bottom:2px; }
+
+/* Monitoring : images centrées & max width */
+.monitoring-fig img { max-width: 900px !important; margin: 0 auto !important; display:block; }
+
+/* DataFrames : scroll horizontal sur mobile si besoin */
+div[data-testid="stDataFrameResizable"] { overflow-x: auto; }
 
 /* Variables couleurs clair/sombre */
 :root {
-  --background-color: #ffffff;
-  --border-color: #e5e7eb;
-  --text-muted: #6b7280;
-  --text-strong: #111827;
-  --badge-bg: #f9fafb;
+  --background-color:#ffffff; --border-color:#e5e7eb;
+  --text-muted:#6b7280; --text-strong:#111827; --badge-bg:#f9fafb;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --background-color: #1f2937;
-    --border-color: #374151;
-    --text-muted: #9ca3af;
-    --text-strong: #f3f4f6;
-    --badge-bg: #374151;
+    --background-color:#1f2937; --border-color:#374151;
+    --text-muted:#9ca3af; --text-strong:#f3f4f6; --badge-bg:#374151;
   }
 }
 
-.monitoring-fig img {
-    max-width: 900px !important; /* taille max */
-    margin: 0 auto !important;   /* centre l’image */
-    display: block;              /* la force à se centrer */
+/* ===== Responsive (<= 768px) : s’applique aux 2 pages ===== */
+@media (max-width: 768px) {
+  .block-container { padding-left:.5rem !important; padding-right:.5rem !important; }
+
+  /* Titres un poil plus serrés pour gagner de la place */
+  h2, h3 { margin-top:.6rem !important; margin-bottom:.5rem !important; }
+
+  /* Badges : un peu plus compacts */
+  .badges { gap:.6rem; margin:.4rem 0 .8rem; }
+
+  /* Finder : inputs & bouton en colonne, pleine largeur */
+  .finder-card [data-testid="column"] {
+    width: 100% !important;
+    align-items: stretch !important;
+  }
+  .finder-card .stTextInput, .finder-card .stNumberInput, .finder-card .stButton {
+    width: 100% !important;
+  }
+
+  /* Carte Folium : hauteur en viewport, permet le scroll vertical */
+  /* Sélecteurs robustes : iframe streamlit + éventuel wrapper */
+  div[data-testid="stIFrame"] iframe,
+  iframe[title="st.iframe"],
+  .map-wrap iframe {
+    height: 60vh !important;        /* hauteur relative à l’écran */
+    min-height: 360px !important;    /* confort minimal */
+  }
+
+  /* Graphiques Monitoring : un poil plus petits */
+  .monitoring-fig img { max-width: 100% !important; }
 }
-            
-/* Aligne le bouton avec les champs d'entrée */
-.finder-card [data-testid="column"] {
-  display: flex;
-  align-items: flex-end;   /* ⬅️ aligne bas */
-  justify-content: flex-start;
-}
-.finder-card .stButton > button {
-  height: 42px !important;
-  margin-bottom: 2px;      /* petit ajustement */
-}
-            
 
-
-
-
+/* Sécurité : la carte ne dépasse pas la largeur du conteneur */
+.leaflet-container { max-width: 100% !important; }
 </style>
 """, unsafe_allow_html=True)
+
 
 TITLE = "🚲 Prévisions Vélib’ Paris"
 
@@ -462,8 +458,9 @@ PAGE = st.sidebar.radio("Navigation", ["Carte", "Monitoring réseau"], index=0)
 # COMMON: CHARGE DONNÉES + PRÉDICTION (utilisé par les 2 pages)
 # -----------------------------------------------------------------------------
 # bouton refresh commun
-if st.sidebar.button("Actualiser maintenant"):
+if st.sidebar.button("Actualiser données"):
     load_live_data_cached.clear()
+
 
 df_now, source_label, debug_reason, fetched_utc = load_live_data_cached()
 try:
@@ -612,7 +609,8 @@ if PAGE == "Carte":
         open_popup=bool(highlight_code),
         display_prediction=bool(display_pred),
     )
-    st.components.v1.html(m.get_root().render(), height=680)
+    MAP_HEIGHT = 560  # ex. 520–600
+    st.components.v1.html(m.get_root().render(), height=MAP_HEIGHT)
 
     st.markdown(
         "<div style='color:#999;font-size:12px;margin-top:8px;'>"
