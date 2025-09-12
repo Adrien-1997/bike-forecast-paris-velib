@@ -1,76 +1,76 @@
 # Prévisions
 
-*Dernière heure considérée : **12/09 17h** (Europe/Paris)*
+*Dernière heure considérée : **12/09 18h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
 | Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:--------------------------------------------|----------------------:|:-------------|:----------------|
-| Piat - Parc de Belleville (`20113`)         |                     0 | 0.0%         | 12/09 17h       |
-| Louis Lumière - Porte de Bagnolet (`20115`) |                     0 | 0.0%         | 12/09 17h       |
-| Square des Saint-Simoniens (`20119`)        |                     0 | 0.0%         | 12/09 17h       |
-| Porte de Bagnolet (`20022`)                 |                     0 | 0.0%         | 12/09 17h       |
-| Porte de Ménilmontant (`20027`)             |                     0 | 0.0%         | 12/09 17h       |
-| Pyrénées - Dagorno (`20011`)                |                     0 | 0.0%         | 12/09 17h       |
-| Manin - Carrières d'Amérique (`19103`)      |                     0 | 0.0%         | 12/09 17h       |
-| Pré Saint-Gervais - Lilas (`19113`)         |                     0 | 0.0%         | 12/09 17h       |
-| Place des Fêtes - Solitaires (`19210`)      |                     0 | 0.0%         | 12/09 17h       |
-| Belleville - Télégraphe (`19040`)           |                     0 | 0.0%         | 12/09 17h       |
+| Pesaro - Préfecture (`92007`)               |                     0 | 0.0%         | 12/09 18h       |
+| Nanterre - Université (`92004`)             |                     0 | 0.0%         | 12/09 18h       |
+| Place Madeleine Daniélou (`17105`)          |                     0 | 0.0%         | 12/09 18h       |
+| Champs-Elysees - Bassano (`8116`)           |                     0 | 0.0%         | 12/09 18h       |
+| Commandant Schloesing - Pétrarque (`16202`) |                     0 | 0.0%         | 12/09 18h       |
+| Belleville - Télégraphe (`19040`)           |                     0 | 0.0%         | 12/09 18h       |
+| Poissonniers - Nord (`18137`)               |                     0 | 0.0%         | 12/09 18h       |
+| Arthur Ranc - Hôpital Bichat (`18112`)      |                     0 | 0.0%         | 12/09 18h       |
+| Place des Fêtes - Solitaires (`19210`)      |                     0 | 0.0%         | 12/09 18h       |
+| Flandrin - Henri Martin (`16018`)           |                     0 | 0.0%         | 12/09 18h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
-| Station                                          |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:-------------------------------------------------|----------------------:|:-------------|:----------------|
-| BNF - Bibliothèque Nationale de France (`13123`) |                    56 | 133.3%       | 12/09 17h       |
-| Tremblay - Lac des Minimes (`12127`)             |                    59 | 122.9%       | 12/09 17h       |
-| Bercy - Villot (`12105`)                         |                    38 | 115.2%       | 12/09 17h       |
-| Place Balard (`15056`)                           |                    24 | 109.1%       | 12/09 17h       |
-| Place du Lieutenant Henri Karcher (`1026`)       |                    30 | 100.0%       | 12/09 17h       |
-| Montmartre - Etienne Marcel (`2005`)             |                    16 | 100.0%       | 12/09 17h       |
-| Quai de l'Horloge - Pont Neuf (`1001`)           |                    17 | 100.0%       | 12/09 17h       |
-| Vincent Auriol - Louise Weiss (`13049`)          |                    22 | 100.0%       | 12/09 17h       |
-| Gare d'Austerlitz - Quai Saint-Bernard (`13104`) |                    27 | 100.0%       | 12/09 17h       |
-| Rome - Provence (`8007`)                         |                    30 | 100.0%       | 12/09 17h       |
+| Station                                            |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:---------------------------------------------------|----------------------:|:-------------|:----------------|
+| BNF - Bibliothèque Nationale de France (`13123`)   |                    60 | 142.9%       | 12/09 18h       |
+| Bercy - Villot (`12105`)                           |                    37 | 112.1%       | 12/09 18h       |
+| Tremblay - Lac des Minimes (`12127`)               |                    52 | 108.3%       | 12/09 18h       |
+| Aristide Briand - Place de la Résistance (`21302`) |                    26 | 104.0%       | 12/09 18h       |
+| Saint-Denis - Rivoli (`1003`)                      |                    44 | 102.3%       | 12/09 18h       |
+| Chevaleret - Louise Weiss (`13015`)                |                    35 | 100.0%       | 12/09 18h       |
+| Gare d'Austerlitz - Quai Saint-Bernard (`13104`)   |                    27 | 100.0%       | 12/09 18h       |
+| Victoria - Place du Chatelet (`1002`)              |                    22 | 100.0%       | 12/09 18h       |
+| Poissy - Saint-Germain (`5019`)                    |                    25 | 100.0%       | 12/09 18h       |
+| Harpe - Saint-Germain (`5001`)                     |                    44 | 97.8%        | 12/09 18h       |
 
 ## Détails par station (graphiques)
 
-???+ info "Piat - Parc de Belleville (20113)"
+???+ info "Pesaro - Préfecture (92007)"
 
-    ![Piat - Parc de Belleville (20113)](assets/figs/obs_pred_20113_T+1h_compact.png)
+    ![Pesaro - Préfecture (92007)](assets/figs/obs_pred_92007_T+1h_compact.png)
 
-???+ info "Louis Lumière - Porte de Bagnolet (20115)"
+???+ info "Nanterre - Université (92004)"
 
-    ![Louis Lumière - Porte de Bagnolet (20115)](assets/figs/obs_pred_20115_T+1h_compact.png)
+    ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
 
-???+ info "Square des Saint-Simoniens (20119)"
+???+ info "Place Madeleine Daniélou (17105)"
 
-    ![Square des Saint-Simoniens (20119)](assets/figs/obs_pred_20119_T+1h_compact.png)
+    ![Place Madeleine Daniélou (17105)](assets/figs/obs_pred_17105_T+1h_compact.png)
 
-???+ info "Porte de Bagnolet (20022)"
+???+ info "Champs-Elysees - Bassano (8116)"
 
-    ![Porte de Bagnolet (20022)](assets/figs/obs_pred_20022_T+1h_compact.png)
+    ![Champs-Elysees - Bassano (8116)](assets/figs/obs_pred_8116_T+1h_compact.png)
 
-???+ info "Porte de Ménilmontant (20027)"
+???+ info "Commandant Schloesing - Pétrarque (16202)"
 
-    ![Porte de Ménilmontant (20027)](assets/figs/obs_pred_20027_T+1h_compact.png)
+    ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
 
-???+ info "Pyrénées - Dagorno (20011)"
+???+ info "Belleville - Télégraphe (19040)"
 
-    ![Pyrénées - Dagorno (20011)](assets/figs/obs_pred_20011_T+1h_compact.png)
+    ![Belleville - Télégraphe (19040)](assets/figs/obs_pred_19040_T+1h_compact.png)
 
-???+ info "Manin - Carrières d'Amérique (19103)"
+???+ info "Poissonniers - Nord (18137)"
 
-    ![Manin - Carrières d'Amérique (19103)](assets/figs/obs_pred_19103_T+1h_compact.png)
+    ![Poissonniers - Nord (18137)](assets/figs/obs_pred_18137_T+1h_compact.png)
 
-???+ info "Pré Saint-Gervais - Lilas (19113)"
+???+ info "Arthur Ranc - Hôpital Bichat (18112)"
 
-    ![Pré Saint-Gervais - Lilas (19113)](assets/figs/obs_pred_19113_T+1h_compact.png)
+    ![Arthur Ranc - Hôpital Bichat (18112)](assets/figs/obs_pred_18112_T+1h_compact.png)
 
 ???+ info "Place des Fêtes - Solitaires (19210)"
 
     ![Place des Fêtes - Solitaires (19210)](assets/figs/obs_pred_19210_T+1h_compact.png)
 
-???+ info "Belleville - Télégraphe (19040)"
+???+ info "Flandrin - Henri Martin (16018)"
 
-    ![Belleville - Télégraphe (19040)](assets/figs/obs_pred_19040_T+1h_compact.png)
+    ![Flandrin - Henri Martin (16018)](assets/figs/obs_pred_16018_T+1h_compact.png)
 
