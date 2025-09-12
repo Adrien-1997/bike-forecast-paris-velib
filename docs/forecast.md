@@ -1,76 +1,76 @@
 # Prévisions
 
-*Dernière heure considérée : **12/09 21h** (Europe/Paris)*
+*Dernière heure considérée : **12/09 22h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
 | Station                                 |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:----------------------------------------|----------------------:|:-------------|:----------------|
-| Athènes - Clichy (`9036`)               |                     0 | 0.0%         | 12/09 21h       |
-| Nanterre - Université (`92004`)         |                     0 | 0.0%         | 12/09 21h       |
-| Bienfaisance - Place de Narvik (`8035`) |                     0 | 0.0%         | 12/09 21h       |
-| Abbé Groult - Convention (`15039`)      |                     0 | 0.0%         | 12/09 21h       |
-| Charles de Gaulle (`22019`)             |                     0 | 0.0%         | 12/09 21h       |
-| Duhamel - André Gide (`15027`)          |                     0 | 0.0%         | 12/09 21h       |
-| Galilée - Vernet (`8003`)               |                     0 | 0.0%         | 12/09 21h       |
-| Mont Valérien - Michel Salles (`22102`) |                     0 | 0.0%         | 12/09 21h       |
-| Mûriers - Père Lachaise (`20142`)       |                     0 | 0.0%         | 12/09 21h       |
-| Square des Saint-Simoniens (`20119`)    |                     0 | 0.0%         | 12/09 21h       |
+| Batignolles - Rome (`8051`)             |                     0 | 0.0%         | 12/09 22h       |
+| Marceau - Chaillot (`8048`)             |                     0 | 0.0%         | 12/09 22h       |
+| Bienfaisance - Place de Narvik (`8035`) |                     0 | 0.0%         | 12/09 22h       |
+| Messine - Place Du Pérou (`8026`)       |                     0 | 0.0%         | 12/09 22h       |
+| Nanterre - Université (`92004`)         |                     0 | 0.0%         | 12/09 22h       |
+| Monceau - Malesherbes (`8037`)          |                     0 | 0.0%         | 12/09 22h       |
+| Parc André Citroën (`15059`)            |                     0 | 0.0%         | 12/09 22h       |
+| Place des Fêtes - Solitaires (`19210`)  |                     0 | 0.0%         | 12/09 22h       |
+| Liège - Moscou (`8010`)                 |                     0 | 0.0%         | 12/09 22h       |
+| Vitruve - Davout (`20122`)              |                     0 | 0.0%         | 12/09 22h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
-| Station                                          |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:-------------------------------------------------|----------------------:|:-------------|:----------------|
-| BNF - Bibliothèque Nationale de France (`13123`) |                    56 | 133.3%       | 12/09 21h       |
-| Bercy - Villot (`12105`)                         |                    34 | 103.0%       | 12/09 21h       |
-| Harpe - Saint-Germain (`5001`)                   |                    45 | 100.0%       | 12/09 21h       |
-| Sèvres-Gallieni (`21032`)                        |                    27 | 100.0%       | 12/09 21h       |
-| Chausson - Gabriel Péri (`22301`)                |                    22 | 100.0%       | 12/09 21h       |
-| Quai de l'Horloge - Pont Neuf (`1001`)           |                    17 | 100.0%       | 12/09 21h       |
-| Paul Klee - Place Augusta Holmes (`13020`)       |                    42 | 97.7%        | 12/09 21h       |
-| Saint-Denis - Rivoli (`1003`)                    |                    42 | 97.7%        | 12/09 21h       |
-| Primo Levi - Frigos (`13016`)                    |                    33 | 97.1%        | 12/09 21h       |
-| Quai de la Gare - Pont de Bercy (`13128`)        |                    29 | 96.7%        | 12/09 21h       |
+| Station                                            |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:---------------------------------------------------|----------------------:|:-------------|:----------------|
+| BNF - Bibliothèque Nationale de France (`13123`)   |                    60 | 142.9%       | 12/09 22h       |
+| Bercy - Villot (`12105`)                           |                    37 | 112.1%       | 12/09 22h       |
+| Aristide Briand - Place de la Résistance (`21302`) |                    26 | 104.0%       | 12/09 22h       |
+| Westermeyer - Paul Vaillant-Couturier (`42004`)    |                    26 | 104.0%       | 12/09 22h       |
+| Gare d'Austerlitz - Quai Saint-Bernard (`13104`)   |                    27 | 100.0%       | 12/09 22h       |
+| Chausson - Gabriel Péri (`22301`)                  |                    22 | 100.0%       | 12/09 22h       |
+| Charenton - Prague (`12101`)                       |                    26 | 100.0%       | 12/09 22h       |
+| Harpe - Saint-Germain (`5001`)                     |                    44 | 97.8%        | 12/09 22h       |
+| Paul Klee - Place Augusta Holmes (`13020`)         |                    42 | 97.7%        | 12/09 22h       |
+| Saint-Denis - Rivoli (`1003`)                      |                    42 | 97.7%        | 12/09 22h       |
 
 ## Détails par station (graphiques)
 
-???+ info "Athènes - Clichy (9036)"
+???+ info "Batignolles - Rome (8051)"
 
-    ![Athènes - Clichy (9036)](assets/figs/obs_pred_9036_T+1h_compact.png)
+    ![Batignolles - Rome (8051)](assets/figs/obs_pred_8051_T+1h_compact.png)
 
-???+ info "Nanterre - Université (92004)"
+???+ info "Marceau - Chaillot (8048)"
 
-    ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
+    ![Marceau - Chaillot (8048)](assets/figs/obs_pred_8048_T+1h_compact.png)
 
 ???+ info "Bienfaisance - Place de Narvik (8035)"
 
     ![Bienfaisance - Place de Narvik (8035)](assets/figs/obs_pred_8035_T+1h_compact.png)
 
-???+ info "Abbé Groult - Convention (15039)"
+???+ info "Messine - Place Du Pérou (8026)"
 
-    ![Abbé Groult - Convention (15039)](assets/figs/obs_pred_15039_T+1h_compact.png)
+    ![Messine - Place Du Pérou (8026)](assets/figs/obs_pred_8026_T+1h_compact.png)
 
-???+ info "Charles de Gaulle (22019)"
+???+ info "Nanterre - Université (92004)"
 
-    ![Charles de Gaulle (22019)](assets/figs/obs_pred_22019_T+1h_compact.png)
+    ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
 
-???+ info "Duhamel - André Gide (15027)"
+???+ info "Monceau - Malesherbes (8037)"
 
-    ![Duhamel - André Gide (15027)](assets/figs/obs_pred_15027_T+1h_compact.png)
+    ![Monceau - Malesherbes (8037)](assets/figs/obs_pred_8037_T+1h_compact.png)
 
-???+ info "Galilée - Vernet (8003)"
+???+ info "Parc André Citroën (15059)"
 
-    ![Galilée - Vernet (8003)](assets/figs/obs_pred_8003_T+1h_compact.png)
+    ![Parc André Citroën (15059)](assets/figs/obs_pred_15059_T+1h_compact.png)
 
-???+ info "Mont Valérien - Michel Salles (22102)"
+???+ info "Place des Fêtes - Solitaires (19210)"
 
-    ![Mont Valérien - Michel Salles (22102)](assets/figs/obs_pred_22102_T+1h_compact.png)
+    ![Place des Fêtes - Solitaires (19210)](assets/figs/obs_pred_19210_T+1h_compact.png)
 
-???+ info "Mûriers - Père Lachaise (20142)"
+???+ info "Liège - Moscou (8010)"
 
-    ![Mûriers - Père Lachaise (20142)](assets/figs/obs_pred_20142_T+1h_compact.png)
+    ![Liège - Moscou (8010)](assets/figs/obs_pred_8010_T+1h_compact.png)
 
-???+ info "Square des Saint-Simoniens (20119)"
+???+ info "Vitruve - Davout (20122)"
 
-    ![Square des Saint-Simoniens (20119)](assets/figs/obs_pred_20119_T+1h_compact.png)
+    ![Vitruve - Davout (20122)](assets/figs/obs_pred_20122_T+1h_compact.png)
 
