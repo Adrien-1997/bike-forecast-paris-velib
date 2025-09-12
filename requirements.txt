@@ -11,21 +11,17 @@ holidays>=0.41
 matplotlib
 tabulate
 folium>=0.16
+streamlit-folium>=0.17
+
 
 # Web / docs
 requests>=2.31
-mkdocs
-mkdocs-material
-mkdocs-jupyter
+
 
 # App
 streamlit>=1.36
-streamlit-folium>=0.17
-streamlit-js-eval
+streamlit-js-eval>=0.1.0
 
 # Images
 Pillow>=10.0
 
-#Docs
-mkdocsmkdocs-material
-mkdocs-jupyter

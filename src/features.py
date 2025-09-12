@@ -1,129 +1,149 @@
 # src/features.py
+from __future__ import annotations
 import pandas as pd
 import numpy as np
-import duckdb
-from pathlib import Path
-import holidays
 
 TZ = "Europe/Paris"
 
-# après (robuste série/index)
 def _to_local_hour(x):
-    # Rend “tz-aware UTC”, convertit en Europe/Paris, arrondit à l’heure
+    # Accepte ts naive/aware → renvoie tz-aware Europe/Paris
+    dt = pd.to_datetime(x, errors="coerce", utc=True)
     try:
-        dt = pd.to_datetime(x, errors="coerce", utc=True).dt.tz_convert(TZ).dt.floor("h")
-    except AttributeError:  # DatetimeIndex / scalar
-        dt = pd.to_datetime(x, errors="coerce", utc=True).tz_convert(TZ).floor("h")
-    return dt
+        dt = dt.dt.tz_convert(TZ)
+    except Exception:
+        dt = dt.tz_convert(TZ)
+    return dt.dt.floor("h")
 
-def build_training_frame(db_path="warehouse.duckdb", hourly_path="exports/velib_hourly.parquet",
-                         horizon_hours: int = 1, lookback_days: int = 60) -> pd.DataFrame:
+def build_training_frame(horizon_hours: int = 1, lookback_days: int = 7):
     """
-    Retourne un DataFrame features + target pour entraînement/pred.
-    Cible: y_nb = nb_velos_hour(t + horizon).
+    (déjà existant dans ton repo normalement)
+    Renvoie df, feat_cols pour l'entraînement.
+    Laisse tel quel si tu as déjà une version plus aboutie.
     """
-    con = duckdb.connect(db_path)
-    if Path(hourly_path).exists():
-        df = pd.read_parquet(hourly_path)
-    else:
-        # fallback rapide depuis la table
-        q = """
-        WITH base AS (
-          SELECT ts_utc::TIMESTAMP AS ts_utc, stationcode,
-                 COALESCE(numbikesavailable,0) AS bikes,
-                 COALESCE(numdocksavailable,0) AS docks,
-                 NULLIF(capacity,0) AS capacity
-          FROM velib_snapshots
-          WHERE ts_utc >= now() - INTERVAL 90 DAY
-        )
-        SELECT
-          date_trunc('hour', ts_utc) AS hour_utc,
-          stationcode,
-          CAST(avg(bikes) AS INTEGER)       AS nb_velos_hour,
-          CAST(avg(docks) AS INTEGER)       AS nb_bornes_hour,
-          max(capacity)                     AS capacity_hour
-        FROM base
-        GROUP BY 1,2
-        """
-        df = con.execute(q).fetchdf()
+    import duckdb, os
+    con = duckdb.connect("warehouse.duckdb")
+    q = f"""
+    WITH base AS (
+      SELECT
+        ts_utc::TIMESTAMP AS ts_utc,
+        stationcode,
+        COALESCE(numbikesavailable,0) AS bikes,
+        COALESCE(numdocksavailable,0) AS docks,
+        NULLIF(capacity,0) AS capacity
+      FROM velib_snapshots
+      WHERE ts_utc >= now() - INTERVAL {lookback_days} DAY
+    ),
+    hourly AS (
+      SELECT
+        date_trunc('hour', ts_utc) AS hour_utc,
+        stationcode,
+        CAST(avg(bikes) AS DOUBLE) AS nb_velos_hour,
+        CAST(avg(docks) AS DOUBLE) AS nb_bornes_hour,
+        max(capacity)              AS capacity_hour
+      FROM base
+      GROUP BY 1,2
+    ),
+    enriched AS (
+      SELECT h.*,
+             CASE WHEN capacity_hour>0 THEN nb_velos_hour/capacity_hour ELSE NULL END AS occ_ratio_hour
+      FROM hourly h
+    )
+    SELECT * FROM enriched
+    """
+    df = con.execute(q).fetchdf()
+    if df.empty:
+        return df, []
 
-    # garde fenêtre de lookback
-    df["hour_utc"] = pd.to_datetime(df["hour_utc"])
-    cutoff = pd.Timestamp.utcnow().tz_localize(None) - pd.Timedelta(days=lookback_days)
-    df = df[df["hour_utc"] >= cutoff].copy()
-
-    # ratio
-    df["capacity_hour"] = pd.to_numeric(df["capacity_hour"], errors="coerce")
-    df["occ_ratio_hour"] = (
-        (pd.to_numeric(df["nb_velos_hour"], errors="coerce") / df["capacity_hour"])
-        .where(df["capacity_hour"] > 0)
-    ).clip(0, 1)
-
-    # ===== Calendrier (Europe/Paris)
-    df["hour_local"] = _to_local_hour(df["hour_utc"])
-    df["hour"] = df["hour_local"].dt.hour
-    df["dow"] = df["hour_local"].dt.dayofweek  # 0=Lundi
-    df["week"] = df["hour_local"].dt.isocalendar().week.astype(int)
-    df["month"] = df["hour_local"].dt.month
-    df["is_weekend"] = (df["dow"] >= 5).astype(int)
-
-    fr_holidays = holidays.country_holidays("FR")
-    df["date_local"] = df["hour_local"].dt.date
-    df["is_holiday_fr"] = df["date_local"].map(lambda d: int(d in fr_holidays))
-
-    # Fourier heure/jour (saisonnalité douce)
-    def fourier(col, period, K=2):
-        col = col.astype(float)
-        out = {}
-        for k in range(1, K+1):
-            out[f"{period}_sin{k}"] = np.sin(2*np.pi*k*col/period)
-            out[f"{period}_cos{k}"] = np.cos(2*np.pi*k*col/period)
-        return pd.DataFrame(out)
-
-    df = pd.concat([df, fourier(df["hour"], 24, K=2), fourier(df["dow"], 7, K=2)], axis=1)
-
-    # ===== Lags & rollings (par station)
-    df = df.sort_values(["stationcode", "hour_utc"]).reset_index(drop=True)
-    for col in ["nb_velos_hour", "occ_ratio_hour"]:
-        for lag in [1, 2, 24]:
-            df[f"{col}_lag{lag}"] = df.groupby("stationcode")[col].shift(lag)
-        for w in [3, 6, 24]:
-            df[f"{col}_roll{w}"] = (
-                df.groupby("stationcode")[col].rolling(w, min_periods=1).mean().reset_index(level=0, drop=True)
-            )
-
-    # ===== Target: y_nb (t + horizon)
+    # Y = nb vélos à T+h
+    df = df.sort_values(["stationcode","hour_utc"])
     df["y_nb"] = df.groupby("stationcode")["nb_velos_hour"].shift(-horizon_hours)
 
-    # ===== Sélection des features
-    # colonnes à ne jamais utiliser comme features brutes
-    never = {
-        "hour_local", "date_local", "y_nb", "name"  # <- name exclu ici
+    # time features locales
+    df["hour_local"] = _to_local_hour(df["hour_utc"])
+    dt = df["hour_local"]
+    df["hour"] = dt.dt.hour.astype("int16")
+    df["dow"] = dt.dt.dayofweek.astype("int16")
+    df["is_weekend"] = df["dow"].isin([5,6]).astype("int8")
+    df["month"] = dt.dt.month.astype("int16")
+
+    # météos placeholders si absentes
+    for c in ["temp_C","precip_mm","wind_mps"]:
+        if c not in df.columns:
+            df[c] = 0.0
+
+    # features finales (numériques only)
+    feat_cols = [
+        "nb_velos_hour","nb_bornes_hour","capacity_hour","occ_ratio_hour",
+        "temp_C","precip_mm","wind_mps",
+        "hour","dow","is_weekend","month",
+    ]
+    df = df.dropna(subset=["y_nb"])
+    return df, feat_cols
+
+def prepare_live_features(df_live: pd.DataFrame, feat_cols: list[str]) -> pd.DataFrame:
+    """
+    Aligne / reconstruit les features live pour coller à feat_cols du modèle.
+    df_live attendu (au minimum):
+      stationcode, name, lat, lon, capacity, numbikesavailable, numdocksavailable, fetched_at_utc
+    """
+    df = df_live.copy()
+
+    # Robustesse: types numériques de base
+    for c in ["capacity","numbikesavailable","numdocksavailable","lat","lon"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Heure locale à partir de fetched_at_utc
+    ts = df.get("fetched_at_utc")
+    if ts is None:
+        ts = pd.Timestamp.utcnow()
+    df["_hour_local"] = _to_local_hour(ts)
+
+    # Reconstructions "live-friendly"
+    cap = pd.to_numeric(df.get("capacity"), errors="coerce").fillna(0.0)
+    nb  = pd.to_numeric(df.get("numbikesavailable"), errors="coerce").fillna(0.0)
+    docks = pd.to_numeric(df.get("numdocksavailable"), errors="coerce").fillna(0.0)
+
+    # Proxies raisonnables pour features d’agrégat horaire
+    proxy = {
+        "nb_velos_hour": nb.astype(float),
+        "nb_bornes_hour": docks.astype(float),
+        "capacity_hour": cap.astype(float),
+        "occ_ratio_hour": np.where(cap>0, (nb/cap).astype(float), 0.0),
+        "bikes_avg": nb.astype(float),     # si le modèle en attend
+        "docks_avg": docks.astype(float),  # si le modèle en attend
+        "temp_C": 0.0,
+        "precip_mm": 0.0,
+        "wind_mps": 0.0,
     }
-    # point de départ : tout
-    cand = [c for c in df.columns if c not in never]
 
-    # on enlève explicitement les objets texte (sauf stationcode qui sera catégorielle)
-    obj_cols = [c for c in cand if df[c].dtype == "object" and c != "stationcode"]
-    cand = [c for c in cand if c not in obj_cols]
+    # Time features
+    dt = df["_hour_local"]
+    df["hour"] = dt.dt.hour.astype("int16")
+    df["dow"] = dt.dt.dayofweek.astype("int16")
+    df["is_weekend"] = df["dow"].isin([5,6]).astype("int8")
+    df["month"] = dt.dt.month.astype("int16")
 
-    # on garde éventuellement 'stationcode' (catégorie) + colonnes numériques/bool
-    feat_cols = []
-    for c in cand:
-        if c == "stationcode":
-            feat_cols.append(c)
+    # Assemble X dans l’ordre des features attendues
+    X = pd.DataFrame(index=df.index)
+    for col in feat_cols:
+        if col in df.columns:
+            X[col] = pd.to_numeric(df[col], errors="coerce")
+        elif col in proxy:
+            # valeur scalaire → broadcast ; Series → alignement
+            val = proxy[col]
+            if isinstance(val, (int, float, np.floating, np.integer)):
+                X[col] = float(val)
+            else:
+                X[col] = pd.to_numeric(val, errors="coerce")
         else:
-            if pd.api.types.is_numeric_dtype(df[c]) or pd.api.types.is_bool_dtype(df[c]):
-                feat_cols.append(c)
+            # inconnue du live → 0.0
+            X[col] = 0.0
 
-    # drop lignes sans cible ou sans lags essentiels
-    df = df.dropna(subset=["y_nb", "nb_velos_hour_lag1", "occ_ratio_hour_lag1"]).reset_index(drop=True)
-    return df, feat_cols
+    # Remplissages finaux & dtypes
+    X = X.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    for c in X.columns:
+        # on force en float pour LGBM num-only (use_cats=False)
+        X[c] = pd.to_numeric(X[c], errors="coerce").fillna(0.0).astype("float32")
 
-    # Nettoyage
-    feat_cols = [c for c in df.columns if c not in {
-        "hour_local","date_local","y_nb"
-    }]
-    # drop lignes sans target ou features essentielles
-    df = df.dropna(subset=["y_nb", "nb_velos_hour_lag1", "occ_ratio_hour_lag1"]).reset_index(drop=True)
-    return df, feat_cols
+    return X
