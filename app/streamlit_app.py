@@ -166,13 +166,6 @@ def capture_user_location():
     )
 
 
-# --- Bouton (remplace ton bloc existant) ---
-col_pos, _ = st.columns([1, 5], gap="small")
-with col_pos:
-    if st.button("📍 Ma position", key="btn_loc"):
-        capture_user_location()
-
-
 def find_nearest_station(
     df: pd.DataFrame,
     user_lat: float,
