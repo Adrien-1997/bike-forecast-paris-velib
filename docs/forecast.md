@@ -1,42 +1,46 @@
 # Prévisions
 
-*Dernière heure considérée : **13/09 00h** (Europe/Paris)*
+*Dernière heure considérée : **13/09 01h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
 | Station                                       |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:----------------------------------------------|----------------------:|:-------------|:----------------|
-| Grande Armée - Brunel (`17038`)               |                     0 | 0.0%         | 13/09 00h       |
-| Porte de Saint-Ouen - Henri Huchard (`17124`) |                     0 | 0.0%         | 13/09 00h       |
-| Square Louise Michel (`18006`)                |                     0 | 0.0%         | 13/09 00h       |
-| Commandant Schloesing - Pétrarque (`16202`)   |                     0 | 0.0%         | 13/09 00h       |
-| Sablons - Georges Mandel (`16108`)            |                     0 | 0.0%         | 13/09 00h       |
-| Champs-Elysees - Bassano (`8116`)             |                     0 | 0.0%         | 13/09 00h       |
-| Hoche - Tilsitt (`8057`)                      |                     0 | 0.0%         | 13/09 00h       |
-| Porte de Ménilmontant (`20027`)               |                     0 | 0.0%         | 13/09 00h       |
-| Porte de la Muette (`16019`)                  |                     0 | 0.0%         | 13/09 00h       |
-| Marché d'Auteuil (`16033`)                    |                     0 | 0.0%         | 13/09 00h       |
+| Batignolles - Rome (`8051`)                   |                     0 | 0.0%         | 13/09 01h       |
+| Lepic - Armée d'Orient (`18113`)              |                     0 | 0.0%         | 13/09 01h       |
+| Porte de Saint-Ouen - Henri Huchard (`17124`) |                     0 | 0.0%         | 13/09 01h       |
+| Square Louise Michel (`18006`)                |                     0 | 0.0%         | 13/09 01h       |
+| Octave Feuillet - Albéric Magnard (`16110`)   |                     0 | 0.0%         | 13/09 01h       |
+| Champs-Elysees - Bassano (`8116`)             |                     0 | 0.0%         | 13/09 01h       |
+| Hoche - Tilsitt (`8057`)                      |                     0 | 0.0%         | 13/09 01h       |
+| Commandant Schloesing - Pétrarque (`16202`)   |                     0 | 0.0%         | 13/09 01h       |
+| Bienfaisance - Place de Narvik (`8035`)       |                     0 | 0.0%         | 13/09 01h       |
+| Place des Fêtes - Solitaires (`19210`)        |                     0 | 0.0%         | 13/09 01h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
 | Station                                            |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:---------------------------------------------------|----------------------:|:-------------|:----------------|
-| BNF - Bibliothèque Nationale de France (`13123`)   |                    59 | 140.5%       | 13/09 00h       |
-| Bercy - Villot (`12105`)                           |                    38 | 115.2%       | 13/09 00h       |
-| Westermeyer - Paul Vaillant-Couturier (`42004`)    |                    28 | 112.0%       | 13/09 00h       |
-| Aristide Briand - Place de la Résistance (`21302`) |                    27 | 108.0%       | 13/09 00h       |
-| Paul Doumer - Stalingrad (`41101`)                 |                    24 | 100.0%       | 13/09 00h       |
-| Argenteuil - Voltaire (`26003`)                    |                    16 | 100.0%       | 13/09 00h       |
-| Aboukir - Alexandrie (`2016`)                      |                    21 | 100.0%       | 13/09 00h       |
-| Dominique Pado - Croix Nivert (`15050`)            |                    22 | 100.0%       | 13/09 00h       |
-| Daumesnil - Picpus (`12010`)                       |                    21 | 100.0%       | 13/09 00h       |
-| Gare d'Austerlitz - Quai Saint-Bernard (`13104`)   |                    27 | 100.0%       | 13/09 00h       |
+| Aristide Briand - Place de la Résistance (`21302`) |                    32 | 128.0%       | 13/09 01h       |
+| Westermeyer - Paul Vaillant-Couturier (`42004`)    |                    31 | 124.0%       | 13/09 01h       |
+| Bercy - Villot (`12105`)                           |                    38 | 115.2%       | 13/09 01h       |
+| Daumesnil - Picpus (`12010`)                       |                    24 | 114.3%       | 13/09 01h       |
+| BNF - Bibliothèque Nationale de France (`13123`)   |                    43 | 102.4%       | 13/09 01h       |
+| Abbé Groult - Convention (`15039`)                 |                    12 | 100.0%       | 13/09 01h       |
+| Place du 17 Octobre (`22306`)                      |                    20 | 100.0%       | 13/09 01h       |
+| Paul Vaillant-Couturier - Gare RER (`44002`)       |                    26 | 100.0%       | 13/09 01h       |
+| Keller - La Roquette (`11003`)                     |                    33 | 97.1%        | 13/09 01h       |
+| Châteaudun - Place de la Liberté (`22507`)         |                    25 | 96.2%        | 13/09 01h       |
 
 ## Détails par station (graphiques)
 
-???+ info "Grande Armée - Brunel (17038)"
+???+ info "Batignolles - Rome (8051)"
 
-    ![Grande Armée - Brunel (17038)](assets/figs/obs_pred_17038_T+1h_compact.png)
+    ![Batignolles - Rome (8051)](assets/figs/obs_pred_8051_T+1h_compact.png)
+
+???+ info "Lepic - Armée d'Orient (18113)"
+
+    ![Lepic - Armée d'Orient (18113)](assets/figs/obs_pred_18113_T+1h_compact.png)
 
 ???+ info "Porte de Saint-Ouen - Henri Huchard (17124)"
 
@@ -46,13 +50,9 @@
 
     ![Square Louise Michel (18006)](assets/figs/obs_pred_18006_T+1h_compact.png)
 
-???+ info "Commandant Schloesing - Pétrarque (16202)"
+???+ info "Octave Feuillet - Albéric Magnard (16110)"
 
-    ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
-
-???+ info "Sablons - Georges Mandel (16108)"
-
-    ![Sablons - Georges Mandel (16108)](assets/figs/obs_pred_16108_T+1h_compact.png)
+    ![Octave Feuillet - Albéric Magnard (16110)](assets/figs/obs_pred_16110_T+1h_compact.png)
 
 ???+ info "Champs-Elysees - Bassano (8116)"
 
@@ -62,15 +62,15 @@
 
     ![Hoche - Tilsitt (8057)](assets/figs/obs_pred_8057_T+1h_compact.png)
 
-???+ info "Porte de Ménilmontant (20027)"
+???+ info "Commandant Schloesing - Pétrarque (16202)"
 
-    ![Porte de Ménilmontant (20027)](assets/figs/obs_pred_20027_T+1h_compact.png)
+    ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
 
-???+ info "Porte de la Muette (16019)"
+???+ info "Bienfaisance - Place de Narvik (8035)"
 
-    ![Porte de la Muette (16019)](assets/figs/obs_pred_16019_T+1h_compact.png)
+    ![Bienfaisance - Place de Narvik (8035)](assets/figs/obs_pred_8035_T+1h_compact.png)
 
-???+ info "Marché d'Auteuil (16033)"
+???+ info "Place des Fêtes - Solitaires (19210)"
 
-    ![Marché d'Auteuil (16033)](assets/figs/obs_pred_16033_T+1h_compact.png)
+    ![Place des Fêtes - Solitaires (19210)](assets/figs/obs_pred_19210_T+1h_compact.png)
 
