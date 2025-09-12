@@ -582,26 +582,62 @@ if PAGE == "Carte":
             lon_s = f"{float(target['lon']):.6f}"
             coords = f"{lat_s}, {lon_s}"
 
-            # Bouton Streamlit désactivé (sert juste de style visuel, prend la bonne largeur/hauteur)
-            st.button("Copier les coordonnées", type="primary", disabled=True, key="btn_copy_placeholder")
-
-            # On injecte le vrai bouton HTML par-dessus (même texte, même place)
             st.markdown(
                 f"""
-                <script>
-                const btn = window.parent.document.querySelector('button[data-testid="stBaseButton-secondary"][disabled]');
-                if (btn) {{
-                    btn.removeAttribute('disabled');
-                    btn.onclick = function() {{
-                        navigator.clipboard.writeText('{coords}');
-                        alert("📋 Coordonnées copiées : {coords}");
-                    }};
-                }}
-                </script>
-                """,
-                unsafe_allow_html=True
-            )
+                <div class="copy-wrap">
+                <button id="copy-btn" class="btn-primary-copy">Copier les coordonnées</button>
+                <span id="copy-done" class="copy-done">Copié ✓</span>
+                </div>
 
+                <script>
+                (function() {{
+                const btn = document.getElementById('copy-btn');
+                const done = document.getElementById('copy-done');
+                const text = "{coords}";
+
+                async function doCopy() {{
+                    try {{
+                    if (navigator.clipboard && window.isSecureContext) {{
+                        await navigator.clipboard.writeText(text);
+                    }} else {{
+                        // Fallback mobile/old browsers
+                        const ta = document.createElement('textarea');
+                        ta.value = text;
+                        ta.style.position = 'fixed';
+                        ta.style.left = '-9999px';
+                        document.body.appendChild(ta);
+                        ta.focus(); ta.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(ta);
+                    }}
+                    done.style.display = 'inline';
+                    setTimeout(() => (done.style.display = 'none'), 1500);
+                    }} catch (e) {{
+                    console.error(e);
+                    alert('Impossible de copier. Voici le texte:\\n' + text);
+                    }}
+                }}
+
+                if (btn) btn.addEventListener('click', doCopy);
+                }})();
+                </script>
+
+                <style>
+                .btn-primary-copy {{
+                    background:#2563eb; color:#fff; border:none; border-radius:.55rem;
+                    padding:.6rem 1rem; font-weight:600; cursor:pointer;
+                    box-shadow:0 1px 2px rgba(0,0,0,.05);
+                }}
+                .btn-primary-copy:hover {{ filter: brightness(.96); }}
+                @media (prefers-color-scheme: dark) {{
+                    .btn-primary-copy {{ background:#3b82f6; }}
+                }}
+                .copy-wrap {{ margin:.35rem 0 .1rem 0; }}
+                .copy-done {{ margin-left:.5rem; font-size:.90rem; color: var(--text-muted, #6b7280); display:none; }}
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
 
     # Carte
     center = st.session_state.get("map_center", (48.8566, 2.3522))
