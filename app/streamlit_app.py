@@ -572,72 +572,16 @@ if PAGE == "Carte":
                 f"✅ Station la plus proche : {target['name']} "
                 f"(#{target['stationcode']}) à ~{int(target['dist_m'])} m"
             )
+
+            lat_s = f"{float(target['lat']):.6f}"
+            lon_s = f"{float(target['lon']):.6f}"
+            st.info(f"📍 Coordonnées : {lat_s}, {lon_s}")
+
+
             # mémoriser & zoomer centré
             st.session_state["map_highlight"] = str(target["stationcode"])
             st.session_state["map_center"] = (float(target["lat"]), float(target["lon"]))
             st.session_state["map_zoom"] = 17  # ⟵ zoom moins fort mais centré
-
-            # --- Bouton "Copier les coordonnées" look primaire, sans rerun ---
-            lat_s = f"{float(target['lat']):.6f}"
-            lon_s = f"{float(target['lon']):.6f}"
-            coords = f"{lat_s}, {lon_s}"
-
-            st.markdown(
-                f"""
-                <div class="copy-wrap">
-                <button id="copy-btn" class="btn-primary-copy">Copier les coordonnées</button>
-                <span id="copy-done" class="copy-done">Copié ✓</span>
-                </div>
-
-                <script>
-                (function() {{
-                const btn = document.getElementById('copy-btn');
-                const done = document.getElementById('copy-done');
-                const text = "{coords}";
-
-                async function doCopy() {{
-                    try {{
-                    if (navigator.clipboard && window.isSecureContext) {{
-                        await navigator.clipboard.writeText(text);
-                    }} else {{
-                        // Fallback mobile/old browsers
-                        const ta = document.createElement('textarea');
-                        ta.value = text;
-                        ta.style.position = 'fixed';
-                        ta.style.left = '-9999px';
-                        document.body.appendChild(ta);
-                        ta.focus(); ta.select();
-                        document.execCommand('copy');
-                        document.body.removeChild(ta);
-                    }}
-                    done.style.display = 'inline';
-                    setTimeout(() => (done.style.display = 'none'), 1500);
-                    }} catch (e) {{
-                    console.error(e);
-                    alert('Impossible de copier. Voici le texte:\\n' + text);
-                    }}
-                }}
-
-                if (btn) btn.addEventListener('click', doCopy);
-                }})();
-                </script>
-
-                <style>
-                .btn-primary-copy {{
-                    background:#2563eb; color:#fff; border:none; border-radius:.55rem;
-                    padding:.6rem 1rem; font-weight:600; cursor:pointer;
-                    box-shadow:0 1px 2px rgba(0,0,0,.05);
-                }}
-                .btn-primary-copy:hover {{ filter: brightness(.96); }}
-                @media (prefers-color-scheme: dark) {{
-                    .btn-primary-copy {{ background:#3b82f6; }}
-                }}
-                .copy-wrap {{ margin:.35rem 0 .1rem 0; }}
-                .copy-done {{ margin-left:.5rem; font-size:.90rem; color: var(--text-muted, #6b7280); display:none; }}
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
 
     # Carte
     center = st.session_state.get("map_center", (48.8566, 2.3522))
