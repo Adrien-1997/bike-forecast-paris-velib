@@ -31,7 +31,17 @@ from src.forecast import load_model_bundle      # charge (model, features) depui
 # --- helpers proximité / géocodage ------------------------------------------
 
 
-from streamlit.components.v1 import html as st_html
+# --- Géoloc : garde seulement des positions plausibles ---
+def _in_france(lat: float, lon: float) -> bool:
+    # approx. métropole
+    return (41.0 <= lat <= 51.5) and (-5.5 <= lon <= 9.8)
+
+def _in_idf(lat: float, lon: float) -> bool:
+    # gros rectangle Île-de-France pour recentrer confortablement
+    return (48.0 <= lat <= 49.2) and (1.5 <= lon <= 3.8)
+
+
+
 
 def _geoloc_html_fallback(timeout_ms: int = 6000):
     """Fallback HTML5 : renvoie (lat, lon, acc) ou None."""
@@ -88,82 +98,48 @@ def get_browser_geolocation(timeout_ms: int = 6000):
 # --- capture robuste + diagnostics ---
 
 def capture_user_location():
-    """
-    Essaie d'abord la géoloc navigateur (ancienne signature),
-    sinon bascule sur une géoloc IP (approx.) pour éviter de bloquer l'UX.
-    Met à jour: user_loc, user_acc, map_center/zoom.
-    """
-    diag = {"step": [], "errors": []}
-    def log(m): diag["step"].append(m)
-    def fail(msg):
-        if DEBUG:
-            with st.expander("🔎 Debug géoloc — échec", expanded=True):
-                st.json({"diag": diag})
-                st.warning(msg)
-        else:
-            st.error(msg)
-
-    raw = None
-    # 1) Tentative: ancienne signature de streamlit_js_eval
-    try:
-        log("get_geolocation() legacy call")
-        raw = get_geolocation()        # aucune option, car ta version ne les accepte pas
-        log(f"retour: {bool(raw)}")
-    except Exception as e:
-        diag["errors"].append(f"{type(e).__name__}: {e}")
-
-    # 2) Normalisation de la forme
-    c = raw.get("coords", raw) if raw else None
-    lat = (c or {}).get("latitude")
-    lon = (c or {}).get("longitude")
-    acc = (c or {}).get("accuracy", 20.0)
-
-    if lat is not None and lon is not None:
-        lat, lon = float(lat), float(lon)
-        try: acc = float(acc)
-        except Exception: acc = 20.0
-        st.session_state["user_loc"] = (lat, lon)
-        st.session_state["user_acc"] = acc
-        st.session_state["map_center"] = (lat, lon)
-        st.session_state["map_zoom"] = 17
-        st.session_state["map_highlight"] = None
-        st.toast(f"✅ Position captée (~{int(acc)} m)")
-        if DEBUG:
-            with st.expander("🔎 Debug géoloc — succès", expanded=False):
-                st.json({"raw": raw, "lat": lat, "lon": lon, "accuracy": acc, "diag": diag})
-        st.rerun()
+    """Demande la position au navigateur et la stocke dans la session, mais rejette les positions douteuses (IP/US)."""
+    if get_geolocation is None:
+        st.warning("La géolocalisation navigateur n'est pas disponible.")
         return
 
-    # 3) Fallback IP (approx. ~1–10 km) si la géoloc navigateur échoue
-    try:
-        log("fallback: IP geolocation via ipapi.co/json")
-        r = requests.get("https://ipapi.co/json", timeout=4)
-        if r.ok:
-            js = r.json()
-            lat = float(js.get("latitude"))
-            lon = float(js.get("longitude"))
-            if lat and lon:
-                # précision inconnue -> on met large (1500 m) pour l'affichage
-                st.session_state["user_loc"] = (lat, lon)
-                st.session_state["user_acc"] = 1500.0
-                st.session_state["map_center"] = (lat, lon)
-                st.session_state["map_zoom"] = 12
-                st.session_state["map_highlight"] = None
-                st.info("ℹ️ Géolocalisation approximative par IP (autorise la localisation navigateur pour plus de précision).")
-                if DEBUG:
-                    with st.expander("🔎 Debug géoloc — fallback IP", expanded=False):
-                        st.json({"ipapi": js, "diag": diag})
-                st.rerun()
-                return
-        log("ipapi.co indisponible")
-    except Exception as e:
-        diag["errors"].append(f"IP fallback: {type(e).__name__}: {e}")
+    loc = get_geolocation()
+    if not loc:
+        st.error("Impossible d’obtenir votre position (aucune donnée renvoyée).")
+        return
 
-    # 4) Si tout échoue
-    fail(
-        "Impossible d’obtenir la position. Vérifie : HTTPS, pas d’iframe bloquante,"
-        " et autorise la Localisation pour ce site (icône cadenas du navigateur)."
-    )
+    c   = loc.get("coords", loc)
+    lat = c.get("latitude")
+    lon = c.get("longitude")
+    acc = float(c.get("accuracy") or 999999)  # m
+
+    if lat is None or lon is None:
+        st.error("Position renvoyée sans latitude/longitude.")
+        return
+
+    lat = float(lat); lon = float(lon)
+
+    # 1) coupe les positions manifestement IP (ex: centre USA) ou hors métropole
+    if not _in_france(lat, lon):
+        st.warning(f"Position hors France détectée ({lat:.4f}, {lon:.4f}) – ignorée.")
+        return
+
+    # 2) filtre la précision trop mauvaise (ex: > 50 km ⇒ souvent IP)
+    if acc > 50000:
+        st.warning(f"Position trop imprécise (~{int(acc)} m) – ignorée. Désactive VPN / active GPS.")
+        return
+
+    st.session_state["user_loc"] = (lat, lon)
+    st.session_state["user_acc"] = acc
+    st.toast(f"✅ Position captée : {lat:.5f}, {lon:.5f} (±{int(acc)} m)")
+
+    # Recentrage doux : si on est en IDF, zoom fort; sinon zoom standard France
+    if _in_idf(lat, lon):
+        st.session_state["map_center"] = (lat, lon)
+        st.session_state["map_zoom"] = 16
+    else:
+        st.session_state["map_center"] = (lat, lon)
+        st.session_state["map_zoom"] = 12
 
 
 def find_nearest_station(
@@ -841,14 +817,8 @@ if go:
 user_loc = st.session_state.get("user_loc")
 user_acc = st.session_state.get("user_acc")
 
-# --- Centrage carte (ordre de priorité : target > adresse choisie > position user > défaut Paris)
 center = st.session_state.get("map_center", (48.8566, 2.3522))
 zoom   = st.session_state.get("map_zoom", 12)
-
-if st.session_state.get("user_loc"):
-    # priorité à l'utilisateur (utile si on a cliqué "📍 Ma position")
-    center = st.session_state["user_loc"]
-    zoom   = max(16, zoom)
 
 m = build_map(
     df_map,
@@ -856,9 +826,10 @@ m = build_map(
     zoom=zoom,
     highlight_stationcode=str(target["stationcode"]) if ('target' in locals() and target) else None,
     open_popup=('target' in locals() and target),
-    user_location=st.session_state.get("user_loc"),
-    user_accuracy_m=st.session_state.get("user_acc"),
+    user_location=user_loc,
+    user_accuracy_m=user_acc,
 )
+
 
 
 
