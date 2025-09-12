@@ -7,14 +7,15 @@ from typing import Tuple, Optional
 import numpy as np
 import pandas as pd
 import requests
+import math
+import traceback, json, time
 import folium
-from folium.plugins import Search, MarkerCluster
-import math, requests
+from folium.plugins import Search
 
 import streamlit as st
 from streamlit.components.v1 import html as st_html
 from streamlit_js_eval import get_geolocation
-from streamlit_geolocation import streamlit_geolocation
+#from streamlit_geolocation import streamlit_geolocation
 # --- Repo paths
 ROOT = Path(__file__).resolve().parents[1]
 MODELS_DIR = ROOT / "models"
@@ -26,44 +27,151 @@ sys.path.insert(0, str(ROOT))
 from src.features import prepare_live_features  # aligne les features live -> artefact
 from src.forecast import load_model_bundle      # charge (model, features) depuis joblib
 
+
 # --- helpers proximité / géocodage ------------------------------------------
 
-def _haversine(lat1, lon1, lat2, lon2) -> float:
-    R = 6371000.0
-    φ1 = math.radians(lat1); φ2 = math.radians(lat2)
-    dφ = math.radians(lat2 - lat1); dλ = math.radians(lon2 - lon1)
-    a = (math.sin(dφ/2)*2) + math.cos(φ1)*math.cos(φ2)(math.sin(dλ/2)**2)
-    a = min(1.0, max(0.0, a))
-    return 2*R*math.asin(math.sqrt(a))
 
-def geocode_address(q: str) -> tuple[float, float] | None:
-    """Adresse → (lat, lon) via Nominatim."""
-    url = "https://nominatim.openstreetmap.org/search"
-    r = requests.get(url, params={"q": q, "format": "json", "limit": 1},
-                     headers={"User-Agent": "velib-app/1.0"})
-    r.raise_for_status()
-    items = r.json()
-    if not items:
+from streamlit.components.v1 import html as st_html
+
+def _geoloc_html_fallback(timeout_ms: int = 6000):
+    """Fallback HTML5 : renvoie (lat, lon, acc) ou None."""
+    code = f"""
+    <script>
+      const opts = {{ enableHighAccuracy: true, timeout: {timeout_ms}, maximumAge: 0 }};
+      function send(value) {{
+        window.parent.postMessage({{ isStreamlitMessage: true, type: "streamlit:setComponentValue", value }}, "*");
+      }}
+      navigator.geolocation.getCurrentPosition(
+        pos => {{
+          const c = pos.coords;
+          send({{ lat: c.latitude, lon: c.longitude, acc: c.accuracy }});
+        }},
+        err => {{
+          send({{ error: String(err.code) + ":" + err.message }});
+        }},
+        opts
+      );
+    </script>
+    """
+    val = st_html(code, height=0)
+    if val and isinstance(val, dict) and "lat" in val and "lon" in val:
+        return float(val["lat"]), float(val["lon"]), float(val.get("acc") or 20.0)
+    return None
+
+
+def get_browser_geolocation(timeout_ms: int = 6000):
+    """Retourne (lat, lon, acc) ou None. Tente JS, sinon None (pas d'HTML fallback ici)."""
+    try:
+        # versions récentes
+        loc = get_geolocation(enable_high_accuracy=True, timeout=timeout_ms)
+    except TypeError:
+        # anciennes signatures
+        try:
+            loc = get_geolocation()
+        except Exception:
+            loc = None
+    except Exception:
+        loc = None
+
+    if not loc:
         return None
-    return float(items[0]["lat"]), float(items[0]["lon"])
 
-# --- Géoloc navigateur (avec fallback) ---
-try:
-    from streamlit_geolocation import get_geolocation
-except Exception:
-    get_geolocation = None  # on gérera le fallback
+    # normaliser structure
+    c = loc.get("coords", loc)
+    lat = c.get("latitude")
+    lon = c.get("longitude")
+    acc = c.get("accuracy", 20.0)
+    if lat is None or lon is None:
+        return None
+    return float(lat), float(lon), float(acc)
+
+# --- capture robuste + diagnostics ---
 
 def capture_user_location():
-    """Demande la position au navigateur et la stocke dans la session."""
-    if get_geolocation is None:
-        st.warning("La géolocalisation navigateur n'est pas disponible. Installe streamlit-geolocation.")
+    """
+    Essaie d'abord la géoloc navigateur (ancienne signature),
+    sinon bascule sur une géoloc IP (approx.) pour éviter de bloquer l'UX.
+    Met à jour: user_loc, user_acc, map_center/zoom.
+    """
+    diag = {"step": [], "errors": []}
+    def log(m): diag["step"].append(m)
+    def fail(msg):
+        if DEBUG:
+            with st.expander("🔎 Debug géoloc — échec", expanded=True):
+                st.json({"diag": diag})
+                st.warning(msg)
+        else:
+            st.error(msg)
+
+    raw = None
+    # 1) Tentative: ancienne signature de streamlit_js_eval
+    try:
+        log("get_geolocation() legacy call")
+        raw = get_geolocation()        # aucune option, car ta version ne les accepte pas
+        log(f"retour: {bool(raw)}")
+    except Exception as e:
+        diag["errors"].append(f"{type(e).__name__}: {e}")
+
+    # 2) Normalisation de la forme
+    c = raw.get("coords", raw) if raw else None
+    lat = (c or {}).get("latitude")
+    lon = (c or {}).get("longitude")
+    acc = (c or {}).get("accuracy", 20.0)
+
+    if lat is not None and lon is not None:
+        lat, lon = float(lat), float(lon)
+        try: acc = float(acc)
+        except Exception: acc = 20.0
+        st.session_state["user_loc"] = (lat, lon)
+        st.session_state["user_acc"] = acc
+        st.session_state["map_center"] = (lat, lon)
+        st.session_state["map_zoom"] = 17
+        st.session_state["map_highlight"] = None
+        st.toast(f"✅ Position captée (~{int(acc)} m)")
+        if DEBUG:
+            with st.expander("🔎 Debug géoloc — succès", expanded=False):
+                st.json({"raw": raw, "lat": lat, "lon": lon, "accuracy": acc, "diag": diag})
+        st.rerun()
         return
-    loc = get_geolocation()  # pas d'arguments, et pas de timeout
-    if loc and loc.get("latitude") is not None and loc.get("longitude") is not None:
-        st.session_state["user_loc"] = (float(loc["latitude"]), float(loc["longitude"]))
-        st.toast("✅ Position captée")
-    else:
-        st.info("Autorisez la géolocalisation dans votre navigateur.")
+
+    # 3) Fallback IP (approx. ~1–10 km) si la géoloc navigateur échoue
+    try:
+        log("fallback: IP geolocation via ipapi.co/json")
+        r = requests.get("https://ipapi.co/json", timeout=4)
+        if r.ok:
+            js = r.json()
+            lat = float(js.get("latitude"))
+            lon = float(js.get("longitude"))
+            if lat and lon:
+                # précision inconnue -> on met large (1500 m) pour l'affichage
+                st.session_state["user_loc"] = (lat, lon)
+                st.session_state["user_acc"] = 1500.0
+                st.session_state["map_center"] = (lat, lon)
+                st.session_state["map_zoom"] = 12
+                st.session_state["map_highlight"] = None
+                st.info("ℹ️ Géolocalisation approximative par IP (autorise la localisation navigateur pour plus de précision).")
+                if DEBUG:
+                    with st.expander("🔎 Debug géoloc — fallback IP", expanded=False):
+                        st.json({"ipapi": js, "diag": diag})
+                st.rerun()
+                return
+        log("ipapi.co indisponible")
+    except Exception as e:
+        diag["errors"].append(f"IP fallback: {type(e).__name__}: {e}")
+
+    # 4) Si tout échoue
+    fail(
+        "Impossible d’obtenir la position. Vérifie : HTTPS, pas d’iframe bloquante,"
+        " et autorise la Localisation pour ce site (icône cadenas du navigateur)."
+    )
+
+
+# --- Bouton (remplace ton bloc existant) ---
+col_pos, _ = st.columns([1, 5], gap="small")
+with col_pos:
+    if st.button("📍 Ma position", key="btn_loc"):
+        capture_user_location()
+
 
 def find_nearest_station(
     df: pd.DataFrame,
@@ -76,8 +184,10 @@ def find_nearest_station(
         return None
 
     dff = df.copy()
+    # colonnes numériques propres
     dff["lat"] = pd.to_numeric(dff["lat"], errors="coerce")
     dff["lon"] = pd.to_numeric(dff["lon"], errors="coerce")
+    dff["capacity"] = pd.to_numeric(dff.get("capacity"), errors="coerce").fillna(0).astype(int)
     dff["numbikesavailable"] = pd.to_numeric(dff.get("numbikesavailable"), errors="coerce").fillna(0).astype(int)
     if "y_nb_pred" in dff.columns:
         dff["y_nb_pred"] = pd.to_numeric(dff["y_nb_pred"], errors="coerce").fillna(0).astype(int)
@@ -85,37 +195,36 @@ def find_nearest_station(
     if dff.empty:
         return None
 
-    # Pick the quantity column
+    # colonne quantité (actuel ou prévision)
     qty_col = "y_nb_pred" if (use_prediction and "y_nb_pred" in dff.columns) else "numbikesavailable"
 
-    # Vectorized distances (correct haversine)
-    lat2 = dff["lat"].to_numpy(float)
-    lon2 = dff["lon"].to_numpy(float)
-
+    # distances (haversine vectorisée)
     R  = 6371000.0
     φ1 = np.radians(float(user_lat))
-    φ2 = np.radians(lat2)
-    dφ = np.radians(lat2 - float(user_lat))
-    dλ = np.radians(lon2 - float(user_lon))
+    φ2 = np.radians(dff["lat"].to_numpy(float))
+    dφ = np.radians(dff["lat"].to_numpy(float) - float(user_lat))
+    dλ = np.radians(dff["lon"].to_numpy(float) - float(user_lon))
+    a  = (np.sin(dφ/2.0)**2) + np.cos(φ1) * np.cos(φ2) * (np.sin(dλ/2.0)**2)
+    a  = np.clip(a, 0.0, 1.0)
+    dff["dist_m"] = 2.0 * R * np.arcsin(np.sqrt(a))
 
-    a = (np.sin(dφ / 2.0) * 2.0) + np.cos(φ1) * np.cos(φ2) * (np.sin(dλ / 2.0) * 2.0)
-    a = np.clip(a, 0.0, 1.0)  # numeric safety
-    dist = 2.0 * R * np.arcsin(np.sqrt(a))
-    dff["dist_m"] = dist
-
-    # Progressive radii, then global fallback
-    for radius in (300, 600, 900, 1500):
+    # 1) rayon progressif + filtre min_bikes strict
+    for radius in (250, 500, 800, 1200, 2000):
         cand = dff[(dff[qty_col] >= int(min_bikes)) & (dff["dist_m"] <= radius)].copy()
         if not cand.empty:
-            # rank by distance THEN by more bikes
             cand.sort_values(["dist_m", qty_col], ascending=[True, False], inplace=True)
             return cand.iloc[0].to_dict()
 
-    # Last resort: best tradeoff score everywhere
-    # score = distance(m) - 25 * bikes (i.e., 25 m “bonus” per available bike)
-    score = dff["dist_m"] - 25.0 * dff[qty_col]
-    idx = int(np.argmin(score))
-    return dff.iloc[idx].to_dict()
+    # 2) si rien : on relâche progressivement min_bikes (jusqu’à 1)
+    for v in range(int(min_bikes) - 1, 0, -1):
+        cand = dff[dff[qty_col] >= v].copy()
+        if not cand.empty:
+            cand.sort_values(["dist_m", qty_col], ascending=[True, False], inplace=True)
+            return cand.iloc[0].to_dict()
+
+    # 3) dernier recours : score distance - poids*vélo
+    score = dff["dist_m"] - 30.0 * dff[qty_col]  # 30 m “bonus” par vélo
+    return dff.iloc[int(np.argmin(score))].to_dict()
 
 # ---------- UI CONFIG ----------
 st.set_page_config(
@@ -124,49 +233,98 @@ st.set_page_config(
     layout="wide",
 )
 
+# --- DEBUG switch (visible UI) ---
+DEBUG = st.toggle("Mode debug", value=False, help="Affiche les diagnostics détaillés")
+
+if DEBUG:
+    st.markdown("##### Contexte navigateur")
+    st_html("""
+    <div id="probe" style="font:13px system-ui"></div>
+    <script>
+      (function(){
+        const secure = window.isSecureContext;
+        const inIframe = (function(){ try{ return window.self !== window.top; }catch(e){ return true; }})();
+        const proto = window.location.protocol;
+        const host = window.location.host;
+        const msg = [
+          "Protocol: " + proto,
+          "Host: " + host,
+          "Secure context: " + secure,
+          "In iframe: " + inIframe
+        ].join("<br>");
+        document.getElementById("probe").innerHTML = msg;
+      })();
+    </script>
+    """, height=0)
+
+
+# --- Session defaults pour la carte ---
+if "map_center" not in st.session_state:
+    st.session_state["map_center"] = (48.8566, 2.3522)
+if "map_zoom" not in st.session_state:
+    st.session_state["map_zoom"] = 15
+if "map_highlight" not in st.session_state:
+    st.session_state["map_highlight"] = None
+
+# --- Session defaults (évite KeyError) ---
+if "user_loc" not in st.session_state:
+    st.session_state["user_loc"] = None
+if "user_acc" not in st.session_state:
+    st.session_state["user_acc"] = None
+
+# --- Derivés position utilisateur ---
+_uloc = st.session_state.get("user_loc")
+_uacc = st.session_state.get("user_acc")
+have_user = bool(_uloc)
+if have_user:
+    u_lat, u_lon = _uloc
+
+
 # --- UI tweaks (CSS) ---
 
-
 st.markdown("""
 <style>
-/* ---------- Layout global ---------- */
-.block-container {padding-top: 2rem; padding-bottom: .75rem; max-width: 1300px;}
-h1, h2, h3 {letter-spacing:.2px;}
+/* Conteneur + titres */
+.block-container {padding-top: 1.2rem; padding-bottom: .75rem; max-width: 1300px;}
+h1, h2, h3 {letter-spacing:.2px; margin-top: .2rem;}
 
-/* ---------- KPI cards ---------- */
-.kpi-row {margin-bottom: .6rem;}
-.kpi-card{
-  background:#fff; border:1px solid #e7e7e7; border-radius:10px;
-  padding:.75rem 1rem; text-align:center;
-}
-.kpi-title{color:#6b7280; font-size:.80rem; margin-bottom:.25rem;}
-.kpi-value{font-size:1.25rem; font-weight:700;}
+/* KPI cards */
+.kpi-row {margin-bottom:.6rem;}
+.kpi-card{background:#fff;border:1px solid #e7e7e7;border-radius:10px;padding:.75rem 1rem;text-align:center;}
+.kpi-title{color:#6b7280;font-size:.80rem;margin-bottom:.25rem;}
+.kpi-value{font-size:1.25rem;font-weight:700;}
 
-/* ---------- Ligne de contrôles (alignée et centrée) ---------- */
+/* Ligne de contrôles alignée sur la grille KPI */
 .controls-row { margin:.25rem 0 1rem 0; }
-.controls-row [data-testid="column"],
-[data-testid="column"]{           /* colonnes streamlit : centrage H/V */
-  display:flex; align-items:center; justify-content:center;
-}
-.controls-row label{ margin-bottom:.25rem; }
+.controls-row [data-testid="column"]{ display:flex; align-items:center; justify-content:center; gap:.5rem; }
+.controls-row label { margin-bottom:0; }
 
 /* Tailles homogènes */
-.stButton > button{ height:46px !important; padding:0 .9rem; border-radius:.55rem; }
-.stNumberInput input{ height:46px !important; text-align:center; width:80px !important; }
-.stNumberInput div[data-baseweb="input"]{ min-height:46px; }
+.stButton > button{ height:42px !important; padding:0 .9rem; border-radius:.55rem; }
+.stNumberInput input{ height:42px !important; text-align:center; width:88px !important; }
+.stNumberInput div[data-baseweb="input"]{ min-height:42px; }
 .stToggle{ transform:scale(1.0); }
 
-/* ---------- Nettoyage styles anciens ---------- */
-div.toolbar{ display:none !important; }   /* ancienne barre si encore présente */
+/* Badges “Source / Heure / Horizon” */
+.badges { display:flex; flex-wrap:wrap; gap:.5rem; margin:.25rem 0 0 0; }
+.badge { display:inline-block; padding:.25rem .6rem; border-radius:999px; font-size:.80rem;
+         border:1px solid #e5e7eb; background:#f9fafb; color:#374151; }
+
+/* Carte : légende discrète */
+.leaflet-control { font-size: 12px; }
 </style>
 """, unsafe_allow_html=True)
-
 
 st.markdown("""
 <style>
-.stToggle label { white-space: nowrap; margin-left: 6px; font-size: 0.9rem; vertical-align: middle; }
+button[kind="secondaryFormSubmit"], button[kind="secondary"] {
+  border-radius: 999px !important;
+  padding: .25rem .6rem !important;
+  font-size: .85rem !important;
+}
 </style>
 """, unsafe_allow_html=True)
+
 
 TITLE = "🚲 Prévisions Vélib’ Paris"
 SUBTITLE = "Cartographie temps réel + prévisions ML (T+1h/T+3h/T+6h)"
@@ -196,6 +354,32 @@ def geocode_address(query: str) -> tuple[float, float] | None:
         return float(js[0]["lat"]), float(js[0]["lon"])
     except Exception:
         return None
+    
+@st.cache_data(ttl=30)
+def autocomplete_nominatim(q: str, limit: int = 6) -> list[dict]:
+    q = (q or "").strip()
+    if len(q) < 3:
+        return []
+    try:
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": q, "format": "json", "addressdetails": 1, "limit": limit, "accept-language": "fr"},
+            headers={"User-Agent": "velib-app/1.0"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        items = r.json() or []
+        out = []
+        for it in items:
+            label = it.get("display_name") or it.get("name") or "Adresse"
+            out.append({
+                "label": label,
+                "lat": float(it["lat"]),
+                "lon": float(it["lon"]),
+            })
+        return out
+    except Exception:
+        return []
     
 
 def _make_session() -> requests.Session:
@@ -341,81 +525,139 @@ def predict_nbvelos(df_live: pd.DataFrame, horizon_hours: int = 1) -> np.ndarray
         return pd.to_numeric(df_live.get("numbikesavailable"), errors="coerce").fillna(0).astype(int).to_numpy()
 
 # ---------- MAP ----------
-def color_for_ratio(r: float) -> str:
-    # r = taux d’occupation (nb vélos / capacité)
-    if pd.isna(r):
-        return "#808080"  # inconnu
-    if r >= 0.8:  # très plein -> vert foncé
-        return "#1a9641"
-    if r >= 0.6:
-        return "#a6d96a"
-    if r >= 0.4:
-        return "#ffffbf"
-    if r >= 0.2:
-        return "#fdae61"
-    return "#d7191c"      # presque vide -> rouge
 
 
+# --- helpers pour l’icône circulaire ---------------------------------
+def _ring_color(ratio: float) -> str:
+    # couleur de l’anneau selon le % de vélos (0..1)
+    if pd.isna(ratio):
+        return "#9aa0a6"    # gris
+    if ratio >= 0.75:
+        return "#1a9641"    # vert
+    if ratio >= 0.50:
+        return "#a6d96a"    # vert clair
+    if ratio >= 0.25:
+        return "#fdae61"    # orange
+    return "#d7191c"        # rouge
+
+def _make_divicon(nb: int, cap: int, size: int = 44) -> folium.DivIcon:
+    # ratio pour l’anneau
+    ratio = (nb / cap) if cap and cap > 0 else np.nan
+    col   = _ring_color(ratio)
+    deg   = int(max(0, min(1, 0 if pd.isna(ratio) else ratio)) * 360)
+
+    # style : anneau + disque + nombre
+    html = f"""
+    <div class="velib-pin" style="
+        position:relative; width:{size}px; height:{size}px;
+        filter: drop-shadow(0 1px 2px rgba(0,0,0,.25));
+        transform: translate(-50%, -100%);
+    ">
+      <div style="
+        width:100%; height:100%; border-radius:50%;
+        background:
+          conic-gradient({col} {deg}deg, #e5e7eb 0deg);
+        display:flex; align-items:center; justify-content:center;
+        border:2px solid #263238;
+        box-sizing:border-box;
+      ">
+        <div style="
+          width:{size-12}px; height:{size-12}px; border-radius:50%;
+          background:#ffffff; display:flex; align-items:center; justify-content:center;
+          font: 700 {int(size*0.42)}px/1 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+          color:#263238;
+        ">{nb}</div>
+      </div>
+      <!-- petite pointe -->
+      <div style="
+        position:absolute; left:50%; bottom:-8px; transform:translateX(-50%);
+        width:0; height:0; border-left:8px solid transparent; border-right:8px solid transparent;
+        border-top:12px solid #263238; opacity:.9;
+      "></div>
+    </div>
+    """
+    return folium.DivIcon(html=html, icon_size=(size, size), icon_anchor=(size/2, size))
+
+# --- remplace le rendu des points dans build_map ---------------------
 def build_map(df: pd.DataFrame, center=(48.8566, 2.3522), zoom=12,
               highlight_stationcode: str | None = None,
-              open_popup: bool = False) -> folium.Map:
+              open_popup: bool = False,
+              user_location: tuple[float, float] | None = None,
+              user_accuracy_m: float | None = None) -> folium.Map:
     m = folium.Map(location=center, zoom_start=zoom, control_scale=True, tiles="cartodbpositron")
     fg = folium.FeatureGroup(name="Stations").add_to(m)
 
+    # Marqueurs stations (DivIcon avec anneau)
     for _, r in df.iterrows():
-        name = (r.get("name") or "—").strip() if pd.notna(r.get("name")) else "—"
+        name = (r.get("name") or "—").strip()
         code = str(r.get("stationcode", ""))
         lat, lon = float(r["lat"]), float(r["lon"])
         cap = int(pd.to_numeric(r.get("capacity"), errors="coerce") or 0)
         nb  = int(pd.to_numeric(r.get("numbikesavailable"), errors="coerce") or 0)
         y   = int(pd.to_numeric(r.get("y_nb_pred"), errors="coerce") or 0)
-        occ = (nb / cap) if cap > 0 else np.nan
-        col = color_for_ratio(occ)
-
-        is_highlight = (highlight_stationcode is not None and code == str(highlight_stationcode))
-        radius = 9 if is_highlight else 7
-        opacity = 1.0 if is_highlight else 0.9
-        border = 2 if is_highlight else 0
 
         popup = folium.Popup(
             f"<b>{name}</b> (#{code})<br>"
             f"Actuel : {nb} / {cap}<br>"
             f"Prévision : <b>{y}</b> (T+{int(r.get('horizon',1))}h)",
-            max_width=260, show=(open_popup and is_highlight)
+            max_width=260,
+            show=(open_popup and highlight_stationcode == code),
         )
-        cm = folium.CircleMarker(
+
+        icon = _make_divicon(nb=nb, cap=cap, size=48 if highlight_stationcode == code else 44)
+
+        mkr = folium.Marker(
             location=(lat, lon),
-            radius=radius,
-            fill=True,
-            fill_opacity=opacity,
-            fill_color=col,
-            color="#1f2937" if is_highlight else col,  # petit liseré si highlight
-            weight=border,
+            icon=icon,
             tooltip=f"{name} (#{code})",
             popup=popup,
         )
-        # propriété 'name' pour la recherche
-        cm.options.setdefault('name', name)
-        cm.add_to(fg)
+        # exposer un 'name' pour la barre de recherche
+        mkr.options['name'] = name
+        mkr.add_to(fg)
 
-    # Barre de recherche par nom
-    Search(layer=fg, search_label="name",
-           placeholder="Rechercher une station…", collapsed=False, search_zoom=16).add_to(m)
+    # Barre de recherche (par nom)
+    try:
+        Search(
+            layer=fg,
+            search_label="name",
+            placeholder="Rechercher une station…",
+            collapsed=False,
+            search_zoom=16
+        ).add_to(m)
+    except Exception:
+        pass
 
-    # Légende
-    legend_html = """
-    <div style="position: fixed; bottom: 25px; left: 25px; z-index: 9999;
-      background: white; padding: 8px 10px; border-radius: 6px; border: 1px solid #ddd;
-      font-size: 13px; box-shadow: 0 1px 4px rgba(0,0,0,0.1);">
-      <b>Légende — Occupation actuelle</b><br>
-      <span style="display:inline-block;width:12px;height:12px;background:#1a9641;margin-right:6px;border:1px solid #999"></span>0–20%<br>
-      <span style="display:inline-block;width:12px;height:12px;background:#a6d96a;margin-right:6px;border:1px solid #999"></span>20–40%<br>
-      <span style="display:inline-block;width:12px;height:12px;background:#ffffbf;margin-right:6px;border:1px solid #999"></span>40–60%<br>
-      <span style="display:inline-block;width:12px;height:12px;background:#fdae61;margin-right:6px;border:1px solid #999"></span>60–80%<br>
-      <span style="display:inline-block;width:12px;height:12px;background:#d7191c;margin-right:6px;border:1px solid #999"></span>80–100%<br>
-    </div>"""
-    m.get_root().html.add_child(folium.Element(legend_html))
+    # --- Point bleu : position utilisateur ---
+    if user_location:
+        u_lat, u_lon = user_location
+        acc = float(user_accuracy_m or 20.0)
+        acc = max(20.0, acc)          # mini 20 m
+        col = "#2563eb" if acc <= 50 else "#9aa0a6"  # bleu si précis, gris si large
+
+        # point central
+        folium.CircleMarker(
+            location=(u_lat, u_lon),
+            radius=4,
+            color=col,
+            fill=True,
+            fill_opacity=1.0,
+            weight=2,
+            tooltip=f"Vous êtes ici (~{int(acc)} m)",
+        ).add_to(m)
+
+        # cercle de précision
+        folium.Circle(
+            location=(u_lat, u_lon),
+            radius=acc,
+            color=col,
+            fill=True,
+            fill_opacity=0.10 if acc <= 50 else 0.05,
+            weight=1,
+        ).add_to(m)
+
     return m
+
 
 # ---------- UI LAYOUT ----------
 # --- Header propre ---
@@ -423,33 +665,37 @@ st.markdown(f"### {TITLE}")
 st.caption(SUBTITLE)
 
 # --- Barre de commandes (horizon + refresh + badge source/heure plus bas) ---
-c1, c2, c_sp = st.columns([1.2, 1.0, 6.0])
+# --- Contrôles (alignés sur 2 colonnes comme les KPI) ---
+c1, c2, c3 = st.columns([1.2, 1.1, 1.1], gap="small")
 with c1:
     try:
-        horizon = st.segmented_control(
-            "Horizon", options=[1, 3, 6], selection_mode="single", default=1,
-            label_visibility="collapsed",
-        )
+        horizon = st.segmented_control("Horizon", options=[1,3,6], selection_mode="single",
+                                       default=1, label_visibility="collapsed")
     except Exception:
         horizon = st.selectbox("Horizon", options=[1,3,6], index=0, label_visibility="collapsed")
 with c2:
-    if st.button("Actualiser", type="secondary"):
-        load_live_data_cached.clear()
+    refresh = st.button("Actualiser")
+with c3:
+    st.write("")  # spacer
 
-# Données live (avec heure de requête)
+if refresh:
+    load_live_data_cached.clear()
+
+# Données live
 df_raw, source_label, debug_reason, fetched_utc = load_live_data_cached()
-
-# Affichage heure FR (jj/mm HH:MM)
 try:
     fetched_local = pd.to_datetime(fetched_utc, utc=True).tz_convert("Europe/Paris")
 except Exception:
     fetched_local = pd.Timestamp.utcnow().tz_localize("UTC").tz_convert("Europe/Paris")
 
+user_acc = st.session_state.get("user_acc")
+acc_badge = f"<span class='badge'>Précision : ~{int(user_acc)} m</span>" if user_acc else ""
 st.markdown(
-    f"<div class='toolbar'>"
-    f"  <span class='badge'>Source : <b>{source_label}</b></span>"
-    f"  <span class='badge'>Requête : {fetched_local.strftime('%d/%m %H:%M %Z')}</span>"
-    f"  <span class='badge'>Horizon : T+{int(horizon)}h</span>"
+    f"<div class='badges'>"
+    f"<span class='badge'>Source : <b>{source_label}</b></span>"
+    f"<span class='badge'>Requête : {fetched_local.strftime('%d/%m %H:%M')}</span>"
+    f"<span class='badge'>Horizon : T+{int(horizon)}h</span>"
+    f"{acc_badge}"
     f"</div>",
     unsafe_allow_html=True,
 )
@@ -459,9 +705,8 @@ try:
     fetched_local = pd.to_datetime(fetched_utc, utc=True).tz_convert("Europe/Paris")
 except Exception:
     fetched_local = pd.Timestamp.utcnow().tz_localize("UTC").tz_convert("Europe/Paris")
-st.markdown(
-    f"*Source :* {source_label} &nbsp;•&nbsp; *Heure de requête :* {fetched_local.strftime('%Y-%m-%d %H:%M:%S %Z')}"
-)
+st.markdown("")
+
 
 # KPIs
 try:
@@ -498,13 +743,48 @@ st.markdown("### Trouver une station (≥ vélos)")
 
 c1, c2, c3, c4, c5 = st.columns([2.4, 1.0, 1.0, 1.4, 1.2])
 with c1:
-    addr = st.text_input("Adresse / lieu (optionnel)", placeholder="Ex: 10 Rue de Rivoli, Paris")
+    addr_text = st.text_input(
+        "Adresse / lieu", 
+        placeholder="Ex: 10 Rue de Rivoli, Paris", 
+        key="addr_text"
+    )
+
+    # récupérer une éventuelle sélection précédente
+    addr_pick = st.session_state.get("addr_pick")
+
+    suggestions = autocomplete_nominatim(addr_text)
+    if suggestions:
+        st.markdown("<div style='margin-top:.25rem'></div>", unsafe_allow_html=True)
+        for i, s in enumerate(suggestions):
+            lab = s["label"]
+            if st.button(lab, key=f"sugg_{i}"):
+                st.session_state["addr_pick"] = (s["lat"], s["lon"])
+                st.session_state["addr_label"] = lab
+                # <-- centre la carte sur l'adresse choisie, même sans cliquer "M'y emmener"
+                st.session_state["map_center"] = (s["lat"], s["lon"])
+                st.session_state["map_zoom"] = 15
+                st.session_state["map_highlight"] = None
+                st.rerun()
+
+
+    # optionnel : afficher le choix courant
+    if st.session_state.get("addr_label"):
+        st.caption(f"Sélection : {st.session_state['addr_label']}")
+
 with c2:
     min_bikes = st.number_input("Vélos min.", min_value=1, max_value=50, value=5, step=1)
 with c3:
     use_pred = st.toggle("Prévision", value=False, help="Filtrer sur la prévision T+H")
 with c4:
-    use_loc = st.button("📍 Ma position")
+    use_loc = st.button("📍 Ma position", key="btn_loc_finder")
+    if use_loc:
+        capture_user_location()
+        if st.session_state.get("user_loc"):
+            st.session_state["map_center"] = st.session_state["user_loc"]
+            st.session_state["map_zoom"] = 16
+            st.session_state["map_highlight"] = None
+            st.rerun()
+
 with c5:
     go = st.button("🗺️ M’y emmener", type="primary")  # <-- go EST défini ici
 
@@ -512,21 +792,31 @@ st.markdown("</div>", unsafe_allow_html=True)
 
 # Déterminer le point de départ (adresse > position navigateur > centre Paris)
 origin = None
-if addr.strip():
-    origin = geocode_address(addr)
+addr_pick = st.session_state.get("addr_pick")
 
-if origin is None and use_loc:
-    try:
-        loc = streamlit_geolocation()
-        if loc and "latitude" in loc and "longitude" in loc:
-            origin = (float(loc["latitude"]), float(loc["longitude"]))
-    except Exception:
-        origin = None
+if addr_pick is not None:
+    origin = addr_pick
+    st.session_state["map_center"] = addr_pick
+    st.session_state["map_zoom"] = 18   # <--- zoom plus fort
+    st.session_state["map_highlight"] = None
+
+elif addr_text.strip():
+    geoc = geocode_address(addr_text)
+    # après geocode_address(addr_text)
+    if geoc:
+        origin = geoc
+        st.session_state["map_center"] = geoc
+        st.session_state["map_zoom"] = 18   # <--- zoom plus fort
+        st.session_state["map_highlight"] = None
+
 
 user_lat, user_lon = origin if origin else (48.8566, 2.3522)
 
 target = None
-if go:  # <-- plus d'erreur ici
+if go:
+    if DEBUG:
+        st.info(f"Recherche: origin={origin or 'PARIS centre'} • min_bikes={int(min_bikes)} • use_pred={bool(use_pred)}")
+
     target = find_nearest_station(
         df_map,
         user_lat=user_lat,
@@ -534,22 +824,50 @@ if go:  # <-- plus d'erreur ici
         min_bikes=int(min_bikes),
         use_prediction=bool(use_pred),
     )
+
     if target is None:
         st.warning("Aucune station trouvée avec ce seuil.")
     else:
-        st.success(f"✅ Station la plus proche : {target['name']} (#{target['stationcode']}) à ~{int(target['dist_m'])} m")
+        if DEBUG:
+            st.json({
+                "target": {
+                    "name": target.get("name"),
+                    "stationcode": target.get("stationcode"),
+                    "dist_m": int(target.get("dist_m", -1)),
+                    "numbikesavailable": int(target.get("numbikesavailable", -1)),
+                    "y_nb_pred": int(target.get("y_nb_pred", -1)),
+                }
+            })
+        st.success(
+            f"✅ Station la plus proche : {target['name']} (#{target['stationcode']}) à ~{int(target['dist_m'])} m"
+        )
 
-# Centrer la carte sur la cible si trouvée
-if target:
-    m = build_map(
-        df_map,
-        center=(float(target["lat"]), float(target["lon"])),
-        zoom=16,
-        highlight_stationcode=str(target["stationcode"]),
-        open_popup=True,
-    )
-else:
-    m = build_map(df_map, center=(48.8566, 2.3522), zoom=12)
+
+
+# Base : les valeurs mémorisées (si disponibles), sinon Paris
+user_loc = st.session_state.get("user_loc")
+user_acc = st.session_state.get("user_acc")
+
+# --- Centrage carte (ordre de priorité : target > adresse choisie > position user > défaut Paris)
+center = st.session_state.get("map_center", (48.8566, 2.3522))
+zoom   = st.session_state.get("map_zoom", 12)
+
+if st.session_state.get("user_loc"):
+    # priorité à l'utilisateur (utile si on a cliqué "📍 Ma position")
+    center = st.session_state["user_loc"]
+    zoom   = max(16, zoom)
+
+m = build_map(
+    df_map,
+    center=center,
+    zoom=zoom,
+    highlight_stationcode=str(target["stationcode"]) if ('target' in locals() and target) else None,
+    open_popup=('target' in locals() and target),
+    user_location=st.session_state.get("user_loc"),
+    user_accuracy_m=st.session_state.get("user_acc"),
+)
+
+
 
 st.components.v1.html(m.get_root().render(), height=680)
 

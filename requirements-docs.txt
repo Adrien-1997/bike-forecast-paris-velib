@@ -1,0 +1,4 @@
+#Docs
+mkdocs
+mkdocs-material
+mkdocs-jupyter
