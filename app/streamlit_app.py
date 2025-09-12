@@ -36,11 +36,18 @@ st.session_state.setdefault("map_highlight", None)
 # CSS
 st.markdown("""
 <style>
-/* ===== Base spacing & typography ===== */
-h2, h3 { margin-top: 1rem !important; margin-bottom: .6rem !important; }
+/* ===== Base spacing & layout ===== */
 .block-container { padding-top: 1.2rem; padding-bottom: .75rem; max-width: 1300px; }
+h2, h3 { margin-top: 1rem !important; margin-bottom: .6rem !important; }
 
-/* KPI cards */
+/* ===== Badges ===== */
+.badges { display:flex; flex-wrap:wrap; gap:.8rem; margin:.5rem 0 1rem; }
+.badge {
+  display:inline-block; padding:.35rem .8rem; border-radius:999px; font-size:.80rem;
+  border:1px solid var(--border-color); background:var(--badge-bg); color:var(--text-strong);
+}
+
+/* ===== KPI cards ===== */
 .kpi-row { margin: 1rem 0 !important; }
 .kpi-card {
   background: var(--background-color);
@@ -53,24 +60,29 @@ h2, h3 { margin-top: 1rem !important; margin-bottom: .6rem !important; }
 .kpi-title { color: var(--text-muted); font-size: .85rem; margin-bottom: .35rem; }
 .kpi-value { font-size: 1.35rem; font-weight: 700; color: var(--text-strong); }
 
-/* Badges */
-.badges { display:flex; flex-wrap:wrap; gap:.8rem; margin:.5rem 0 1rem; }
-.badge {
-  display:inline-block; padding:.35rem .8rem; border-radius:999px; font-size:.80rem;
-  border:1px solid var(--border-color); background:var(--badge-bg); color:var(--text-strong);
-}
-
-/* Finder (Carte) : alignements propres */
+/* ===== Finder (page Carte) ===== */
 .finder-card [data-testid="column"]{ display:flex; align-items:flex-end; gap:.5rem; }
 .finder-card .stButton > button{ height:42px !important; margin-bottom:2px; }
 
-/* Monitoring : images centrées & max width */
-.monitoring-fig img { max-width: 900px !important; margin: 0 auto !important; display:block; }
+/* ===== Carte (Folium) ===== */
+.leaflet-container { max-width: 100% !important; }  /* ne déborde jamais */
 
-/* DataFrames : scroll horizontal sur mobile si besoin */
+/* ===== Monitoring — Graphiques 100% responsives ===== */
+.monitoring-fig {
+  max-width: 900px;    /* limite desktop */
+  margin: 0 auto;      /* centre */
+  width: 100%;         /* occupe toute la largeur dispo */
+}
+.monitoring-fig img {
+  width: 100% !important;   /* rempli le conteneur */
+  height: auto !important;  /* conserve le ratio */
+  display: block;
+}
+
+/* ===== DataFrames ===== */
 div[data-testid="stDataFrameResizable"] { overflow-x: auto; }
 
-/* Variables couleurs clair/sombre */
+/* ===== Thème clair/sombre ===== */
 :root {
   --background-color:#ffffff; --border-color:#e5e7eb;
   --text-muted:#6b7280; --text-strong:#111827; --badge-bg:#f9fafb;
@@ -82,17 +94,15 @@ div[data-testid="stDataFrameResizable"] { overflow-x: auto; }
   }
 }
 
-/* ===== Responsive (<= 768px) : s’applique aux 2 pages ===== */
+/* ===== Responsive (<= 768px) pour les 2 pages ===== */
 @media (max-width: 768px) {
   .block-container { padding-left:.5rem !important; padding-right:.5rem !important; }
-
-  /* Titres un poil plus serrés pour gagner de la place */
   h2, h3 { margin-top:.6rem !important; margin-bottom:.5rem !important; }
 
-  /* Badges : un peu plus compacts */
+  /* Badges plus compacts */
   .badges { gap:.6rem; margin:.4rem 0 .8rem; }
 
-  /* Finder : inputs & bouton en colonne, pleine largeur */
+  /* Finder : inputs & bouton passent en colonne, pleine largeur */
   .finder-card [data-testid="column"] {
     width: 100% !important;
     align-items: stretch !important;
@@ -101,23 +111,20 @@ div[data-testid="stDataFrameResizable"] { overflow-x: auto; }
     width: 100% !important;
   }
 
-  /* Carte Folium : hauteur en viewport, permet le scroll vertical */
-  /* Sélecteurs robustes : iframe streamlit + éventuel wrapper */
+  /* Carte Folium : hauteur relative à l'écran -> permet le scroll */
   div[data-testid="stIFrame"] iframe,
   iframe[title="st.iframe"],
   .map-wrap iframe {
-    height: 60vh !important;        /* hauteur relative à l’écran */
-    min-height: 360px !important;    /* confort minimal */
+    height: 60vh !important;      /* ~60% de la hauteur écran */
+    min-height: 360px !important;  /* confort minimal */
   }
 
-  /* Graphiques Monitoring : un poil plus petits */
-  .monitoring-fig img { max-width: 100% !important; }
+  /* Monitoring : graphs plein écran mobile */
+  .monitoring-fig { max-width: 100%; }
 }
-
-/* Sécurité : la carte ne dépasse pas la largeur du conteneur */
-.leaflet-container { max-width: 100% !important; }
 </style>
 """, unsafe_allow_html=True)
+
 
 
 TITLE = "🚲 Prévisions Vélib’ Paris"
@@ -653,10 +660,8 @@ else:
         with k4:
             st.markdown(f"<div class='kpi-row kpi-card'><div class='kpi-title'>Occupation réseau</div><div class='kpi-value'>{kpis['occ_pct']} %</div></div>", unsafe_allow_html=True)
 
-        # --- Historique 72h : empilé, centré, largeur maîtrisée ---
+        # --- Historique 72h : empilé, 100% responsive ---
         st.markdown("### Historique (72h)")
-        FIG_MAX_W = 900  # px (ajuste à 800–1000 si besoin)
-
         patterns = ["*72*.png", "*72*.jpg", "*72*.jpeg", "*72*.svg"]
         imgs: List[str] = []
         try:
@@ -669,10 +674,10 @@ else:
             st.info(f"Aucun graphe 72h trouvé dans `{figs_dir}`. Vérifie les exports.")
         else:
             for p in imgs:
-                # centre l’image en la plaçant dans une colonne au milieu
-                _, mid, _ = st.columns([1, 2, 1])
-                with mid:
-                    st.image(p, width=FIG_MAX_W, caption=Path(p).name)
+                st.markdown("<div class='monitoring-fig'>", unsafe_allow_html=True)
+                # use_container_width=True + CSS -> large sur desktop, fluide sur mobile
+                st.image(p, use_container_width=True, caption=Path(p).name)
+                st.markdown("</div>", unsafe_allow_html=True)
 
         # --- Top 10 risques (T+1h) ---
         st.markdown("### 🔴 Stations à risque à T+1h")
