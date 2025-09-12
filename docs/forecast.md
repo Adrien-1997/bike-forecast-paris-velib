@@ -1,76 +1,76 @@
 # Prévisions
 
-*Dernière heure considérée : **12/09 19h** (Europe/Paris)*
+*Dernière heure considérée : **12/09 20h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
-| Station                                         |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:------------------------------------------------|----------------------:|:-------------|:----------------|
-| Pesaro - Préfecture (`92007`)                   |                     0 | 0.0%         | 12/09 19h       |
-| Faubourg Poissonnière - Dunkerque (`9114`)      |                     0 | 0.0%         | 12/09 19h       |
-| Nanterre - Université (`92004`)                 |                     0 | 0.0%         | 12/09 19h       |
-| Vitruve - Davout (`20122`)                      |                     0 | 0.0%         | 12/09 19h       |
-| Pierre et Marie Curie - Julien Grimau (`31702`) |                     0 | 0.0%         | 12/09 19h       |
-| Romainville - Vaillant-Couturier (`31024`)      |                     0 | 0.0%         | 12/09 19h       |
-| Henri Barbusse - Marcel Cachin (`32022`)        |                     0 | 0.0%         | 12/09 19h       |
-| Mairie de Romainville (`32301`)                 |                     0 | 0.0%         | 12/09 19h       |
-| Gaston Roussel - Commune de Paris (`32308`)     |                     0 | 0.0%         | 12/09 19h       |
-| Bordier - Félix Faure (`33003`)                 |                     0 | 0.0%         | 12/09 19h       |
+| Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:--------------------------------------------|----------------------:|:-------------|:----------------|
+| Belleville -  Pré Saint-Gervais (`19121`)   |                     0 | 0.0%         | 12/09 20h       |
+| Hoche - Tilsitt (`8057`)                    |                     0 | 0.0%         | 12/09 20h       |
+| Lieutenant Chauré - Etienne Marey (`20134`) |                     0 | 0.0%         | 12/09 20h       |
+| Parc Monceau (`17018`)                      |                     0 | 0.0%         | 12/09 20h       |
+| Jouffroy d'Abbans - Malesherbes (`17020`)   |                     0 | 0.0%         | 12/09 20h       |
+| Courcelles - Pierre Demours (`17047`)       |                     0 | 0.0%         | 12/09 20h       |
+| Commandant Schloesing - Pétrarque (`16202`) |                     0 | 0.0%         | 12/09 20h       |
+| Square des Saint-Simoniens (`20119`)        |                     0 | 0.0%         | 12/09 20h       |
+| Porte de la Muette (`16019`)                |                     0 | 0.0%         | 12/09 20h       |
+| Jardin de l'Hospice Debrousse (`20108`)     |                     0 | 0.0%         | 12/09 20h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
 | Station                                            |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:---------------------------------------------------|----------------------:|:-------------|:----------------|
-| BNF - Bibliothèque Nationale de France (`13123`)   |                    58 | 138.1%       | 12/09 19h       |
-| Bercy - Villot (`12105`)                           |                    37 | 112.1%       | 12/09 19h       |
-| Aristide Briand - Place de la Résistance (`21302`) |                    26 | 104.0%       | 12/09 19h       |
-| Saint-Denis - Rivoli (`1003`)                      |                    44 | 102.3%       | 12/09 19h       |
-| Lourmel - Marie Skobtsov (`15108`)                 |                    22 | 100.0%       | 12/09 19h       |
-| Place de l'Hôtel de Ville (`4017`)                 |                    14 | 100.0%       | 12/09 19h       |
-| Saint-Marcel - Hôpital (`13013`)                   |                    21 | 100.0%       | 12/09 19h       |
-| Chausson - Gabriel Péri (`22301`)                  |                    22 | 100.0%       | 12/09 19h       |
-| Place de l'Europe - Quai de Bercy (`42209`)        |                    17 | 100.0%       | 12/09 19h       |
-| Charenton - Diderot (`12009`)                      |                    18 | 100.0%       | 12/09 19h       |
+| BNF - Bibliothèque Nationale de France (`13123`)   |                    57 | 135.7%       | 12/09 20h       |
+| Aristide Briand - Place de la Résistance (`21302`) |                    27 | 108.0%       | 12/09 20h       |
+| Bercy - Villot (`12105`)                           |                    33 | 100.0%       | 12/09 20h       |
+| Place du 17 Octobre (`22306`)                      |                    20 | 100.0%       | 12/09 20h       |
+| Aboukir - Alexandrie (`2016`)                      |                    21 | 100.0%       | 12/09 20h       |
+| Gare d'Austerlitz - Quai Saint-Bernard (`13104`)   |                    27 | 100.0%       | 12/09 20h       |
+| Gare Saint-Lazare - Isly (`8009`)                  |                    27 | 100.0%       | 12/09 20h       |
+| Saint-Denis - Rivoli (`1003`)                      |                    42 | 97.7%        | 12/09 20h       |
+| Buffon - Jardin des Plantes (`5115`)               |                    29 | 96.7%        | 12/09 20h       |
+| Charenton - Prague (`12101`)                       |                    25 | 96.2%        | 12/09 20h       |
 
 ## Détails par station (graphiques)
 
-???+ info "Pesaro - Préfecture (92007)"
+???+ info "Belleville -  Pré Saint-Gervais (19121)"
 
-    ![Pesaro - Préfecture (92007)](assets/figs/obs_pred_92007_T+1h_compact.png)
+    ![Belleville -  Pré Saint-Gervais (19121)](assets/figs/obs_pred_19121_T+1h_compact.png)
 
-???+ info "Faubourg Poissonnière - Dunkerque (9114)"
+???+ info "Hoche - Tilsitt (8057)"
 
-    ![Faubourg Poissonnière - Dunkerque (9114)](assets/figs/obs_pred_9114_T+1h_compact.png)
+    ![Hoche - Tilsitt (8057)](assets/figs/obs_pred_8057_T+1h_compact.png)
 
-???+ info "Nanterre - Université (92004)"
+???+ info "Lieutenant Chauré - Etienne Marey (20134)"
 
-    ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
+    ![Lieutenant Chauré - Etienne Marey (20134)](assets/figs/obs_pred_20134_T+1h_compact.png)
 
-???+ info "Vitruve - Davout (20122)"
+???+ info "Parc Monceau (17018)"
 
-    ![Vitruve - Davout (20122)](assets/figs/obs_pred_20122_T+1h_compact.png)
+    ![Parc Monceau (17018)](assets/figs/obs_pred_17018_T+1h_compact.png)
 
-???+ info "Pierre et Marie Curie - Julien Grimau (31702)"
+???+ info "Jouffroy d'Abbans - Malesherbes (17020)"
 
-    ![Pierre et Marie Curie - Julien Grimau (31702)](assets/figs/obs_pred_31702_T+1h_compact.png)
+    ![Jouffroy d'Abbans - Malesherbes (17020)](assets/figs/obs_pred_17020_T+1h_compact.png)
 
-???+ info "Romainville - Vaillant-Couturier (31024)"
+???+ info "Courcelles - Pierre Demours (17047)"
 
-    ![Romainville - Vaillant-Couturier (31024)](assets/figs/obs_pred_31024_T+1h_compact.png)
+    ![Courcelles - Pierre Demours (17047)](assets/figs/obs_pred_17047_T+1h_compact.png)
 
-???+ info "Henri Barbusse - Marcel Cachin (32022)"
+???+ info "Commandant Schloesing - Pétrarque (16202)"
 
-    ![Henri Barbusse - Marcel Cachin (32022)](assets/figs/obs_pred_32022_T+1h_compact.png)
+    ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
 
-???+ info "Mairie de Romainville (32301)"
+???+ info "Square des Saint-Simoniens (20119)"
 
-    ![Mairie de Romainville (32301)](assets/figs/obs_pred_32301_T+1h_compact.png)
+    ![Square des Saint-Simoniens (20119)](assets/figs/obs_pred_20119_T+1h_compact.png)
 
-???+ info "Gaston Roussel - Commune de Paris (32308)"
+???+ info "Porte de la Muette (16019)"
 
-    ![Gaston Roussel - Commune de Paris (32308)](assets/figs/obs_pred_32308_T+1h_compact.png)
+    ![Porte de la Muette (16019)](assets/figs/obs_pred_16019_T+1h_compact.png)
 
-???+ info "Bordier - Félix Faure (33003)"
+???+ info "Jardin de l'Hospice Debrousse (20108)"
 
-    ![Bordier - Félix Faure (33003)](assets/figs/obs_pred_33003_T+1h_compact.png)
+    ![Jardin de l'Hospice Debrousse (20108)](assets/figs/obs_pred_20108_T+1h_compact.png)
 
