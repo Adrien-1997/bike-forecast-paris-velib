@@ -99,7 +99,7 @@ def weather_badges_from_parquet(parquet_path: Path) -> str:
         parts = [
             _format_badge(temp, "°C", "🌡️"),
             _format_badge(rain, "mm", "🌧️"),
-            _format_badge(wind, "m/s", "💨"),
+            _format_badge(wind, "km/h", "💨"),
         ]
         return "".join([p for p in parts if p])
     except Exception:
