@@ -8,7 +8,6 @@
 ![License](https://img.shields.io/badge/License-MIT-black)
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB)
 
-
 ![Carte réseau](docs/assets/map.png)
 
 **Prévoir et surveiller en temps réel l’usage du réseau Vélib’ parisien à partir des données publiques (GBFS).**
