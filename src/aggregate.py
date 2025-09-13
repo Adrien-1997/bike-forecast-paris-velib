@@ -153,7 +153,7 @@ def _safe_write_csv(df: pd.DataFrame, path: str, attempts: int = 6, delay: float
             break
     print("[aggregate] CSV encore verrouillé → saut de l’écriture pour cette fois.")
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     DOCS_EXPORTS = os.path.join("docs", "exports")
     os.makedirs(DOCS_EXPORTS, exist_ok=True)
 
