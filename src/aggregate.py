@@ -153,26 +153,57 @@ def _safe_write_csv(df: pd.DataFrame, path: str, attempts: int = 6, delay: float
             break
     print("[aggregate] CSV encore verrouillé → saut de l’écriture pour cette fois.")
 
-if __name__ == "__main__":
+if _name_ == "_main_":
     DOCS_EXPORTS = os.path.join("docs", "exports")
     os.makedirs(DOCS_EXPORTS, exist_ok=True)
 
-    out = occupancy_15min(with_weather=True)
+    new = occupancy_15min(with_weather=True)
+    if new.empty:
+        print("[aggregate] Aucun nouveau point à agréger.")
+        raise SystemExit(0)
 
-    if not out.empty:
-        parquet_path = os.path.join(DOCS_EXPORTS, "velib.parquet")
-        csv_path     = os.path.join(DOCS_EXPORTS, "velib.csv")
-        try:
-            out.to_parquet(parquet_path, index=False)
-        except Exception:
-            duckdb.register("out_tbl", out)
-            duckdb.sql(f"COPY out_tbl TO '{parquet_path}' (FORMAT PARQUET);")
-        # CSV
-        try:
-            out.to_csv(csv_path, index=False)
-        except Exception:
-            pass
-        print(f"OK aggregate 15min → {parquet_path} (+ {csv_path})")
-    else:
-        print("[aggregate] Aucun résultat (table velib_snapshots vide ?)")
+    parquet_path = os.path.join(DOCS_EXPORTS, "velib.parquet")
+    csv_path     = os.path.join(DOCS_EXPORTS, "velib.csv")
 
+    # --- charger l'existant puis concat/ dédupli ---
+    try:
+        if os.path.exists(parquet_path):
+            old = pd.read_parquet(parquet_path)
+            # normaliser les timestamps
+            for c in ("tbin_utc","hour_utc"):
+                if c in old.columns:
+                    old[c] = pd.to_datetime(old[c], utc=True).dt.tz_localize(None)
+            df = pd.concat([old, new], ignore_index=True)
+        else:
+            df = new.copy()
+    except Exception as e:
+        print(f"[aggregate] Lecture de l'existant échouée: {e} -> on repart du nouveau")
+        df = new.copy()
+
+    # dédupl sur (tbin_utc, stationcode)
+    df["tbin_utc"] = pd.to_datetime(df["tbin_utc"], utc=True).dt.tz_localize(None)
+    df = df.sort_values(["tbin_utc", "stationcode"]).drop_duplicates(
+        subset=["tbin_utc", "stationcode"], keep="last"
+    )
+
+    # fenêtre glissante (90 jours)
+    try:
+        tmax = df["tbin_utc"].max()
+        cutoff = (tmax - pd.Timedelta(days=90)).floor("15min")
+        df = df[df["tbin_utc"] >= cutoff].copy()
+    except Exception:
+        pass
+
+    # --- écrire parquet/csv ---
+    try:
+        df.to_parquet(parquet_path, index=False)
+    except Exception:
+        duckdb.register("out_tbl", df)
+        duckdb.sql(f"COPY out_tbl TO '{parquet_path}' (FORMAT PARQUET);")
+
+    try:
+        df.to_csv(csv_path, index=False)
+    except Exception:
+        pass
+
+    print(f"[aggregate] OK → {parquet_path} (rows={len(df)})")
