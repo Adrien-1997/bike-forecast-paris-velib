@@ -621,7 +621,6 @@ if PAGE == "Carte":
 # -----------------------------------------------------------------------------
 else:
     st.markdown("### 📊 Monitoring réseau")
-    render_badges("<span class='badge'>Prévision : <b>T+1h</b></span>")
 
     wx_badges = weather_badges_from_parquet(DATA_PARQUET)
     render_badges("<span class='badge'>Prévision : <b>T+1h</b></span>" + wx_badges)
