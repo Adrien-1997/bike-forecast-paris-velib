@@ -1,0 +1,73 @@
+name: velib-ingest
+
+on:
+  schedule:
+    # Quarts d’heure précis en UTC → 01,16,31,46 de chaque heure
+    - cron: "1,16,31,46 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: velib-ingest
+  cancel-in-progress: true
+
+jobs:
+  ingest_aggregate_docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install deps (docs + pipeline)
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements-doc.txt
+          # runtime safety (si manquants côté doc):
+          pip install duckdb pandas pyarrow requests joblib lightgbm holidays folium
+
+      - name: Ingest snapshot (OpenData → DuckDB)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m src.ingest
+
+      - name: Aggregate 15min + weather → docs/exports/
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m src.aggregate
+
+      - name: Sanity check export
+        run: |
+          test -f docs/exports/velib.parquet || (echo "velib.parquet manquant" && exit 1)
+          ls -lh docs/exports/ | sed 's/^/ - /'
+
+      - name: Generate docs
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python tools/make_map.py
+          python tools/make_kpi_banner.py
+          python tools/make_report.py
+          python tools/make_forecast_page.py
+
+      - name: Commit data & docs if changed
+        run: |
+          set -euxo pipefail
+          git config user.name  "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "ci(ingest): update 15min data & docs"
+            git push
+          fi
