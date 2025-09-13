@@ -44,11 +44,30 @@ jobs:
         run: python -m src.aggregate
 
       - name: Commit data if changed
+        shell: bash
         run: |
           set -euxo pipefail
+
+          echo "=== Exports present? ==="
+          ls -la docs || true
+          ls -la docs/exports || true
+
+          echo "=== check-ignore ==="
+          git check-ignore -v docs/exports/velib.parquet || true
+          git check-ignore -v docs/exports/velib.csv || true
+          git check-ignore -v warehouse.duckdb || true
+
           git config user.name  "github-actions"
           git config user.email "actions@users.noreply.github.com"
-          git add docs/exports/*.parquet docs/exports/*.csv warehouse.duckdb || true
+
+          # FORCER l'ajout même si .gitignore les ignore
+          git add -f docs/exports
+          # Si tu veux aussi versionner la DB:
+          # git add -f warehouse.duckdb
+
+          echo "=== staged files ==="
+          git diff --cached --name-status || true
+
           if git diff --cached --quiet; then
             echo "Nothing to commit."
           else
