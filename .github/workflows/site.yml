@@ -1,0 +1,48 @@
+name: Build & Deploy Monitoring Site
+
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: "*/15 * * * *"   # every 15 minutes
+
+permissions:
+  contents: write
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install doc deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-doc.txt
+
+      # Optionally refresh & aggregate before generating site:
+      # - name: Ingest snapshot
+      #   run: python -m src.ingest
+      # - name: Aggregate 15-min parquet
+      #   run: python -m src.aggregate
+
+      - name: Generate monitoring pages
+        run: python tools/generate_monitoring.py
+
+      - name: Build MkDocs
+        run: mkdocs build --clean
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          force_orphan: true
