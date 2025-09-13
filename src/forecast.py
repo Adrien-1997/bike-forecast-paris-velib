@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import joblib
 import pandas as pd
+import numpy as np
 # en haut du fichier (imports)
 from lightgbm import LGBMRegressor
 import lightgbm as lgb
@@ -99,14 +100,15 @@ def train(horizon_minutes: int = 60, lookback_days: int = 30):
         ],
     )
 
-    # Évaluation rapide
-    from sklearn.metrics import mean_absolute_error, mean_squared_error
-    import numpy as np
+    # Évaluation rapide (version sans dépendance à scikit-learn)
+    y_true = y_va.values if hasattr(y_va, "values") else np.asarray(y_va)
+    y_pred = np.asarray(model.predict(X_va))
 
-    y_pred = model.predict(X_va)
-    mae = mean_absolute_error(y_va, y_pred)
-    rmse = mean_squared_error(y_va, y_pred, squared=False)
-    print(f"[train] MAE={mae:.3f} | RMSE={rmse:.3f} on {len(y_va)} samples")
+    mae  = float(np.mean(np.abs(y_true - y_pred)))
+    rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+
+    print(f"[train] MAE={mae:.3f} | RMSE={rmse:.3f} on {len(y_true)} samples")
+
 
     # Sauvegarde artefact
     joblib.dump(
