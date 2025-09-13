@@ -53,7 +53,7 @@ jobs:
           python - <<'PY'
           from src.forecast import train, _print_dataset_span
           import pandas as pd
-          tmin,tmax,, = _print_dataset_span()
+          tmin, tmax, _, _ = _print_dataset_span()
           if pd.Timestamp(tmax) - pd.Timestamp(tmin) < pd.Timedelta(hours=2):
               print("[train] Skip: not enough timespan yet (need > ~2h).")
           else:
