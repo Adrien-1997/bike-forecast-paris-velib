@@ -1,9 +1,9 @@
 # Métriques détaillées
 
-- **MAE 24h**: 3.94  
-- **RMSE 24h**: 5.83  
-- **MAE 7j**: 4.87  
-- **RMSE 7j**: 7.15  
+- **MAE 24h**: 3.86  
+- **RMSE 24h**: 5.70  
+- **MAE 7j**: 4.86  
+- **RMSE 7j**: 7.14  
 
 ## Séries temporelles
 ![MAE (full)](../assets/figs/mae_full.png)

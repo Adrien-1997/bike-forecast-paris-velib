@@ -1,10 +1,10 @@
 # Monitoring — Vue d’ensemble
 
-<span class="metric-badge">MAE 24h: 3.94</span>
-<span class="metric-badge">RMSE 24h: 5.83</span>
-<span class="metric-badge">MAE 7j: 4.87</span>
-<span class="metric-badge">RMSE 7j: 7.15</span>
-<span class="metric-badge">Rel. Err 24h: 0.59</span>
+<span class="metric-badge">MAE 24h: 3.86</span>
+<span class="metric-badge">RMSE 24h: 5.70</span>
+<span class="metric-badge">MAE 7j: 4.86</span>
+<span class="metric-badge">RMSE 7j: 7.14</span>
+<span class="metric-badge">Rel. Err 24h: 0.57</span>
 
 <div class="figure-grid">
   <img src="../assets/figs/mae_24h.png" alt="MAE 24h">
