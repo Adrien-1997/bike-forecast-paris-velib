@@ -1,0 +1,48 @@
+site_name: Vélib’ Forecast — Monitoring
+site_description: Monitoring du modèle LightGBM T+1h et qualité des données Vélib’ (Paris)
+site_url: https://YOUR_GITHUB_USERNAME.github.io/bike-forecast-paris-velib
+repo_url: https://github.com/Adrien-1997/bike-forecast-paris-velib
+repo_name: Adrien-1997/bike-forecast-paris-velib
+
+theme:
+  name: material
+  features:
+    - navigation.expand
+    - navigation.sections
+    - content.code.copy
+    - toc.integrate
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      accent: orange
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue
+      accent: orange
+
+extra_css:
+  - assets/extra.css
+
+nav:
+  - Accueil: index.md
+  - Projet:
+      - Rapport complet: project/report.md
+      - Architecture: project/architecture.md
+  - Monitoring:
+      - Vue d’ensemble: monitoring/index.md
+      - Métriques: monitoring/metrics.md
+      - Drift: monitoring/data_drift.md
+      - Modèle: monitoring/model.md
+  - Exports: exports/index.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - toc:
+      permalink: true
