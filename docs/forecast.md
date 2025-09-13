@@ -1,76 +1,76 @@
 # Prévisions
 
-*Dernière heure considérée : **13/09 10h** (Europe/Paris)*
+*Dernière heure considérée : **13/09 11h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
 | Station                                         |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:------------------------------------------------|----------------------:|:-------------|:----------------|
-| Nanterre - Université (`92004`)                 |                     0 | 0.0%         | 13/09 10h       |
-| Champs-Elysees - Bassano (`8116`)               |                     0 | 0.0%         | 13/09 10h       |
-| Parc André Citroën (`15059`)                    |                     0 | 0.0%         | 13/09 10h       |
-| Pierre et Marie Curie - Julien Grimau (`31702`) |                     0 | 0.0%         | 13/09 10h       |
-| De Gaulle - Moulin (`28002`)                    |                     0 | 0.0%         | 13/09 10h       |
-| Henri Barbusse (`31203`)                        |                     0 | 0.0%         | 13/09 10h       |
-| Pereire - Ternes (`17040`)                      |                     0 | 0.0%         | 13/09 10h       |
-| Commandant Schloesing - Pétrarque (`16202`)     |                     0 | 0.0%         | 13/09 10h       |
-| Octave Feuillet - Albéric Magnard (`16110`)     |                     0 | 0.0%         | 13/09 10h       |
-| Jean Calvin - Tournefort (`5014`)               |                     0 | 0.0%         | 13/09 10h       |
+| Pré Saint-Gervais - Lilas (`19113`)             |                     0 | 0.0%         | 13/09 11h       |
+| Buzenval - Vignoles (`20012`)                   |                     0 | 0.0%         | 13/09 11h       |
+| Alexandre Dumas - Place de la Réunion (`20013`) |                     0 | 0.0%         | 13/09 11h       |
+| Place des Fêtes - Solitaires (`19210`)          |                     0 | 0.0%         | 13/09 11h       |
+| Cujas - Saint-Michel (`5106`)                   |                     0 | —            | 13/09 11h       |
+| Henri Chevreau - Couronnes (`20136`)            |                     0 | 0.0%         | 13/09 11h       |
+| Réunion - Avron (`20132`)                       |                     0 | 0.0%         | 13/09 11h       |
+| Boyer - Ménilmontant (`20121`)                  |                     0 | 0.0%         | 13/09 11h       |
+| Square des Saint-Simoniens (`20119`)            |                     0 | 0.0%         | 13/09 11h       |
+| Gay Lussac - Saint-Jacques (`5005`)             |                     0 | 0.0%         | 13/09 11h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
 | Station                                            |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:---------------------------------------------------|----------------------:|:-------------|:----------------|
-| Westermeyer - Paul Vaillant-Couturier (`42004`)    |                    43 | 172.0%       | 13/09 10h       |
-| Aristide Briand - Place de la Résistance (`21302`) |                    32 | 128.0%       | 13/09 10h       |
-| Port - Maurice Chevalier (`41304`)                 |                    31 | 103.3%       | 13/09 10h       |
-| Roquette - Auguste Laurent (`11022`)               |                    16 | 100.0%       | 13/09 10h       |
-| Les Planètes (`47008`)                             |                    21 | 100.0%       | 13/09 10h       |
-| Porte de Versailles (`15203`)                      |                    28 | 100.0%       | 13/09 10h       |
-| Gare Saint-Lazare - Isly (`8009`)                  |                    27 | 100.0%       | 13/09 10h       |
-| Blanqui - Docteur Bauer (`34013`)                  |                    28 | 100.0%       | 13/09 10h       |
-| Place de la Gare (`47001`)                         |                    45 | 97.8%        | 13/09 10h       |
-| Gare RER - Général de Gaulle (`22302`)             |                    40 | 97.6%        | 13/09 10h       |
+| Westermeyer - Paul Vaillant-Couturier (`42004`)    |                    43 | 172.0%       | 13/09 11h       |
+| Aristide Briand - Place de la Résistance (`21302`) |                    26 | 104.0%       | 13/09 11h       |
+| Port - Maurice Chevalier (`41304`)                 |                    31 | 103.3%       | 13/09 11h       |
+| Bercy - Villot (`12105`)                           |                    34 | 103.0%       | 13/09 11h       |
+| Blanqui - Docteur Bauer (`34013`)                  |                    28 | 100.0%       | 13/09 11h       |
+| Paul Doumer - Stalingrad (`41101`)                 |                    24 | 100.0%       | 13/09 11h       |
+| Les Planètes (`47008`)                             |                    21 | 100.0%       | 13/09 11h       |
+| Gare de Lyon - Roland Barthes (`12106`)            |                    67 | 98.5%        | 13/09 11h       |
+| Gare RER - Général de Gaulle (`22302`)             |                    40 | 97.6%        | 13/09 11h       |
+| Champs de Manoeuvre - Cartoucherie (`12165`)       |                    34 | 97.1%        | 13/09 11h       |
 
 ## Détails par station (graphiques)
 
-???+ info "Nanterre - Université (92004)"
+???+ info "Pré Saint-Gervais - Lilas (19113)"
 
-    ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
+    ![Pré Saint-Gervais - Lilas (19113)](assets/figs/obs_pred_19113_T+1h_compact.png)
 
-???+ info "Champs-Elysees - Bassano (8116)"
+???+ info "Buzenval - Vignoles (20012)"
 
-    ![Champs-Elysees - Bassano (8116)](assets/figs/obs_pred_8116_T+1h_compact.png)
+    ![Buzenval - Vignoles (20012)](assets/figs/obs_pred_20012_T+1h_compact.png)
 
-???+ info "Parc André Citroën (15059)"
+???+ info "Alexandre Dumas - Place de la Réunion (20013)"
 
-    ![Parc André Citroën (15059)](assets/figs/obs_pred_15059_T+1h_compact.png)
+    ![Alexandre Dumas - Place de la Réunion (20013)](assets/figs/obs_pred_20013_T+1h_compact.png)
 
-???+ info "Pierre et Marie Curie - Julien Grimau (31702)"
+???+ info "Place des Fêtes - Solitaires (19210)"
 
-    ![Pierre et Marie Curie - Julien Grimau (31702)](assets/figs/obs_pred_31702_T+1h_compact.png)
+    ![Place des Fêtes - Solitaires (19210)](assets/figs/obs_pred_19210_T+1h_compact.png)
 
-???+ info "De Gaulle - Moulin (28002)"
+???+ info "Cujas - Saint-Michel (5106)"
 
-    ![De Gaulle - Moulin (28002)](assets/figs/obs_pred_28002_T+1h_compact.png)
+    ![Cujas - Saint-Michel (5106)](assets/figs/obs_pred_5106_T+1h_compact.png)
 
-???+ info "Henri Barbusse (31203)"
+???+ info "Henri Chevreau - Couronnes (20136)"
 
-    ![Henri Barbusse (31203)](assets/figs/obs_pred_31203_T+1h_compact.png)
+    ![Henri Chevreau - Couronnes (20136)](assets/figs/obs_pred_20136_T+1h_compact.png)
 
-???+ info "Pereire - Ternes (17040)"
+???+ info "Réunion - Avron (20132)"
 
-    ![Pereire - Ternes (17040)](assets/figs/obs_pred_17040_T+1h_compact.png)
+    ![Réunion - Avron (20132)](assets/figs/obs_pred_20132_T+1h_compact.png)
 
-???+ info "Commandant Schloesing - Pétrarque (16202)"
+???+ info "Boyer - Ménilmontant (20121)"
 
-    ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
+    ![Boyer - Ménilmontant (20121)](assets/figs/obs_pred_20121_T+1h_compact.png)
 
-???+ info "Octave Feuillet - Albéric Magnard (16110)"
+???+ info "Square des Saint-Simoniens (20119)"
 
-    ![Octave Feuillet - Albéric Magnard (16110)](assets/figs/obs_pred_16110_T+1h_compact.png)
+    ![Square des Saint-Simoniens (20119)](assets/figs/obs_pred_20119_T+1h_compact.png)
 
-???+ info "Jean Calvin - Tournefort (5014)"
+???+ info "Gay Lussac - Saint-Jacques (5005)"
 
-    ![Jean Calvin - Tournefort (5014)](assets/figs/obs_pred_5014_T+1h_compact.png)
+    ![Gay Lussac - Saint-Jacques (5005)](assets/figs/obs_pred_5005_T+1h_compact.png)
 
