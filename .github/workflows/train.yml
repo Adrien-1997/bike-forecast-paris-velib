@@ -78,3 +78,18 @@ jobs:
           name: model-lgbm-T+60min
           path: models/lgb_nbvelos_T+60min.joblib
           retention-days: 14
+          
+      - name: Commit model into repo
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name  "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          # Forcer l'ajout même si .gitignore ignore models/
+          git add -f models/lgb_nbvelos_T+60min.joblib
+          if git diff --cached --quiet; then
+            echo "No model change to commit."
+          else
+            git commit -m "ci(train): update model lgb_nbvelos_T+60min.joblib"
+            git push
+          fi
