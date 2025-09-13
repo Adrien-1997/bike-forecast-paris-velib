@@ -1,5 +1,5 @@
 ﻿# src/forecast.py
-from _future_ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 import joblib
