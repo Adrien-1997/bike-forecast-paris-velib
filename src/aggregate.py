@@ -167,15 +167,27 @@ def _safe_write_csv(df: pd.DataFrame, path: str, attempts: int = 6, delay: float
     print("[aggregate] CSV encore verrouillé → saut de l’écriture pour cette fois.")
 
 if __name__ == "__main__":
-    os.makedirs("exports", exist_ok=True)
-    out = hourly_occupancy(with_weather=True)
+    # Dossier de sortie unique pour le site
+    DOCS_EXPORTS = os.path.join("docs", "exports")
+    os.makedirs(DOCS_EXPORTS, exist_ok=True)
+
+    # Agrégat 15 min unique
+    out = occupancy_15min(with_weather=True)
+
     if not out.empty:
+        parquet_path = os.path.join(DOCS_EXPORTS, "velib.parquet")
+        csv_path     = os.path.join(DOCS_EXPORTS, "velib.csv")
+
         # Parquet (pyarrow/fastparquet sinon fallback DuckDB)
         try:
-            out.to_parquet("exports/velib_hourly.parquet", index=False)
+            out.to_parquet(parquet_path, index=False)
         except Exception:
             duckdb.register("out_tbl", out)
-            duckdb.sql("COPY out_tbl TO 'exports/velib_hourly.parquet' (FORMAT PARQUET);")
+            duckdb.sql(f"COPY out_tbl TO '{parquet_path}' (FORMAT PARQUET);")
+
         # CSV robuste (si verrouillé, on skip sans planter)
-        _safe_write_csv(out, "exports/velib_hourly.csv")
-    print("OK hourly -> exports/velib_hourly.parquet (et .csv si dispo)")
+        _safe_write_csv(out, csv_path)
+
+        print(f"OK aggregate 15min → {parquet_path} (+ {csv_path})")
+    else:
+        print("[aggregate] Aucun résultat (vérifie la table velib_snapshots).")
