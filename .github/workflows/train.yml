@@ -60,12 +60,25 @@ jobs:
               train(horizon_minutes=60, lookback_days=30)
           PY
 
+      - name: List models dir (debug)
+        shell: bash
+        run: |
+          echo "=== PWD ==="; pwd
+          echo "=== LS models ==="; ls -lah models || true
+
       - name: Upload model bundle
         uses: actions/upload-artifact@v4
         with:
           name: model-lgbm-T+60min
           path: models/lgb_nbvelos_T+60min.joblib
-          retention-days: 14
+
+      - name: Fail if model missing
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          test -f models/lgb_nbvelos_T+60min.joblib || { echo "[CI] modèle introuvable après entraînement"; exit 1; }
+          ls -lah models
+
 
       # (Optionnel) Commit du modèle directement dans le repo
       # - name: Commit model if changed

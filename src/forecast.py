@@ -116,4 +116,18 @@ def train(horizon_minutes: int = 60, lookback_days: int = 30):
         MODEL_PATH
     )
     print(f"[train] saved → {MODEL_PATH.resolve()}")
-    return {"mae": mae, "rmse": rmse, "n_valid": int(len(y_va))}
+    # Sauvegarde artefact (avec vérif)
+    MODELS_DIR = Path("models")
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    MODEL_PATH = MODELS_DIR / "lgb_nbvelos_T+60min.joblib"
+
+    joblib.dump(
+        dict(model=model, feat_cols=feat_cols, horizon_minutes=horizon_minutes),
+        MODEL_PATH
+    )
+    if not MODEL_PATH.exists() or MODEL_PATH.stat().st_size == 0:
+        raise RuntimeError(f"[train] Échec sauvegarde modèle → {MODEL_PATH}")
+
+    print(f"[train] saved → {MODEL_PATH.resolve()}")
+
+    return {"mae": mae, "rmse": rmse, "n_valid": int(len(y_va)), "model_path": str(MODEL_PATH)}
