@@ -2,7 +2,7 @@
 
 [![CI — ingestion](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/ingest.yml/badge.svg)](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/ingest.yml)
 [![CI — training](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/train.yml/badge.svg)](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/train.yml)
-[![Docs](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/gh-pages.yml/badge.svg)](https://adrien-1997.github.io/bike-forecast-paris-velib/)
+[![Docs](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/site.yml/badge.svg?branch=main)](https://adrien-1997.github.io/bike-forecast-paris-velib/)
 [![App Streamlit](https://img.shields.io/badge/app-streamlit-green)](https://adrien-1997-bike-forecast-paris-velib-appstreamlit-app-vq1xma.streamlit.app/)
 ![Version](https://img.shields.io/badge/version-v1.2.0-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-black)
@@ -25,9 +25,9 @@
 - **KPI & historique** : suivi de l’occupation, vélos totaux, disponibilité réseau.  
 - **Prévisions (ML)** : modèle **LightGBM** prédit le nombre de vélos disponibles à **+1h (T+60 min)**.  
 - **CI/CD GitHub Actions** :
-  - `velib-ingest` → ingestion et mise à jour des exports (15 min).
-  - `velib-train` → réentraînement quotidien du modèle ML.
-  - `gh-pages` → déploiement documentation MkDocs.
+  1) `velib-ingest` (toutes les 5 min) → snapshots API → DuckDB → agrégation 15 min → export `docs/exports/velib.parquet`.
+  2) `velib-train` (quotidien, fallback) → réentraînement forcé du LightGBM (MAE/RMSE valid), mise à jour `models/*.joblib` et `docs/exports/baseline.json`.
+  3) `monitoring-site` (*/15 min) → génère métriques & pages MkDocs, détecte drift/perf (**PSI ≥ 0.20** ou **MAE_24h ≥ 1.20×baseline**) et **déclenche un retrain immédiat si seuil dépassé**, reconstruit les pages (importances à jour), puis build & déploie sur `gh-pages`.
 - **Artefacts ML** : modèle sauvegardé dans `models/lgb_nbvelos_T+60min.joblib` (téléchargeable aussi comme artifact CI).
 
 ---
