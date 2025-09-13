@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.features import prepare_live_features
 from src.forecast import load_model_bundle
+from src.weather import fetch_history, fetch_forecast
 
 # -----------------------------------------------------------------------------
 # UI CONFIG
@@ -475,6 +476,37 @@ try:
 except Exception:
     fetched_local = pd.Timestamp.utcnow().tz_localize("UTC").tz_convert("Europe/Paris")
 
+
+
+# --- Météo actuelle (heure en cours) + météo T+1h (optionnel pour affichage)
+try:
+    # heure courante UTC naive (arrondie à l’heure) pour le join
+    hour_now_utc = pd.to_datetime(fetched_utc, utc=True).tz_convert(None).floor("h")
+
+    # on tire l’historique récent autour de maintenant (ex: J-1..J)
+    wx_hist = fetch_history(hour_now_utc - pd.Timedelta(hours=24), hour_now_utc)
+    wx_now  = wx_hist[wx_hist["hour_utc"] == hour_now_utc].tail(1)
+
+    # si on a une ligne, on l’injecte dans df_now pour que prepare_live_features la prenne
+    if not wx_now.empty:
+        df_now = df_now.copy()
+        df_now["temp_C"]   = float(wx_now["temp_C"].iloc[0])
+        df_now["precip_mm"]= float(wx_now["precip_mm"].iloc[0])
+        df_now["wind_mps"] = float(wx_now["wind_mps"].iloc[0])
+
+    # (optionnel) pour affichage dans badges : la prévision de l’heure suivante
+    wx_next = fetch_forecast(hour_now_utc, horizon_h=1)
+    if not wx_next.empty:
+        temp_next   = float(wx_next["temp_C"].iloc[-1])
+        precip_next = float(wx_next["precip_mm"].iloc[-1])
+        wind_next   = float(wx_next["wind_mps"].iloc[-1])
+    else:
+        temp_next = precip_next = wind_next = None
+
+except Exception as _e:
+    temp_next = precip_next = wind_next = None
+
+
 # prédiction T+1h (commune)
 y_pred = predict_nbvelos_t1h(df_now)
 df_with_pred = df_now.copy()
@@ -517,8 +549,12 @@ if PAGE == "Carte":
         )
     display_pred = (display_mode == "Prévision T+1h")
 
+
+    wx_badge = ""
+    if temp_next is not None:
+        wx_badge = f"<span class='badge'>Météo T+1h : {temp_next:.0f}°C · {precip_next:.1f} mm · {wind_next:.0f} m/s</span>"
     render_badges(
-        f"<span class='badge'>Mode : <b>{'Prévision T+1h' if display_pred else 'Actuel'}</b></span>"
+        f"<span class='badge'>Mode : <b>{'Prévision T+1h' if display_pred else 'Actuel'}</b></span>{wx_badge}"
     )
 
     # --- Finder (adresse + filtre min vélos, calé sur le mode)
