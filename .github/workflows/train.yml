@@ -46,10 +46,19 @@ jobs:
           print("[train] timespan:", df['tbin_utc'].min(), "->", df['tbin_utc'].max())
           PY
 
-      - name: Train LightGBM (T+60min, pas 15 min)
+      - name: Train LightGBM (T+60min)
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: python -c "from src.forecast import train; train(horizon_minutes=60, lookback_days=30)"
+        run: |
+          python - <<'PY'
+          from src.forecast import train, _print_dataset_span
+          import pandas as pd
+          tmin,tmax,, = _print_dataset_span()
+          if pd.Timestamp(tmax) - pd.Timestamp(tmin) < pd.Timedelta(hours=2):
+              print("[train] Skip: not enough timespan yet (need > ~2h).")
+          else:
+              train(horizon_minutes=60, lookback_days=30)
+          PY
 
       - name: Upload model bundle
         uses: actions/upload-artifact@v4
