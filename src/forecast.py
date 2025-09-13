@@ -1,18 +1,16 @@
 ﻿# src/forecast.py
-from __future__ import annotations
+from _future_ import annotations
 
-import os
 from pathlib import Path
 import joblib
 import pandas as pd
 import numpy as np
-# en haut du fichier (imports)
 from lightgbm import LGBMRegressor
 import lightgbm as lgb
 
-
 from src.features import build_training_frame, _load_base_15min
 
+# Emplacement unique du modèle (aligné avec train.yml)
 MODELS_DIR = Path("models")
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_PATH = MODELS_DIR / "lgb_nbvelos_T+60min.joblib"
@@ -74,8 +72,7 @@ def train(horizon_minutes: int = 60, lookback_days: int = 30):
             "avec suffisamment d'historique."
         )
 
-    # Split temporel simple (80/20)
-    # On garde l'ordre temporel tel quel
+    # Split temporel simple (80/20) en conservant l'ordre
     split = int(len(X) * 0.8)
     X_tr, X_va = X.iloc[:split], X.iloc[split:]
     y_tr, y_va = y.iloc[:split], y.iloc[split:]
@@ -96,43 +93,25 @@ def train(horizon_minutes: int = 60, lookback_days: int = 30):
         eval_metric="l2",  # RMSE^2
         callbacks=[
             lgb.early_stopping(stopping_rounds=50),  # early stop
-            lgb.log_evaluation(period=100),          # log toutes les 100 itérations
+            lgb.log_evaluation(period=100),          # logs réguliers
         ],
     )
 
-    # Évaluation rapide (version sans dépendance à scikit-learn)
+    # Évaluation rapide (NumPy pur pour compat scikit-learn)
     y_true = y_va.values if hasattr(y_va, "values") else np.asarray(y_va)
     y_pred = np.asarray(model.predict(X_va))
-
     mae  = float(np.mean(np.abs(y_true - y_pred)))
     rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
-
     print(f"[train] MAE={mae:.3f} | RMSE={rmse:.3f} on {len(y_true)} samples")
 
-
-    # Sauvegarde artefact
-    joblib.dump(
-        dict(model=model, feat_cols=feat_cols, horizon_minutes=horizon_minutes),
-        MODEL_PATH
-    )
-    print(f"[train] saved → {MODEL_PATH.resolve()}")
-
-    # Sauvegarde artefact (avec vérif)
-    from pathlib import Path
-    import joblib, numpy as np  # si pas déjà importés en haut
-
-    models_dir = Path("models")
-    models_dir.mkdir(parents=True, exist_ok=True)
-    model_path = models_dir / "lgb_nbvelos_T+60min.joblib"
-
+    # Sauvegarde artefact (unique) + vérif
     joblib.dump(
         {"model": model, "feat_cols": feat_cols, "horizon_minutes": horizon_minutes},
-        model_path
+        MODEL_PATH
     )
+    if (not MODEL_PATH.exists()) or (MODEL_PATH.stat().st_size == 0):
+        raise RuntimeError(f"[train] Échec sauvegarde modèle → {MODEL_PATH}")
 
-    if (not model_path.exists()) or (model_path.stat().st_size == 0):
-        raise RuntimeError(f"[train] Échec sauvegarde modèle → {model_path}")
+    print(f"[train] saved → {MODEL_PATH.resolve()}")
 
-    print(f"[train] saved → {model_path.resolve()}")
-
-    return {"mae": mae, "rmse": rmse, "n_valid": int(len(y_true)), "model_path": str(model_path)}
+    return {"mae": mae, "rmse": rmse, "n_valid": int(len(y_true)), "model_path": str(MODEL_PATH)}
