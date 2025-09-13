@@ -6,16 +6,16 @@
 
 | Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
 |:--------------------------------------------|----------------------:|:-------------|:----------------|
-| Nanterre - Université (`92004`)             |                     0 | 0.0%         | 13/09 06h       |
-| Gaston Roussel - Commune de Paris (`32308`) |                     0 | 0.0%         | 13/09 06h       |
+| Rossini - Laffitte (`9022`)                 |                     0 | 0.0%         | 13/09 06h       |
 | De Gaulle - Moulin (`28002`)                |                     0 | 0.0%         | 13/09 06h       |
-| Champs-Elysees - Bassano (`8116`)           |                     0 | 0.0%         | 13/09 06h       |
-| Pereire - Ternes (`17040`)                  |                     0 | 0.0%         | 13/09 06h       |
+| Henri Barbusse (`31203`)                    |                     0 | 0.0%         | 13/09 06h       |
+| Boissière - Etienne Dolet (`31102`)         |                     0 | 0.0%         | 13/09 06h       |
 | Place des Fêtes - Solitaires (`19210`)      |                     0 | 0.0%         | 13/09 06h       |
-| Parc André Citroën (`15059`)                |                     0 | 0.0%         | 13/09 06h       |
-| Sully - Morland (`4201`)                    |                     0 | 0.0%         | 13/09 06h       |
+| Octave Feuillet - Albéric Magnard (`16110`) |                     0 | 0.0%         | 13/09 06h       |
+| Champs-Elysees - Bassano (`8116`)           |                     0 | 0.0%         | 13/09 06h       |
 | Verdun - Henri Barbusse (`22209`)           |                     0 | 0.0%         | 13/09 06h       |
-| Marché Saint-Germain (`6022`)               |                     0 | 0.0%         | 13/09 06h       |
+| Commandant Schloesing - Pétrarque (`16202`) |                     0 | 0.0%         | 13/09 06h       |
+| La Jarry - Place Diderot (`43010`)          |                     0 | 0.0%         | 13/09 06h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
@@ -28,49 +28,49 @@
 | Place Charles Vallin (`15122`)                     |                    28 | 107.7%       | 13/09 06h       |
 | Port - Maurice Chevalier (`41304`)                 |                    31 | 103.3%       | 13/09 06h       |
 | Balard - Montagne de la Fage (`15070`)             |                    36 | 100.0%       | 13/09 06h       |
-| Liberté - Vert-de-Maisons (`47007`)                |                    20 | 100.0%       | 13/09 06h       |
+| Blanqui - Docteur Bauer (`34013`)                  |                    28 | 100.0%       | 13/09 06h       |
 | Lourmel - Marie Skobtsov (`15108`)                 |                    22 | 100.0%       | 13/09 06h       |
-| Pajol - Riquet (`18109`)                           |                    47 | 100.0%       | 13/09 06h       |
+| Riquet - Marx Dormoy (`18010`)                     |                    36 | 100.0%       | 13/09 06h       |
 
 ## Détails par station (graphiques)
 
-???+ info "Nanterre - Université (92004)"
+???+ info "Rossini - Laffitte (9022)"
 
-    ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
-
-???+ info "Gaston Roussel - Commune de Paris (32308)"
-
-    ![Gaston Roussel - Commune de Paris (32308)](assets/figs/obs_pred_32308_T+1h_compact.png)
+    ![Rossini - Laffitte (9022)](assets/figs/obs_pred_9022_T+1h_compact.png)
 
 ???+ info "De Gaulle - Moulin (28002)"
 
     ![De Gaulle - Moulin (28002)](assets/figs/obs_pred_28002_T+1h_compact.png)
 
-???+ info "Champs-Elysees - Bassano (8116)"
+???+ info "Henri Barbusse (31203)"
 
-    ![Champs-Elysees - Bassano (8116)](assets/figs/obs_pred_8116_T+1h_compact.png)
+    ![Henri Barbusse (31203)](assets/figs/obs_pred_31203_T+1h_compact.png)
 
-???+ info "Pereire - Ternes (17040)"
+???+ info "Boissière - Etienne Dolet (31102)"
 
-    ![Pereire - Ternes (17040)](assets/figs/obs_pred_17040_T+1h_compact.png)
+    ![Boissière - Etienne Dolet (31102)](assets/figs/obs_pred_31102_T+1h_compact.png)
 
 ???+ info "Place des Fêtes - Solitaires (19210)"
 
     ![Place des Fêtes - Solitaires (19210)](assets/figs/obs_pred_19210_T+1h_compact.png)
 
-???+ info "Parc André Citroën (15059)"
+???+ info "Octave Feuillet - Albéric Magnard (16110)"
 
-    ![Parc André Citroën (15059)](assets/figs/obs_pred_15059_T+1h_compact.png)
+    ![Octave Feuillet - Albéric Magnard (16110)](assets/figs/obs_pred_16110_T+1h_compact.png)
 
-???+ info "Sully - Morland (4201)"
+???+ info "Champs-Elysees - Bassano (8116)"
 
-    ![Sully - Morland (4201)](assets/figs/obs_pred_4201_T+1h_compact.png)
+    ![Champs-Elysees - Bassano (8116)](assets/figs/obs_pred_8116_T+1h_compact.png)
 
 ???+ info "Verdun - Henri Barbusse (22209)"
 
     ![Verdun - Henri Barbusse (22209)](assets/figs/obs_pred_22209_T+1h_compact.png)
 
-???+ info "Marché Saint-Germain (6022)"
+???+ info "Commandant Schloesing - Pétrarque (16202)"
 
-    ![Marché Saint-Germain (6022)](assets/figs/obs_pred_6022_T+1h_compact.png)
+    ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
+
+???+ info "La Jarry - Place Diderot (43010)"
+
+    ![La Jarry - Place Diderot (43010)](assets/figs/obs_pred_43010_T+1h_compact.png)
 
