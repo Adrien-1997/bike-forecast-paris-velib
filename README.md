@@ -42,7 +42,7 @@
 
 ## 🛠️ Pipeline technique
 
-```mermaid
+```
 flowchart LR
     A[Ingestion GBFS (Opendata Paris)] --> B[Snapshots DuckDB]
     B --> C[Aggregation (hourly)]
