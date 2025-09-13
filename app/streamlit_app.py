@@ -69,7 +69,7 @@ div[data-testid="stDataFrameResizable"] { overflow-x: auto; }
 </style>
 """, unsafe_allow_html=True)
 
-TITLE = "🚲 Prévisions Vélib’ Paris (T+1h, pas 15 min)"
+TITLE = "🚲 Prévisions Vélib’ Paris"
 
 # --- WEATHER BADGE ------------------------------------------------------------
 def _format_badge(val, unit, icon):
