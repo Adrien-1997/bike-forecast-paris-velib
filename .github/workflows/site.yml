@@ -1,22 +1,27 @@
-name: Build & Deploy Monitoring Site
+name: Build & Deploy Monitoring Site (with Auto Retrain)
 
 on:
   push:
     branches: [ main ]
   schedule:
-    - cron: "*/15 * * * *"   # every 15 minutes
+    - cron: "*/15 * * * *"   # toutes les 15 minutes
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-deploy:
+  build-monitor:
     runs-on: ubuntu-latest
+    outputs:
+      need_retrain: ${{ steps.check.outputs.need_retrain }}
+      max_psi: ${{ steps.check.outputs.max_psi }}
+      mae_24h: ${{ steps.check.outputs.mae_24h }}
+      mae_baseline: ${{ steps.check.outputs.mae_baseline }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -28,17 +33,75 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-doc.txt
 
-      # Optionally refresh & aggregate before generating site:
-      # - name: Ingest snapshot
-      #   run: python -m src.ingest
-      # - name: Aggregate 15-min parquet
-      #   run: python -m src.aggregate
-
       - name: Generate monitoring pages
         run: python tools/generate_monitoring.py
 
+      - name: Decide retrain (PSI/perf)
+        id: check
+        env:
+          THRESH_PSI: "0.20"        # seuil PSI
+          THRESH_MAE_PCT: "1.20"    # +20% vs baseline
+        run: |
+          python tools/check_retrain.py | tee check.json
+          echo "need_retrain=$(jq -r '.need_retrain' check.json)" >> "$GITHUB_OUTPUT"
+          echo "max_psi=$(jq -r '.max_psi' check.json)"         >> "$GITHUB_OUTPUT"
+          echo "mae_24h=$(jq -r '.mae_24h' check.json)"         >> "$GITHUB_OUTPUT"
+          echo "mae_baseline=$(jq -r '.mae_baseline' check.json)" >> "$GITHUB_OUTPUT"
+
       - name: Build MkDocs
         run: mkdocs build --clean
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v3
+        if: always()   # on publie même si pas de retrain
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          force_orphan: true
+
+  retrain-and-rebuild:
+    needs: build-monitor
+    if: needs.build-monitor.outputs.need_retrain == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install training deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-doc.txt
+
+      - name: Retrain LightGBM (T+60)
+        run: |
+          python - << 'PY'
+          from src.forecast import train
+          res = train(horizon_minutes=60, lookback_days=30)
+          print(res)
+          import json, os, pathlib
+          pathlib.Path("docs/exports").mkdir(parents=True, exist_ok=True)
+          with open("docs/exports/baseline.json", "w", encoding="utf-8") as f:
+              json.dump({"mae_valid": res["mae"], "rmse_valid": res["rmse"], "n_valid": res["n_valid"]}, f, indent=2)
+          PY
+
+      - name: Commit new model + baseline
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add models/*.joblib docs/exports/baseline.json || true
+          git commit -m "ci: retrain model on drift/perf threshold" || echo "no changes"
+          git push
+
+      - name: Regenerate monitoring (importances à jour)
+        run: |
+          python tools/generate_monitoring.py
+          mkdocs build --clean
 
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v3

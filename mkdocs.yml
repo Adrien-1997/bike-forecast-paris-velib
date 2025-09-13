@@ -8,14 +8,11 @@ theme:
   language: fr
   features:
     - navigation.expand
-    - navigation.instant
     - navigation.top
     - navigation.tracking
     - toc.follow
     - content.code.copy
     - content.tabs.link
-    - content.action.edit
-    - content.action.view
     - search.highlight
     - search.suggest
     - search.share
@@ -29,6 +26,9 @@ theme:
 extra_css:
   - assets/extra.css
 
+plugins:
+  - search
+
 markdown_extensions:
   - admonition
   - attr_list
@@ -37,20 +37,6 @@ markdown_extensions:
   - tables
   - toc:
       permalink: true
-
-
-site_name: Vélib’ Paris — Forecast (Batch)
-theme:
-  name: material
-
-markdown_extensions:
-  - admonition
-  - pymdownx.snippets:
-      base_path: docs
-      check_paths: true
-  - pymdownx.emoji:
-      emoji_index: !!python/name:material.extensions.emoji.twemoji
-      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.highlight
   - pymdownx.inlinehilite
   - pymdownx.superfences
@@ -58,17 +44,18 @@ markdown_extensions:
   - pymdownx.mark
   - pymdownx.tasklist:
       custom_checkbox: true
-
-plugins:
-  - search
-  # - minify
-  # - mkdocs-minify-plugin
-
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 nav:
-  - Home: index.md
-  - Carte temps réel: results.md
-  - Historique: history.md
-  - Prévisions: forecast.md
-  - Conclusion: conclusion.md
-
+  - Accueil: index.md
+  - Projet:
+      - Rapport complet: project/report.md
+      - Architecture: project/architecture.md
+  - Monitoring:
+      - Vue d’ensemble: monitoring/index.md
+      - Métriques: monitoring/metrics.md
+      - Drift: monitoring/data_drift.md
+      - Modèle: monitoring/model.md
+  - Exports: exports/index.md
