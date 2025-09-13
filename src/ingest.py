@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS velib_snapshots (
 """
 
 # -----------------------------
-# HTTP utils: session + retries
+# HTTP utils
 # -----------------------------
 def _make_session():
     import requests
@@ -31,7 +31,6 @@ def _make_session():
     from requests.adapters import HTTPAdapter
 
     s = requests.Session()
-    # Backoff exponentiel: ~0.5s, 1s, 2s, 4s...
     retry = Retry(
         total=5,
         read=5,
@@ -42,22 +41,18 @@ def _make_session():
     )
     s.mount("https://", HTTPAdapter(max_retries=retry))
     s.mount("http://", HTTPAdapter(max_retries=retry))
-    # UA simple
     s.headers.update({"User-Agent": "velib-ingest/1.0 (+github.com/Adrien-1997)"})
     return s
 
 def _http_get(url: str, timeout: int = 20):
-    """GET robuste avec retries, prise en charge éventuelle du contournement SSL."""
-    import requests
     s = _make_session()
     verify_ssl = os.environ.get("NO_SSL_VERIFY", "0") != "1"
-    # proxy auto si défini dans l'env (HTTP(S)_PROXY)
     r = s.get(url, timeout=timeout, verify=verify_ssl)
     r.raise_for_status()
     return r
 
 # -----------------------------
-# 1) Client interne (si dispo)
+# Fetch data
 # -----------------------------
 def _fetch_from_client() -> Optional[pd.DataFrame]:
     try:
@@ -69,15 +64,7 @@ def _fetch_from_client() -> Optional[pd.DataFrame]:
         print(f"[ingest] src.velib_client fallback (reason: {e})")
     return None
 
-# -----------------------------
-# 2) GBFS (source principale)
-# -----------------------------
 def _fetch_from_gbfs() -> pd.DataFrame:
-    """
-    GBFS Vélib’:
-      - station_status.json : dispo temps réel
-      - station_information.json : métadonnées (capacity, lat/lon, name)
-    """
     URL_STATUS = "https://velib-metropole-opendata.smoove.pro/opendata/Velib_Metropole/station_status.json"
     URL_INFO   = "https://velib-metropole-opendata.smoove.pro/opendata/Velib_Metropole/station_information.json"
 
@@ -129,13 +116,7 @@ def _fetch_from_gbfs() -> pd.DataFrame:
     df = df_st.merge(df_in, on="station_id", how="inner")
     return _coerce_schema(df)
 
-# -----------------------------
-# 3) Opendata Paris v1 (fallback)
-# -----------------------------
 def _fetch_from_opendata_v1() -> pd.DataFrame:
-    """
-    V1 (records/1.0/search) — moins capricieux que v2.1.
-    """
     URL = (
         "https://opendata.paris.fr/api/records/1.0/search/"
         "?dataset=velib-disponibilite-en-temps-reel&rows=2000"
@@ -167,13 +148,7 @@ def _fetch_from_opendata_v1() -> pd.DataFrame:
         })
     return _coerce_schema(pd.DataFrame(rows))
 
-# -----------------------------
-# Fallback synthétique (offline)
-# -----------------------------
 def _synthetic_snapshot(n: int = 10) -> pd.DataFrame:
-    """
-    Crée un snapshot minimal pour tests locaux si tout réseau échoue.
-    """
     import numpy as np
     now = pd.Timestamp.utcnow().replace(minute=0, second=0, microsecond=0)
     rows = []
@@ -196,7 +171,7 @@ def _synthetic_snapshot(n: int = 10) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 # -----------------------------
-# Normalisation générique
+# Normalisation
 # -----------------------------
 def _coerce_schema(df: pd.DataFrame) -> pd.DataFrame:
     rename_map = {
@@ -225,46 +200,35 @@ def _coerce_schema(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna(subset=["stationcode","ts_utc"])
     return df[needed].reset_index(drop=True)
 
+# -----------------------------
+# API principale
+# -----------------------------
 def fetch_snapshot() -> pd.DataFrame:
-    # 1) Client interne
     df = _fetch_from_client()
     if df is not None and not df.empty:
         return df
-    # 2) GBFS
     try:
         return _fetch_from_gbfs()
     except Exception as e:
         print(f"[ingest] GBFS failed: {e}")
-    # 3) Opendata v1
     try:
         return _fetch_from_opendata_v1()
     except Exception as e:
         print(f"[ingest] Opendata v1 failed: {e}")
-    # 4) Synthétique (pour débloquer tes tests)
     print("[ingest] Network unavailable → using synthetic snapshot")
     return _synthetic_snapshot(30)
 
-# -----------------------------
-# Écriture en base
-# -----------------------------
 def ingest_once() -> int:
-    # 1) Ensure table exists (ne modifie pas le schéma existant si la table est déjà là)
     CON.execute(CREATE_TABLE_SQL)
-
-    # 2) Fetch data (client/gbfs/opendata/synthétique selon ta config)
     df = fetch_snapshot()
     if df is None or df.empty:
         print("[ingest] no data")
         return 0
 
-    # 3) Enregistre le snapshot comme table temporaire
     CON.register("snap_df", df)
-
-    # 4) Récupère le schéma ACTUEL de la table pour s’y adapter
     info_df = CON.execute("PRAGMA table_info('velib_snapshots')").fetchdf()
     existing_cols = [c for c in info_df["name"].tolist()]
 
-    # 5) Mapping des colonnes que l’on sait fournir
     expr_map = {
         "ts_utc": "ts_utc",
         "stationcode": "stationcode",
@@ -278,23 +242,19 @@ def ingest_once() -> int:
         "ebike": "CAST(ebike AS INTEGER)",
     }
 
-    # 6) Construit la SELECT list dans l’ordre des colonnes existantes
     select_exprs = []
     for col in existing_cols:
         if col in expr_map:
             select_exprs.append(expr_map[col] + f" AS {col}")
         else:
-            # Colonne présente en base mais pas dans le snapshot → on insère NULL
             select_exprs.append(f"NULL AS {col}")
 
-    # 7) INSERT dynamique aligné sur le schéma présent
     cols_sql = ", ".join(existing_cols)
     sel_sql = ", ".join(select_exprs)
     sql = f"INSERT INTO velib_snapshots ({cols_sql}) SELECT {sel_sql} FROM snap_df"
     CON.execute(sql)
 
     return len(df)
-
 
 if __name__ == "__main__":
     os.makedirs("exports", exist_ok=True)
