@@ -1,76 +1,76 @@
 # Prévisions
 
-*Dernière heure considérée : **13/09 14h** (Europe/Paris)*
+*Dernière heure considérée : **13/09 15h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
-| Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:--------------------------------------------|----------------------:|:-------------|:----------------|
-| Nanterre - Université (`92004`)             |                     0 | 0.0%         | 13/09 14h       |
-| Maréchal Joffre - Verdun (`41205`)          |                     0 | 0.0%         | 13/09 14h       |
-| Crevaux - Bugeaud (`16105`)                 |                     0 | 0.0%         | 13/09 14h       |
-| Sully - Morland (`4201`)                    |                     0 | 0.0%         | 13/09 14h       |
-| Gaston Roussel - Commune de Paris (`32308`) |                     0 | 0.0%         | 13/09 14h       |
-| Porte des Lilas - Faidherbe (`32601`)       |                     0 | 0.0%         | 13/09 14h       |
-| Henri Barbusse (`31203`)                    |                     0 | 0.0%         | 13/09 14h       |
-| Commandant Schloesing - Pétrarque (`16202`) |                     0 | 0.0%         | 13/09 14h       |
-| Charcot - Benfleet (`32304`)                |                     0 | 0.0%         | 13/09 14h       |
-| De Gaulle - Moulin (`28002`)                |                     0 | 0.0%         | 13/09 14h       |
+| Station                                        |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:-----------------------------------------------|----------------------:|:-------------|:----------------|
+| Sully - Morland (`4201`)                       |                     0 | 0.0%         | 13/09 15h       |
+| Hôtel de ville de Fontenay-sous-Bois (`41210`) |                     0 | 0.0%         | 13/09 15h       |
+| Crevaux - Bugeaud (`16105`)                    |                     0 | 0.0%         | 13/09 15h       |
+| Berthier - Place Stuart Merril (`17107`)       |                     0 | 0.0%         | 13/09 15h       |
+| Legendre - Dulong (`17013`)                    |                     0 | 0.0%         | 13/09 15h       |
+| Génie - Mozart (`44012`)                       |                     0 | 0.0%         | 13/09 15h       |
+| Place des Ardoines (`44018`)                   |                     0 | 0.0%         | 13/09 15h       |
+| Ranelagh - Mozart (`16026`)                    |                     0 | 0.0%         | 13/09 15h       |
+| Stade - Chevilly (`45504`)                     |                     0 | 0.0%         | 13/09 15h       |
+| Gaston Roussel - Commune de Paris (`32308`)    |                     0 | 0.0%         | 13/09 15h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
-| Station                                          |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
-|:-------------------------------------------------|----------------------:|:-------------|:----------------|
-| Westermeyer - Paul Vaillant-Couturier (`42004`)  |                    37 | 148.0%       | 13/09 14h       |
-| Bercy - Villot (`12105`)                         |                    35 | 106.1%       | 13/09 14h       |
-| François Truffaut - Saint Emilion (`12033`)      |                    66 | 100.0%       | 13/09 14h       |
-| Hôtel de Ville de Champigny sur Marne (`45001`)  |                    21 | 100.0%       | 13/09 14h       |
-| Gare d'Austerlitz - Quai Saint-Bernard (`13104`) |                    27 | 100.0%       | 13/09 14h       |
-| Hector Malot - Daumesnil (`12008`)               |                    53 | 98.1%        | 13/09 14h       |
-| Gare de Lyon - Roland Barthes (`12106`)          |                    66 | 97.1%        | 13/09 14h       |
-| Bercy. (`12108`)                                 |                    64 | 97.0%        | 13/09 14h       |
-| Rome - Provence (`8007`)                         |                    29 | 96.7%        | 13/09 14h       |
-| Bourdonnais - Tour Eiffel (`7023`)               |                    58 | 96.7%        | 13/09 14h       |
+| Station                                            |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:---------------------------------------------------|----------------------:|:-------------|:----------------|
+| Westermeyer - Paul Vaillant-Couturier (`42004`)    |                    33 | 132.0%       | 13/09 15h       |
+| Aristide Briand - Place de la Résistance (`21302`) |                    26 | 104.0%       | 13/09 15h       |
+| Saint-Antoine Sévigné (`4010`)                     |                    27 | 103.8%       | 13/09 15h       |
+| Bercy - Villot (`12105`)                           |                    34 | 103.0%       | 13/09 15h       |
+| Hôtel de Ville de Champigny sur Marne (`45001`)    |                    21 | 100.0%       | 13/09 15h       |
+| Roquette - Auguste Laurent (`11022`)               |                    16 | 100.0%       | 13/09 15h       |
+| Fessart - Château (`21030`)                        |                    20 | 100.0%       | 13/09 15h       |
+| Oratoire - Rivoli (`1025`)                         |                    18 | 100.0%       | 13/09 15h       |
+| Convention - Saint-Charles (`15063`)               |                    23 | 100.0%       | 13/09 15h       |
+| Victoria - Place du Chatelet (`1002`)              |                    22 | 100.0%       | 13/09 15h       |
 
 ## Détails par station (graphiques)
-
-???+ info "Nanterre - Université (92004)"
-
-    ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
-
-???+ info "Maréchal Joffre - Verdun (41205)"
-
-    ![Maréchal Joffre - Verdun (41205)](assets/figs/obs_pred_41205_T+1h_compact.png)
-
-???+ info "Crevaux - Bugeaud (16105)"
-
-    ![Crevaux - Bugeaud (16105)](assets/figs/obs_pred_16105_T+1h_compact.png)
 
 ???+ info "Sully - Morland (4201)"
 
     ![Sully - Morland (4201)](assets/figs/obs_pred_4201_T+1h_compact.png)
 
+???+ info "Hôtel de ville de Fontenay-sous-Bois (41210)"
+
+    ![Hôtel de ville de Fontenay-sous-Bois (41210)](assets/figs/obs_pred_41210_T+1h_compact.png)
+
+???+ info "Crevaux - Bugeaud (16105)"
+
+    ![Crevaux - Bugeaud (16105)](assets/figs/obs_pred_16105_T+1h_compact.png)
+
+???+ info "Berthier - Place Stuart Merril (17107)"
+
+    ![Berthier - Place Stuart Merril (17107)](assets/figs/obs_pred_17107_T+1h_compact.png)
+
+???+ info "Legendre - Dulong (17013)"
+
+    ![Legendre - Dulong (17013)](assets/figs/obs_pred_17013_T+1h_compact.png)
+
+???+ info "Génie - Mozart (44012)"
+
+    ![Génie - Mozart (44012)](assets/figs/obs_pred_44012_T+1h_compact.png)
+
+???+ info "Place des Ardoines (44018)"
+
+    ![Place des Ardoines (44018)](assets/figs/obs_pred_44018_T+1h_compact.png)
+
+???+ info "Ranelagh - Mozart (16026)"
+
+    ![Ranelagh - Mozart (16026)](assets/figs/obs_pred_16026_T+1h_compact.png)
+
+???+ info "Stade - Chevilly (45504)"
+
+    ![Stade - Chevilly (45504)](assets/figs/obs_pred_45504_T+1h_compact.png)
+
 ???+ info "Gaston Roussel - Commune de Paris (32308)"
 
     ![Gaston Roussel - Commune de Paris (32308)](assets/figs/obs_pred_32308_T+1h_compact.png)
-
-???+ info "Porte des Lilas - Faidherbe (32601)"
-
-    ![Porte des Lilas - Faidherbe (32601)](assets/figs/obs_pred_32601_T+1h_compact.png)
-
-???+ info "Henri Barbusse (31203)"
-
-    ![Henri Barbusse (31203)](assets/figs/obs_pred_31203_T+1h_compact.png)
-
-???+ info "Commandant Schloesing - Pétrarque (16202)"
-
-    ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
-
-???+ info "Charcot - Benfleet (32304)"
-
-    ![Charcot - Benfleet (32304)](assets/figs/obs_pred_32304_T+1h_compact.png)
-
-???+ info "De Gaulle - Moulin (28002)"
-
-    ![De Gaulle - Moulin (28002)](assets/figs/obs_pred_28002_T+1h_compact.png)
 
