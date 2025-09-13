@@ -5,7 +5,10 @@ import os
 from pathlib import Path
 import joblib
 import pandas as pd
+# en haut du fichier (imports)
 from lightgbm import LGBMRegressor
+import lightgbm as lgb
+
 
 from src.features import build_training_frame, _load_base_15min
 
@@ -89,9 +92,11 @@ def train(horizon_minutes: int = 60, lookback_days: int = 30):
     model.fit(
         X_tr, y_tr,
         eval_set=[(X_va, y_va)],
-        eval_metric="l2",            # RMSE²
-        verbose=100,
-        callbacks=None,
+        eval_metric="l2",  # RMSE^2
+        callbacks=[
+            lgb.early_stopping(stopping_rounds=50),  # early stop
+            lgb.log_evaluation(period=100),          # log toutes les 100 itérations
+        ],
     )
 
     # Évaluation rapide
