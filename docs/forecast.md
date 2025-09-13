@@ -1,76 +1,76 @@
 # Prévisions
 
-*Dernière heure considérée : **13/09 04h** (Europe/Paris)*
+*Dernière heure considérée : **13/09 05h** (Europe/Paris)*
 
 ## Top-10 stations à risque (faible nb vélos prévu T+1h)
 
-| Station                                           | Prédit T+1h (vélos)   | Taux prévu   | Dernière obs.   |
-|:--------------------------------------------------|:----------------------|:-------------|:----------------|
-| Hauteville - Bonne Nouvelle (`10003`)             | —                     | —            | 13/09 04h       |
-| Metz - Faubourg Saint-Denis (`10004`)             | —                     | —            | 13/09 04h       |
-| Petites Ecuries - Faubourg Poissonnière (`10005`) | —                     | —            | 13/09 04h       |
-| Petites Ecuries - Faubourg Saint-Denis (`10006`)  | —                     | —            | 13/09 04h       |
-| Cité Riverin - Château d'Eau (`10008`)            | —                     | —            | 13/09 04h       |
-| Mairie du 10ème (`10009`)                         | —                     | —            | 13/09 04h       |
-| Quai de l'Horloge - Pont Neuf (`1001`)            | —                     | —            | 13/09 04h       |
-| Place Jacques Bonsergent (`10010`)                | —                     | —            | 13/09 04h       |
-| Bourse du Travail (`10011`)                       | —                     | —            | 13/09 04h       |
-| Vinaigriers - Magenta (`10012`)                   | —                     | —            | 13/09 04h       |
+| Station                                     |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:--------------------------------------------|----------------------:|:-------------|:----------------|
+| Nanterre - Université (`92004`)             |                     0 | 0.0%         | 13/09 05h       |
+| Place des Fêtes - Solitaires (`19210`)      |                     0 | 0.0%         | 13/09 05h       |
+| Commandant Schloesing - Pétrarque (`16202`) |                     0 | 0.0%         | 13/09 05h       |
+| Octave Feuillet - Albéric Magnard (`16110`) |                     0 | 0.0%         | 13/09 05h       |
+| Champs-Elysees - Bassano (`8116`)           |                     0 | 0.0%         | 13/09 05h       |
+| Eylau - Trocadéro (`16014`)                 |                     0 | 0.0%         | 13/09 05h       |
+| Parc André Citroën (`15059`)                |                     0 | 0.0%         | 13/09 05h       |
+| Gare de Lyon - Van Gogh (`12006`)           |                     0 | 0.0%         | 13/09 05h       |
+| Charles de Gaulle (`22019`)                 |                     0 | 0.0%         | 13/09 05h       |
+| Verdun - Henri Barbusse (`22209`)           |                     0 | 0.0%         | 13/09 05h       |
 
 ## Top-10 risque de saturation (taux prévu élevé)
 
-| Station                                           | Prédit T+1h (vélos)   | Taux prévu   | Dernière obs.   |
-|:--------------------------------------------------|:----------------------|:-------------|:----------------|
-| Hauteville - Bonne Nouvelle (`10003`)             | —                     | —            | 13/09 04h       |
-| Metz - Faubourg Saint-Denis (`10004`)             | —                     | —            | 13/09 04h       |
-| Petites Ecuries - Faubourg Poissonnière (`10005`) | —                     | —            | 13/09 04h       |
-| Petites Ecuries - Faubourg Saint-Denis (`10006`)  | —                     | —            | 13/09 04h       |
-| Cité Riverin - Château d'Eau (`10008`)            | —                     | —            | 13/09 04h       |
-| Mairie du 10ème (`10009`)                         | —                     | —            | 13/09 04h       |
-| Quai de l'Horloge - Pont Neuf (`1001`)            | —                     | —            | 13/09 04h       |
-| Place Jacques Bonsergent (`10010`)                | —                     | —            | 13/09 04h       |
-| Bourse du Travail (`10011`)                       | —                     | —            | 13/09 04h       |
-| Vinaigriers - Magenta (`10012`)                   | —                     | —            | 13/09 04h       |
+| Station                                            |   Prédit T+1h (vélos) | Taux prévu   | Dernière obs.   |
+|:---------------------------------------------------|----------------------:|:-------------|:----------------|
+| Westermeyer - Paul Vaillant-Couturier (`42004`)    |                    40 | 160.0%       | 13/09 05h       |
+| Aristide Briand - Place de la Résistance (`21302`) |                    35 | 140.0%       | 13/09 05h       |
+| Abbé Groult - Convention (`15039`)                 |                    15 | 125.0%       | 13/09 05h       |
+| Daumesnil - Picpus (`12010`)                       |                    24 | 114.3%       | 13/09 05h       |
+| Place Charles Vallin (`15122`)                     |                    29 | 111.5%       | 13/09 05h       |
+| Port - Maurice Chevalier (`41304`)                 |                    31 | 103.3%       | 13/09 05h       |
+| Place Paul Eluard (`46001`)                        |                    19 | 100.0%       | 13/09 05h       |
+| Porte de Versailles (`15203`)                      |                    28 | 100.0%       | 13/09 05h       |
+| Place Eustache Deschamps (`42303`)                 |                    20 | 100.0%       | 13/09 05h       |
+| Hôpital - Campo-Formio (`13011`)                   |                    11 | 100.0%       | 13/09 05h       |
 
 ## Détails par station (graphiques)
 
-???+ info "Hauteville - Bonne Nouvelle (10003)"
+???+ info "Nanterre - Université (92004)"
 
-    ![Hauteville - Bonne Nouvelle (10003)](assets/figs/obs_pred_10003_T+1h_compact.png)
+    ![Nanterre - Université (92004)](assets/figs/obs_pred_92004_T+1h_compact.png)
 
-???+ info "Metz - Faubourg Saint-Denis (10004)"
+???+ info "Place des Fêtes - Solitaires (19210)"
 
-    ![Metz - Faubourg Saint-Denis (10004)](assets/figs/obs_pred_10004_T+1h_compact.png)
+    ![Place des Fêtes - Solitaires (19210)](assets/figs/obs_pred_19210_T+1h_compact.png)
 
-???+ info "Petites Ecuries - Faubourg Poissonnière (10005)"
+???+ info "Commandant Schloesing - Pétrarque (16202)"
 
-    ![Petites Ecuries - Faubourg Poissonnière (10005)](assets/figs/obs_pred_10005_T+1h_compact.png)
+    ![Commandant Schloesing - Pétrarque (16202)](assets/figs/obs_pred_16202_T+1h_compact.png)
 
-???+ info "Petites Ecuries - Faubourg Saint-Denis (10006)"
+???+ info "Octave Feuillet - Albéric Magnard (16110)"
 
-    ![Petites Ecuries - Faubourg Saint-Denis (10006)](assets/figs/obs_pred_10006_T+1h_compact.png)
+    ![Octave Feuillet - Albéric Magnard (16110)](assets/figs/obs_pred_16110_T+1h_compact.png)
 
-???+ info "Cité Riverin - Château d'Eau (10008)"
+???+ info "Champs-Elysees - Bassano (8116)"
 
-    ![Cité Riverin - Château d'Eau (10008)](assets/figs/obs_pred_10008_T+1h_compact.png)
+    ![Champs-Elysees - Bassano (8116)](assets/figs/obs_pred_8116_T+1h_compact.png)
 
-???+ info "Mairie du 10ème (10009)"
+???+ info "Eylau - Trocadéro (16014)"
 
-    ![Mairie du 10ème (10009)](assets/figs/obs_pred_10009_T+1h_compact.png)
+    ![Eylau - Trocadéro (16014)](assets/figs/obs_pred_16014_T+1h_compact.png)
 
-???+ info "Quai de l'Horloge - Pont Neuf (1001)"
+???+ info "Parc André Citroën (15059)"
 
-    ![Quai de l'Horloge - Pont Neuf (1001)](assets/figs/obs_pred_1001_T+1h_compact.png)
+    ![Parc André Citroën (15059)](assets/figs/obs_pred_15059_T+1h_compact.png)
 
-???+ info "Place Jacques Bonsergent (10010)"
+???+ info "Gare de Lyon - Van Gogh (12006)"
 
-    ![Place Jacques Bonsergent (10010)](assets/figs/obs_pred_10010_T+1h_compact.png)
+    ![Gare de Lyon - Van Gogh (12006)](assets/figs/obs_pred_12006_T+1h_compact.png)
 
-???+ info "Bourse du Travail (10011)"
+???+ info "Charles de Gaulle (22019)"
 
-    ![Bourse du Travail (10011)](assets/figs/obs_pred_10011_T+1h_compact.png)
+    ![Charles de Gaulle (22019)](assets/figs/obs_pred_22019_T+1h_compact.png)
 
-???+ info "Vinaigriers - Magenta (10012)"
+???+ info "Verdun - Henri Barbusse (22209)"
 
-    ![Vinaigriers - Magenta (10012)](assets/figs/obs_pred_10012_T+1h_compact.png)
+    ![Verdun - Henri Barbusse (22209)](assets/figs/obs_pred_22209_T+1h_compact.png)
 
