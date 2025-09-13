@@ -1,4 +1,26 @@
-#Docs
-mkdocs
-mkdocs-material
-mkdocs-jupyter
+# Core data stack
+pandas>=2.2
+numpy>=1.26
+duckdb>=1.0.0
+pyarrow>=16.0.0
+
+# Modeling & ML
+lightgbm>=4.2
+scikit-learn>=1.5
+joblib>=1.4
+
+# Weather, dates & holidays
+requests>=2.32
+holidays>=0.50
+
+# Visualisation & dashboards
+matplotlib>=3.9
+folium>=0.17
+streamlit>=1.36
+
+# Documentation & site
+mkdocs-material>=9.5
+pymdown-extensions>=10.8
+
+# Utils
+tqdm>=4.66
