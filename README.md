@@ -4,7 +4,7 @@
 [![CI — training](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/train.yml/badge.svg)](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/train.yml)
 [![Docs](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/site.yml/badge.svg?branch=main)](https://adrien-1997.github.io/bike-forecast-paris-velib/)
 [![App Streamlit](https://img.shields.io/badge/app-streamlit-green)](https://adrien-1997-bike-forecast-paris-velib-appstreamlit-app-vq1xma.streamlit.app/)
-![Version](https://img.shields.io/badge/version-v1.2.0-blue.svg)
+![Version](https://img.shields.io/badge/version-v2.0.0-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-black)
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB)
 
