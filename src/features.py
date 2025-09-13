@@ -1,23 +1,48 @@
 # src/features.py
 from __future__ import annotations
 
+from pathlib import Path
 import pandas as pd
 import numpy as np
-from src.aggregate import occupancy_15min
+
 from src.cal_features import add_calendar_features, feature_cols as calfeat_cols
+
+# Parquet unique produit par src.aggregate (pipeline ingest)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DATA_PARQUET = REPO_ROOT / "docs" / "exports" / "velib.parquet"
+
+
+def _load_base_15min() -> pd.DataFrame:
+    """
+    Charge le dataset 15 min depuis docs/exports/velib.parquet.
+    Ne dépend PAS de DuckDB / velib_snapshots (utile pour le runner 'train').
+    """
+    if not DATA_PARQUET.exists():
+        raise FileNotFoundError(
+            f"[features] Dataset introuvable: {DATA_PARQUET}. "
+            "Lance d'abord le workflow 'velib-ingest' pour le générer."
+        )
+    df = pd.read_parquet(DATA_PARQUET)
+    if df.empty:
+        raise ValueError("[features] Dataset parquet vide.")
+    # Normaliser le temps en UTC naïf
+    df["tbin_utc"] = pd.to_datetime(df["tbin_utc"], utc=True).dt.tz_localize(None)
+    if "hour_utc" in df.columns:
+        df["hour_utc"] = pd.to_datetime(df["hour_utc"], utc=True).dt.tz_localize(None)
+    else:
+        df["hour_utc"] = df["tbin_utc"].dt.floor("h")
+    return df
 
 
 def build_training_frame(horizon_minutes: int = 60, lookback_days: int = 30):
     """
-    Dataset d'entraînement à partir de l'agrégat 15min (exports/velib.parquet).
+    Dataset d'entraînement à partir de l'agrégat 15min (docs/exports/velib.parquet).
     - Cible: y_nb = nb vélos à +horizon_minutes (ex: 60 → +4 bins)
     - Lags/rollings en nombre de bins (15 min chacun)
     """
-    base = occupancy_15min(with_weather=True)
-    if base is None or base.empty:
-        return pd.DataFrame(), []
+    base = _load_base_15min()
 
-    # Fenêtre lookback
+    # Fenêtre lookback (pour limiter la taille)
     cutoff = pd.Timestamp.utcnow().floor("15min") - pd.Timedelta(days=lookback_days)
     base = base[base["tbin_utc"] >= cutoff.tz_localize(None)].copy()
 
@@ -26,7 +51,7 @@ def build_training_frame(horizon_minutes: int = 60, lookback_days: int = 30):
 
     # Cible: +N bins (N = horizon_minutes / 15)
     bins_h = max(1, int(round(horizon_minutes / 15)))
-    base["y_nb"] = base.groupby("stationcode")["nb_velos_bin"].shift(-bins_h)
+    base["y_nb"] = base.groupby("stationcode", group_keys=False)["nb_velos_bin"].shift(-bins_h)
 
     # Lags & rollings (en bins)
     def add_lags_rollings(dfg: pd.DataFrame) -> pd.DataFrame:
@@ -47,7 +72,11 @@ def build_training_frame(horizon_minutes: int = 60, lookback_days: int = 30):
         g["trend_occ_4b"] = (g["occ_ratio_bin"] - g["occ_ratio_bin"].shift(4)) / 4.0
         return g
 
-    base = base.groupby("stationcode", group_keys=False).apply(add_lags_rollings)
+    try:
+        base = base.groupby("stationcode", group_keys=False).apply(add_lags_rollings)
+    except TypeError:
+        # compat pandas < 2.2 (pas d'include_groups)
+        base = base.groupby("stationcode", group_keys=False).apply(add_lags_rollings)
 
     # Features calendaires (Europe/Paris) basées sur hour_utc
     base = add_calendar_features(base, tz="Europe/Paris")
@@ -60,7 +89,7 @@ def build_training_frame(horizon_minutes: int = 60, lookback_days: int = 30):
         *[f"lag_occ_{b}b" for b in (1,2,3,4,8,16)],
         "roll_nb_4b","roll_nb_8b","roll_occ_4b","roll_occ_8b",
         "trend_nb_4b","trend_occ_4b",
-        *calfeat_cols(base),  # contient aussi l'heure/dow + météo si présente
+        *calfeat_cols(base),  # heure/dow/weekend/rush/holiday + sin/cos (+ météo si dispo)
     ]
 
     # dédoublonnage en conservant l'ordre
