@@ -31,12 +31,20 @@ jobs:
           python -m pip install -U pip
           pip install -r requirements-train.txt
 
-      - name: Check dataset presence
+      - name: Check dataset presence (docs/exports/velib.parquet)
+        shell: bash
         run: |
-          if [ ! -f docs/exports/velib.parquet ] && [ ! -f warehouse.duckdb ]; then
-            echo "Dataset manquant (docs/exports/velib.parquet ou warehouse.duckdb requis)"; exit 1;
+          if [ ! -f docs/exports/velib.parquet ]; then
+            echo "Dataset manquant: docs/exports/velib.parquet (lance d'abord velib-ingest)"; exit 1;
           fi
-          ls -lh docs/exports || true
+          echo "=== Dataset info ==="
+          ls -lh docs/exports | sed 's/^/ - /'
+          python - <<'PY'
+          import pandas as pd
+          df = pd.read_parquet('docs/exports/velib.parquet')
+          print("[train] rows:", len(df), "stations:", df['stationcode'].nunique())
+          print("[train] timespan:", df['tbin_utc'].min(), "->", df['tbin_utc'].max())
+          PY
 
       - name: Train LightGBM (T+60min, pas 15 min)
         env:
@@ -49,17 +57,3 @@ jobs:
           name: model-lgbm-T+60min
           path: models/lgb_nbvelos_T+60min.joblib
           retention-days: 14
-
-      # (Optionnel) Commit du modèle dans le repo
-      # - name: Commit model if changed
-      #   run: |
-      #     set -euxo pipefail
-      #     git config user.name  "github-actions"
-      #     git config user.email "actions@users.noreply.github.com"
-      #     git add models/lgb_nbvelos_T+60min.joblib || true
-      #     if git diff --cached --quiet; then
-      #       echo "Nothing to commit."
-      #     else
-      #       git commit -m "ci(train): update LGBM model T+60min"
-      #       git push
-      #     fi
