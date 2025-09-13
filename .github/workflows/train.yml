@@ -1,0 +1,49 @@
+name: velib-train
+
+on:
+  schedule:
+    # Entraînement quotidien à 02:17 UTC (≈ 04:17 Paris en été / 03:17 en hiver)
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: velib-train
+  cancel-in-progress: true
+
+jobs:
+  train_daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install deps (training)
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements-doc.txt
+          pip install duckdb pandas pyarrow requests joblib lightgbm holidays
+
+      - name: Check dataset presence
+        run: |
+          test -f docs/exports/velib.parquet || (echo "Dataset docs/exports/velib.parquet manquant — run ingest first" && exit 1)
+
+      - name: Train LightGBM (T+60min, 15min bins)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -c "from src.forecast import train; train(horizon_minutes=60, lookback_days=30)"
+
+      - name: Upload model bundle (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-lgbm-T+60min
+          path: models/lgb_nbvelos_T+60min.joblib
+          retention-days: 14
