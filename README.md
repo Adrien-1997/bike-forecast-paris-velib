@@ -58,30 +58,31 @@ Public GBFS snapshots → normalized 15‑min aggregates → **features & model 
 ### Core `src/*` chain
 
 ```mermaid
+
 flowchart LR
   %% Schedules: ingestion = every 15 min, monitoring = 4x/day, training = daily
 
-  subgraph S[Data & Features — src/*]
-    A[GBFS ingestion — src/ingest.py\nEvery 15 min] --> B[DuckDB snapshots\nwarehouse.duckdb]
-    B --> C[15-min aggregation + weather — src/aggregate.py]
-    C --> D[Canonical export -> docs/exports/velib.parquet (+ CSV)]
-    D --> E[Normalization — tools/datasets.py]
+  subgraph S[Data & Features - src/*]
+    A[GBFS ingestion - src/ingest.py\nEvery 15 min] --> B[DuckDB snapshots\nwarehouse.duckdb]
+    B --> C[15-min aggregation + weather - src/aggregate.py]
+    C --> D[Canonical export -> docs/exports/velib.parquet (CSV)]
+    D --> E[Normalization - tools/datasets.py]
     E --> EV[events.parquet\n(ts, station_id, bikes, capacity, occ, lat, lon, name)]
-    E --> PF[perf.parquet\n(ts, station_id, y_true, y_pred[, baseline])]
+    E --> PF[perf.parquet\n(ts, station_id, y_true, y_pred, baseline)]
   end
 
-  subgraph F[Forecasting — src/forecast.py]
+  subgraph F[Forecasting - src/forecast.py]
     EV --> G[Feature builder]
     PF --> G
-    G --> H[LightGBM — target: bikes @ T+60]
+    G --> H[LightGBM - target: bikes @ T+60]
     H --> I[models/lgb_nbvelos_T+60min.joblib]
     H --> J[docs/exports/baseline.json]
   end
 
-  subgraph M[Analytics & Monitoring — tools/*]
-    D --> U[build_usage.py — analytics + Folium map]
-    D --> P[build_performance.py — MAE/RMSE, OVSP, bias, calibration]
-    D --> Q[build_monitoring.py — data health, PSI, feat. importance, MAE trend]
+  subgraph M[Analytics & Monitoring - tools/*]
+    D --> U[build_usage.py - analytics + Folium map]
+    D --> P[build_performance.py - MAE/RMSE, OVSP, bias, calibration]
+    D --> Q[build_monitoring.py - data health, PSI, feature importance, MAE trend]
     U --> X[docs/assets/... (figures, maps)]
     P --> X
     Q --> X
@@ -89,20 +90,21 @@ flowchart LR
 
   subgraph DLY[Delivery]
     X --> K[Docs (MkDocs) -> gh-pages]
-    D --> L[App (Streamlit) — app/streamlit_app.py]
+    D --> L[App (Streamlit) - app/streamlit_app.py]
     I --> L
   end
 
-  subgraph CI[CI/CD — GitHub Actions]
-    CI1[velib-ingest — every 15 min] --> B
-    CI3[monitoring-site — 4x/day\n00, 06, 12, 18 UTC] --> K
-    CI2[velib-train — daily] --> H
+  subgraph CI[CI/CD - GitHub Actions]
+    CI1[velib-ingest - every 15 min] --> B
+    CI3[monitoring-site - 4x/day\n00, 06, 12, 18 UTC] --> K
+    CI2[velib-train - daily] --> H
     T[check_retrain.py\nPSI >= 0.20 or MAE_24h >= 1.20x baseline?]
     P --> T
     Q --> T
     T -->|yes| CI2
     CI2 --> K
   end
+
 ```
 
 **1) Ingestion — `src/ingest.py` (every 15 min)**  
