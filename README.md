@@ -55,8 +55,6 @@ Public GBFS snapshots → normalized 15‑min aggregates → **features & model 
 
 ## 🧭 Pipelines — Data → ML → Docs & App
 
-### Core `src/*` chain
-
 ```mermaid
 flowchart LR
   A[GBFS ingestion - src/ingest.py - every 15 min]
@@ -117,6 +115,8 @@ flowchart LR
   CI2 --> H
   CI2 --> K
 ```
+
+### Core `src/*` chain
 
 **1) Ingestion — `src/ingest.py` (every 15 min)**  
 Pull GBFS `station_status` + `station_information`, normalize, upsert station meta, append one row/station to `snapshots(ts, station_id, bikes, capacity, docks_free, flags, lat, lon, name)`. Idempotent per `(ts, station_id)`.
