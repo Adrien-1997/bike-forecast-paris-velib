@@ -71,6 +71,7 @@ flowchart LR
     E[Normalization - tools/datasets.py]
     EV[events.parquet<br/>(ts, station_id, bikes, capacity, occ, lat, lon, name)]
     PF[perf.parquet<br/>(ts, station_id, y_true, y_pred, baseline)]
+
     A --> B
     B --> C
     C --> D
@@ -84,6 +85,7 @@ flowchart LR
     H[LightGBM - target: bikes @ T+60]
     I[models/lgb_nbvelos_T+60min.joblib]
     J[docs/exports/baseline.json]
+
     EV --> G
     PF --> G
     G --> H
@@ -96,6 +98,7 @@ flowchart LR
     P[build_performance.py - MAE/RMSE, OVSP, bias, calibration]
     Q[build_monitoring.py - data health, PSI, feature importance, MAE trend]
     X[docs/assets/... (figures, maps)]
+
     D --> U
     D --> P
     D --> Q
@@ -107,6 +110,7 @@ flowchart LR
   subgraph DLY[Delivery]
     K[Docs (MkDocs) -> gh-pages]
     L[App (Streamlit) - app/streamlit_app.py]
+
     X --> K
     D --> L
     I --> L
@@ -117,6 +121,7 @@ flowchart LR
     CI2[velib-train - daily]
     CI3[monitoring-site - 4x/day<br/>00, 06, 12, 18 UTC]
     T[check_retrain.py<br/>PSI >= 0.20 or MAE_24h >= 1.20x baseline?]
+
     CI1 --> B
     CI3 --> K
     P --> T
