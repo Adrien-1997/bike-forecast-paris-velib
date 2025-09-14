@@ -1,7 +1,7 @@
-﻿site_name: Vélib’ Paris — Forecast (Batch)
-site_url: https://adrien-1997.github.io/bike-forecast-paris-velib/
-repo_url: https://github.com/Adrien-1997/bike-forecast-paris-velib
-repo_name: Adrien-1997/bike-forecast-paris-velib
+﻿site_name: "Vélib’ Paris — Forecast (Batch)"
+site_url: "https://adrien-1997.github.io/bike-forecast-paris-velib/"
+repo_url: "https://github.com/Adrien-1997/bike-forecast-paris-velib"
+repo_name: "Adrien-1997/bike-forecast-paris-velib"
 
 theme:
   name: material
@@ -50,12 +50,13 @@ markdown_extensions:
 
 nav:
   - Accueil: index.md
-  - Projet:
-      - Rapport complet: project/report.md
-      - Architecture: project/architecture.md
-  - Monitoring:
+  - Usage du réseau:
+      - Vue d’ensemble: usage/index.md
+      - Profils de stations: stations/index.md
+  - Performance des prévisions:
+      - Métriques & visuels: monitoring/metrics.md
+  - Monitoring (données & modèle):
       - Vue d’ensemble: monitoring/index.md
-      - Métriques: monitoring/metrics.md
-      - Drift: monitoring/data_drift.md
+      - Drift des données: monitoring/data_drift.md
       - Modèle: monitoring/model.md
   - Exports: exports/index.md

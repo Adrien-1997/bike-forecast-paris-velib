@@ -1,12 +1,9 @@
 # Drift des données
 
-## PSI (7j vs historique)
-- **occ_ratio_bin**: n/a
-- **temp_C**: n/a
-- **wind_mps**: n/a
-- **precip_mm**: n/a
+Le **PSI** compare la distribution de début vs fin de fenêtre.
+- **0.1–0.2** : attention
+- **≥ 0.2** : drift fort → envisager un réentraînement
 
-![PSI](../assets/figs/psi_summary.png)
+![PSI](../assets/figs/mon_psi.png)
 
-## Distribution cible
-![y_true distribution](../assets/figs/ytrue_hist.png)
+Tableau complet : `assets/tables/psi_features.csv`

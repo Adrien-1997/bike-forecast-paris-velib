@@ -1,19 +1,22 @@
-# Métriques détaillées
+# Performance des prévisions
 
-- **MAE 24h**: 3.82  
-- **RMSE 24h**: 5.65  
-- **MAE 7j**: 4.86  
-- **RMSE 7j**: 7.12  
+## Métriques par horizon
+![Metrics by horizon](../assets/figs/mon_metrics_by_horizon.png)
 
-## Séries temporelles
-![MAE (full)](../assets/figs/mae_full.png)
-![RMSE (full)](../assets/figs/rmse_full.png)
+## Observé vs Prédit (agrégé sur 7 jours)
+![Obs vs Préd — agrégé](../assets/figs/mon_pred_vs_true.png)
 
-## Top erreurs (24h)
-![Top10 stations (24h)](../assets/figs/top10_err_24h.png)
+## Focus station (24h)
+![Obs vs Préd — station](../assets/figs/obs_vs_pred_station_24h.png)
 
-## Erreur spatiale (scatter 24h)
-![Erreur spatiale](../assets/figs/error_scatter.png)
+## Heatmap des erreurs (MAE heure × jour)
+![MAE heure×jour](../assets/figs/errors_hour_x_dow.png)
 
-## Distributions occupation
-![Occ ratio hist (ref vs cur)](../assets/figs/occ_hist_ref_cur.png)
+## Distribution des résidus
+![Résidus](../assets/figs/residual_hist.png)
+
+## Biais moyen horaire
+![Biais](../assets/figs/bias_over_time.png)
+
+## Calibration (prédit vs observé par bin)
+![Calibration](../assets/figs/calibration_plot.png)
