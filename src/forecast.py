@@ -115,3 +115,17 @@ def train(horizon_minutes: int = 60, lookback_days: int = 30):
     print(f"[train] saved → {MODEL_PATH.resolve()}")
 
     return {"mae": mae, "rmse": rmse, "n_valid": int(len(y_true)), "model_path": str(MODEL_PATH)}
+
+# --- Model loader for app ---------------------------------------------------
+def load_model_bundle(horizon_minutes: int = 60, model_dir: str | Path = MODELS_DIR):
+    """
+    Charge le bundle (model, feat_cols, horizon_minutes) depuis models/.
+    Retourne (model, feat_cols).
+    """
+    path = Path(model_dir) / f"lgb_nbvelos_T+{horizon_minutes}min.joblib"
+    if not path.exists():
+        raise FileNotFoundError(f"Model not found: {path}")
+    bundle = joblib.load(path)
+    model = bundle.get("model")
+    feat_cols = bundle.get("feat_cols", [])
+    return model, feat_cols
