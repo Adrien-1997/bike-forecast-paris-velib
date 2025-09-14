@@ -19,7 +19,6 @@ Public GBFS snapshots → normalized 15‑min aggregates → **features & model 
 ## Table of Contents
 
 - [Key Features](#-key-features)
-- [Preview (generated assets)](#-preview-generated-assets)
 - [Pipelines — Data → ML → Docs & App](#-pipelines--data--ml--docs--app)
 - [CI/CD (GitHub Actions)](#-cicd-github-actions)
 - [Run locally](#-run-locally)
@@ -51,27 +50,6 @@ Public GBFS snapshots → normalized 15‑min aggregates → **features & model 
 - **Auto‑retrain**: if **PSI ≥ 0.20** or **MAE_24h ≥ 1.20 × baseline**, a LightGBM model retrains and the site is rebuilt.
 
 > All figures/tables come from `docs/exports/velib.parquet` via `tools/*` scripts.
-
----
-
-## 📷 Preview (generated assets)
-
-- **Usage — daily time series**  
-  ![usage daily](docs/assets/figs/usage_daily_timeseries.png)
-
-- **Observed vs Predicted (aggregate)**  
-  ![ovsp](docs/assets/figs/mon_pred_vs_true.png)
-
-- **Data health**  
-  ![data health](docs/assets/figs/mon_data_health.png)
-
-- **Errors by hour × day**  
-  ![errors heatmap](docs/assets/figs/errors_hour_x_dow.png)
-
-- **Calibration**  
-  ![calibration](docs/assets/figs/calibration_plot.png)
-
-> **Map** (optional): `docs/assets/maps/usage_map.html`
 
 ---
 
