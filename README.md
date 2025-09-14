@@ -79,7 +79,7 @@ Public GBFS snapshots → normalized 15‑min aggregates → **features & model 
 
 ### Core `src/*` chain
 
-```mermaid
+```
 flowchart LR
   %% Schedules: ingestion = every 15 min, monitoring = 4×/day, training = daily
   subgraph S[Data & Features — src/*]
