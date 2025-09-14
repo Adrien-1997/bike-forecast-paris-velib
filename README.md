@@ -60,48 +60,69 @@ Public GBFS snapshots → normalized 15‑min aggregates → **features & model 
 ```mermaid
 
 flowchart LR
+
   %% Schedules: ingestion = every 15 min, monitoring = 4x/day, training = daily
 
-  subgraph S[Data & Features - src/*]
-    A[GBFS ingestion - src/ingest.py\nEvery 15 min] --> B[DuckDB snapshots\nwarehouse.duckdb]
-    B --> C[15-min aggregation + weather - src/aggregate.py]
-    C --> D[Canonical export -> docs/exports/velib.parquet (CSV)]
-    D --> E[Normalization - tools/datasets.py]
-    E --> EV[events.parquet\n(ts, station_id, bikes, capacity, occ, lat, lon, name)]
-    E --> PF[perf.parquet\n(ts, station_id, y_true, y_pred, baseline)]
+  subgraph S[Data and Features (src)]
+    A[GBFS ingestion - src/ingest.py<br/>Every 15 min]
+    B[DuckDB snapshots<br/>warehouse.duckdb]
+    C[15 min aggregation + weather - src/aggregate.py]
+    D[Canonical export -> docs/exports/velib.parquet and CSV]
+    E[Normalization - tools/datasets.py]
+    EV[events.parquet<br/>(ts, station_id, bikes, capacity, occ, lat, lon, name)]
+    PF[perf.parquet<br/>(ts, station_id, y_true, y_pred, baseline)]
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> EV
+    E --> PF
   end
 
-  subgraph F[Forecasting - src/forecast.py]
-    EV --> G[Feature builder]
+  subgraph F[Forecasting (src/forecast.py)]
+    G[Feature builder]
+    H[LightGBM - target: bikes @ T+60]
+    I[models/lgb_nbvelos_T+60min.joblib]
+    J[docs/exports/baseline.json]
+    EV --> G
     PF --> G
-    G --> H[LightGBM - target: bikes @ T+60]
-    H --> I[models/lgb_nbvelos_T+60min.joblib]
-    H --> J[docs/exports/baseline.json]
+    G --> H
+    H --> I
+    H --> J
   end
 
-  subgraph M[Analytics & Monitoring - tools/*]
-    D --> U[build_usage.py - analytics + Folium map]
-    D --> P[build_performance.py - MAE/RMSE, OVSP, bias, calibration]
-    D --> Q[build_monitoring.py - data health, PSI, feature importance, MAE trend]
-    U --> X[docs/assets/... (figures, maps)]
+  subgraph M[Analytics and Monitoring (tools)]
+    U[build_usage.py - analytics and Folium map]
+    P[build_performance.py - MAE/RMSE, OVSP, bias, calibration]
+    Q[build_monitoring.py - data health, PSI, feature importance, MAE trend]
+    X[docs/assets/... (figures, maps)]
+    D --> U
+    D --> P
+    D --> Q
+    U --> X
     P --> X
     Q --> X
   end
 
   subgraph DLY[Delivery]
-    X --> K[Docs (MkDocs) -> gh-pages]
-    D --> L[App (Streamlit) - app/streamlit_app.py]
+    K[Docs (MkDocs) -> gh-pages]
+    L[App (Streamlit) - app/streamlit_app.py]
+    X --> K
+    D --> L
     I --> L
   end
 
   subgraph CI[CI/CD - GitHub Actions]
-    CI1[velib-ingest - every 15 min] --> B
-    CI3[monitoring-site - 4x/day\n00, 06, 12, 18 UTC] --> K
-    CI2[velib-train - daily] --> H
-    T[check_retrain.py\nPSI >= 0.20 or MAE_24h >= 1.20x baseline?]
+    CI1[velib-ingest - every 15 min]
+    CI2[velib-train - daily]
+    CI3[monitoring-site - 4x/day<br/>00, 06, 12, 18 UTC]
+    T[check_retrain.py<br/>PSI >= 0.20 or MAE_24h >= 1.20x baseline?]
+    CI1 --> B
+    CI3 --> K
     P --> T
     Q --> T
     T -->|yes| CI2
+    CI2 --> H
     CI2 --> K
   end
 
