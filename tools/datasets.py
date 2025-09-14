@@ -22,10 +22,17 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict, List
+from unicodedata import normalize
 
 import numpy as np
 import pandas as pd
 from pathlib import Path
+
+import sys
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 
 @dataclass
@@ -279,7 +286,14 @@ def main():
     export_df(perf, args.out_perf, as_csv=args.csv)
 
     print("[OK] Datasets prêt.")
-    print(sanity_report(meta, used))
+    # APRÈS (NA-safe & Windows console-safe)
+    from unicodedata import normalize
+    try:
+        print(sanity_report(meta, used))
+    except UnicodeEncodeError:
+        txt = sanity_report(meta, used).replace("→", "->")
+        print(normalize("NFKD", txt).encode("ascii", "ignore").decode("ascii"))
+
     print(f"[events] → {args.out_events}")
     print(f"[perf]   → {args.out_perf}")
     print(f"[mapping] colonnes source → canonique : {mapping}")
