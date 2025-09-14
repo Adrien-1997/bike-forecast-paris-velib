@@ -59,8 +59,63 @@ Public GBFS snapshots → normalized 15‑min aggregates → **features & model 
 
 ```mermaid
 flowchart LR
-  A[one] --> B[two]
-  B --> C[three]
+  A[GBFS ingestion - src/ingest.py - every 15 min]
+  B[DuckDB snapshots - warehouse.duckdb]
+  C[15 min aggregation plus weather - src/aggregate.py]
+  D[Canonical export to docs/exports/velib.parquet and CSV]
+  E[Normalization - tools/datasets.py]
+  EV[events.parquet - ts station_id bikes capacity occ lat lon name]
+  PF[perf.parquet - ts station_id y_true y_pred baseline]
+
+  G[Feature builder]
+  H[LightGBM - target bikes at T+60]
+  I[models/lgb_nbvelos_T+60min.joblib]
+  J[docs/exports/baseline.json]
+
+  U[build_usage.py - analytics and map]
+  P[build_performance.py - MAE RMSE OVSP bias calibration]
+  Q[build_monitoring.py - data health PSI feature importance MAE trend]
+  X[docs/assets - figures and maps]
+
+  K[Docs MkDocs to gh-pages]
+  L[App Streamlit - app/streamlit_app.py]
+
+  CI1[velib-ingest - every 15 min]
+  CI2[velib-train - daily]
+  CI3[monitoring-site - 4x per day 00 06 12 18 UTC]
+  T[check_retrain.py - PSI >= 0.20 or MAE_24h >= 1.20x baseline]
+
+  A --> B
+  B --> C
+  C --> D
+  D --> E
+  E --> EV
+  E --> PF
+
+  EV --> G
+  PF --> G
+  G --> H
+  H --> I
+  H --> J
+
+  D --> U
+  D --> P
+  D --> Q
+  U --> X
+  P --> X
+  Q --> X
+
+  X --> K
+  D --> L
+  I --> L
+
+  CI1 --> B
+  CI3 --> K
+  P --> T
+  Q --> T
+  T -->|yes| CI2
+  CI2 --> H
+  CI2 --> K
 ```
 
 **1) Ingestion — `src/ingest.py` (every 15 min)**  
