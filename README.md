@@ -57,13 +57,14 @@ Public GBFS snapshots → normalized 15‑min aggregates → **features & model 
 
 ### Core `src/*` chain
 
-```
+```mermaid
 flowchart LR
-  %% Schedules: ingestion = every 15 min, monitoring = 4×/day, training = daily
+  %% Schedules: ingestion = every 15 min, monitoring = 4x/day, training = daily
+
   subgraph S[Data & Features — src/*]
     A[GBFS ingestion — src/ingest.py\nEvery 15 min] --> B[DuckDB snapshots\nwarehouse.duckdb]
     B --> C[15-min aggregation + weather — src/aggregate.py]
-    C --> D[Canonical export → docs/exports/velib.parquet (+ CSV)]
+    C --> D[Canonical export -> docs/exports/velib.parquet (+ CSV)]
     D --> E[Normalization — tools/datasets.py]
     E --> EV[events.parquet\n(ts, station_id, bikes, capacity, occ, lat, lon, name)]
     E --> PF[perf.parquet\n(ts, station_id, y_true, y_pred[, baseline])]
@@ -87,16 +88,16 @@ flowchart LR
   end
 
   subgraph DLY[Delivery]
-    X --> K[Docs (MkDocs) → gh-pages]
+    X --> K[Docs (MkDocs) -> gh-pages]
     D --> L[App (Streamlit) — app/streamlit_app.py]
     I --> L
   end
 
   subgraph CI[CI/CD — GitHub Actions]
     CI1[velib-ingest — every 15 min] --> B
-    CI3[monitoring-site — 4×/day\n00, 06, 12, 18 UTC] --> K
+    CI3[monitoring-site — 4x/day\n00, 06, 12, 18 UTC] --> K
     CI2[velib-train — daily] --> H
-    T[check_retrain.py\nPSI ≥ 0.20 or MAE_24h ≥ 1.20× baseline?]
+    T[check_retrain.py\nPSI >= 0.20 or MAE_24h >= 1.20x baseline?]
     P --> T
     Q --> T
     T -->|yes| CI2
