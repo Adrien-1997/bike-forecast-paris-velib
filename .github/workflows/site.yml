@@ -73,10 +73,18 @@ jobs:
         with:
           python-version: "3.11"
 
+      # (optionnel mais recommandé) cache pip pour accélérer
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-train-${{ hashFiles('requirements-*.txt') }}
+          restore-keys: ${{ runner.os }}-pip-train-
+
       - name: Install training deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-doc.txt
+          pip install -r requirements-train.txt
 
       - name: Retrain LightGBM (T+60)
         run: |
@@ -84,7 +92,7 @@ jobs:
           from src.forecast import train
           res = train(horizon_minutes=60, lookback_days=30)
           print(res)
-          import json, os, pathlib
+          import json, pathlib
           pathlib.Path("docs/exports").mkdir(parents=True, exist_ok=True)
           with open("docs/exports/baseline.json", "w", encoding="utf-8") as f:
               json.dump({"mae_valid": res["mae"], "rmse_valid": res["rmse"], "n_valid": res["n_valid"]}, f, indent=2)
@@ -109,3 +117,4 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./site
           force_orphan: true
+
