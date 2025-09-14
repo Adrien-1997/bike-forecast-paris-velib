@@ -13,6 +13,8 @@ permissions:
 jobs:
   build-monitor:
     runs-on: ubuntu-latest
+    env:
+      MPLBACKEND: Agg        # matplotlib headless
     outputs:
       need_retrain: ${{ steps.check.outputs.need_retrain }}
       max_psi: ${{ steps.check.outputs.max_psi }}
@@ -27,6 +29,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-docs-${{ hashFiles('requirements-doc.txt') }}
+          restore-keys: ${{ runner.os }}-pip-docs-
 
       - name: Install doc deps
         run: |
@@ -63,6 +72,8 @@ jobs:
     needs: build-monitor
     if: needs.build-monitor.outputs.need_retrain == 'true'
     runs-on: ubuntu-latest
+    env:
+      MPLBACKEND: Agg        # matplotlib headless aussi ici
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -73,7 +84,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      # (optionnel mais recommandé) cache pip pour accélérer
       - name: Cache pip
         uses: actions/cache@v4
         with:
@@ -85,6 +95,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-train.txt
+
+      # ⚠️ génère des figures + mkdocs: il faut aussi les deps docs ici
+      - name: Install doc deps (for re-build after retrain)
+        run: |
+          pip install -r requirements-doc.txt
 
       - name: Retrain LightGBM (T+60)
         run: |
@@ -117,4 +132,3 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./site
           force_orphan: true
-
