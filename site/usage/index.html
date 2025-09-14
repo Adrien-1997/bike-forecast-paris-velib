@@ -14,7 +14,7 @@
         <link rel="prev" href="..">
       
       
-        <link rel="next" href="../monitoring/">
+        <link rel="next" href="../stations/">
       
       
       <link rel="icon" href="../assets/images/favicon.png">
@@ -22,7 +22,7 @@
     
     
       
-        <title>Vue d'ensemble - Vélib’ Paris — Forecast (Batch)</title>
+        <title>Vue d’ensemble - Vélib’ Paris — Forecast (Batch)</title>
       
     
     
@@ -75,6 +75,11 @@
     <label class="md-overlay" for="__drawer"></label>
     <div data-md-component="skip">
       
+        
+        <a href="#usage-du-reseau-vue-densemble" class="md-skip">
+          Aller au contenu
+        </a>
+      
     </div>
     <div data-md-component="announce">
       
@@ -107,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Vue d'ensemble
+              Vue d’ensemble
             
           </span>
         </div>
@@ -314,19 +319,121 @@
       <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
       
       
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Vue d’ensemble
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
       
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
   <span class="md-ellipsis">
-    Vue d'ensemble
+    Vue d’ensemble
     
   </span>
   
 
       </a>
       
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table des matières">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table des matières
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#series-quotidiennes-occupation-moyenne-mediane" class="md-nav__link">
+    <span class="md-ellipsis">
+      Séries quotidiennes (occupation moyenne &amp; médiane)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#profil-horaire-moyenne-mediane" class="md-nav__link">
+    <span class="md-ellipsis">
+      Profil horaire (moyenne &amp; médiane)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#creneaux-critiques-heatmap-heure-jour" class="md-nav__link">
+    <span class="md-ellipsis">
+      Créneaux critiques (heatmap heure × jour)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#variabilite-par-station-moyenne-vs-ecart-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      Variabilité par station (moyenne vs écart-type)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clustering-carte" class="md-nav__link">
+    <span class="md-ellipsis">
+      Clustering &amp; carte
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../stations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Profils de stations
+    
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -364,7 +471,7 @@
   
   
   <span class="md-ellipsis">
-    Monitoring (données & modèle)
+    Performance des prévisions
     
   </span>
   
@@ -374,6 +481,76 @@
         
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Performance des prévisions
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../monitoring/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Métriques & visuels
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Monitoring (données & modèle)
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             Monitoring (données & modèle)
           </label>
@@ -391,30 +568,7 @@
   
   
   <span class="md-ellipsis">
-    Vue d'ensemble
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../monitoring/metrics/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Métriques
+    Vue d’ensemble
     
   </span>
   
@@ -478,6 +632,28 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exports/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Exports
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -495,6 +671,61 @@
   
   
   
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table des matières
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#series-quotidiennes-occupation-moyenne-mediane" class="md-nav__link">
+    <span class="md-ellipsis">
+      Séries quotidiennes (occupation moyenne &amp; médiane)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#profil-horaire-moyenne-mediane" class="md-nav__link">
+    <span class="md-ellipsis">
+      Profil horaire (moyenne &amp; médiane)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#creneaux-critiques-heatmap-heure-jour" class="md-nav__link">
+    <span class="md-ellipsis">
+      Créneaux critiques (heatmap heure × jour)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#variabilite-par-station-moyenne-vs-ecart-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      Variabilité par station (moyenne vs écart-type)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clustering-carte" class="md-nav__link">
+    <span class="md-ellipsis">
+      Clustering &amp; carte
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
   
 </nav>
                   </div>
@@ -513,9 +744,19 @@
   
 
 
-  <h1>Vue d'ensemble</h1>
-
-
+<h1 id="usage-du-reseau-vue-densemble">Usage du réseau — Vue d’ensemble<a class="headerlink" href="#usage-du-reseau-vue-densemble" title="Permanent link">&para;</a></h1>
+<h2 id="series-quotidiennes-occupation-moyenne-mediane">Séries quotidiennes (occupation moyenne &amp; médiane)<a class="headerlink" href="#series-quotidiennes-occupation-moyenne-mediane" title="Permanent link">&para;</a></h2>
+<p><img alt="Usage — série quotidienne" src="../assets/figs/usage_daily_timeseries.png" /></p>
+<h2 id="profil-horaire-moyenne-mediane">Profil horaire (moyenne &amp; médiane)<a class="headerlink" href="#profil-horaire-moyenne-mediane" title="Permanent link">&para;</a></h2>
+<p><img alt="Profil horaire" src="../assets/figs/usage_hourly_profile.png" /></p>
+<h2 id="creneaux-critiques-heatmap-heure-jour">Créneaux critiques (heatmap heure × jour)<a class="headerlink" href="#creneaux-critiques-heatmap-heure-jour" title="Permanent link">&para;</a></h2>
+<p><img alt="Heatmap usage" src="../assets/figs/usage_heatmap_hour_dow.png" /></p>
+<h2 id="variabilite-par-station-moyenne-vs-ecart-type">Variabilité par station (moyenne vs écart-type)<a class="headerlink" href="#variabilite-par-station-moyenne-vs-ecart-type" title="Permanent link">&para;</a></h2>
+<p><img alt="Variabilité station" src="../assets/figs/usage_station_variability.png" /></p>
+<h2 id="clustering-carte">Clustering &amp; carte<a class="headerlink" href="#clustering-carte" title="Permanent link">&para;</a></h2>
+<p><img alt="Répartition des clusters" src="../assets/figs/usage_clusters_share.png" />
+<img alt="Projection PCA" src="../assets/figs/usage_clusters_embedding.png" /></p>
+<p>👉 Carte interactive : <a href="../assets/maps/usage_map.html">assets/maps/usage_map.html</a></p>
 
 
 
