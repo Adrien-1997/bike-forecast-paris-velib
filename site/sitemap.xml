@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+         <loc>https://adrien-1997.github.io/bike-forecast-paris-velib/</loc>
+         <lastmod>2025-09-14</lastmod>
+    </url>
+    <url>
+         <loc>https://adrien-1997.github.io/bike-forecast-paris-velib/monitoring/</loc>
+         <lastmod>2025-09-14</lastmod>
+    </url>
+    <url>
+         <loc>https://adrien-1997.github.io/bike-forecast-paris-velib/monitoring/data_drift/</loc>
+         <lastmod>2025-09-14</lastmod>
+    </url>
+    <url>
+         <loc>https://adrien-1997.github.io/bike-forecast-paris-velib/monitoring/metrics/</loc>
+         <lastmod>2025-09-14</lastmod>
+    </url>
+    <url>
+         <loc>https://adrien-1997.github.io/bike-forecast-paris-velib/monitoring/model/</loc>
+         <lastmod>2025-09-14</lastmod>
+    </url>
+    <url>
+         <loc>https://adrien-1997.github.io/bike-forecast-paris-velib/usage/</loc>
+         <lastmod>2025-09-14</lastmod>
+    </url>
+</urlset>
