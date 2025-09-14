@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import requests
 import folium
+from folium.plugins import MarkerCluster
 import streamlit as st
 
 # -----------------------------------------------------------------------------
@@ -268,11 +269,11 @@ def load_model_cached_minutes(h_minutes: int):
     model, feats = load_model_bundle(horizon_minutes=h_minutes, model_dir=str(MODELS_DIR))
     return model, feats
 
+# --- REPLACE existing predict_nbvelos_t1h with this version ---
 def predict_nbvelos_t1h(df_now: pd.DataFrame) -> pd.DataFrame:
     """
     Retourne un DataFrame avec colonnes:
       stationcode, y_nb_pred
-    La prédiction utilise les features live construites depuis le parquet 15min.
     Fallback: persistance (numbikesavailable) si modèle indisponible.
     """
     try:
@@ -280,30 +281,19 @@ def predict_nbvelos_t1h(df_now: pd.DataFrame) -> pd.DataFrame:
         X = build_live_feature_frame(feat_cols)
         if X.empty:
             raise RuntimeError("No live features available")
-        # Préserver le code station
+
         stationcode = X["stationcode"].astype(str).values
         Xmat = X.drop(columns=["stationcode"])
         best_it = getattr(model, "best_iteration", None)
         y = model.predict(Xmat, num_iteration=best_it)
         y = np.maximum(y, 0.0)
-        # Capacité max (si connue) pour clip ultérieur après merge
-        out = pd.DataFrame({"stationcode": stationcode, "y_nb_pred": y})
-        return out
-    except Exception as e:
+        return pd.DataFrame({"stationcode": stationcode, "y_nb_pred": y})
+    except Exception:
         # fallback persistance
         y = pd.to_numeric(df_now.get("numbikesavailable"), errors="coerce").fillna(0).astype(int)
         return pd.DataFrame({"stationcode": df_now["stationcode"].astype(str), "y_nb_pred": y})
 
-def compute_network_kpis(df_now: pd.DataFrame) -> dict:
-    try:
-        stations = int(df_now["stationcode"].nunique())
-        bikes_total = int(pd.to_numeric(df_now["numbikesavailable"], errors="coerce").fillna(0).sum())
-        docks_total = int(pd.to_numeric(df_now["numdocksavailable"], errors="coerce").fillna(0).sum())
-        cap_total   = int(pd.to_numeric(df_now["capacity"], errors="coerce").fillna(0).sum())
-        occ_pct     = round(100 * (bikes_total / cap_total), 1) if cap_total > 0 else 0.0
-    except Exception:
-        stations, bikes_total, docks_total, occ_pct = 0, 0, 0, 0.0
-    return dict(stations=stations, bikes_total=bikes_total, docks_total=docks_total, occ_pct=occ_pct)
+
 
 # -----------------------------------------------------------------------------
 # HELPERS — GEO/MAP
@@ -315,6 +305,12 @@ def _ring_color(ratio: float) -> str:
     if ratio >= 0.25:  return "#fdae61"
     return "#d7191c"
 
+
+import folium
+from folium.plugins import MarkerCluster
+import pandas as pd
+import numpy as np
+
 def build_map(
     df: pd.DataFrame,
     center=(48.8566, 2.3522),
@@ -322,105 +318,76 @@ def build_map(
     highlight_stationcode: str | None = None,
     open_popup: bool = False,
     display_prediction: bool = False,
+    # --- sémantique inversée, plus naturelle :
+    bubbles_start_zoom: int = 19,   # <== en-dessous: pas de bulles; à partir de ce zoom: bulles
+    cluster_radius: int = 120,      # fusion au dézoom (augmente si trop de bulles subsistent)
 ) -> folium.Map:
-    m = folium.Map(location=center, zoom_start=zoom, control_scale=True, tiles="cartodbpositron")
-    fg = folium.FeatureGroup(name="Stations").add_to(m)
+    m = folium.Map(location=center, zoom_start=zoom, control_scale=True,
+                   tiles="cartodbpositron", prefer_canvas=True)
+
+    # Clustering: les bulles apparaissent seulement à partir de bubbles_start_zoom
+    mc = MarkerCluster(
+        name="Stations",
+        options={
+            "disableClusteringAtZoom": int(bubbles_start_zoom),
+            "maxClusterRadius": int(cluster_radius),
+            "showCoverageOnHover": False,
+        },
+    ).add_to(m)
 
     df = df.copy()
-    for c in ["capacity", "numbikesavailable", "numdocksavailable", "y_nb_pred", "lat", "lon"]:
+    for c in ["capacity", "numbikesavailable", "y_nb_pred", "lat", "lon"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    def _to_int_safe(val):
-        v = pd.to_numeric(val, errors="coerce")
+    def _to_int_safe(v):
+        v = pd.to_numeric(v, errors="coerce")
         return int(0 if pd.isna(v) else v)
 
     def _delta_badge(nb_act: int, nb_pred: int, cap: int) -> str:
-        """
-        Renvoie un span HTML avec flèche + variation en points de % d'occupation,
-        coloré (vert/rouge/blanc). Si cap=0, renvoie un badge neutre.
-        """
         if cap <= 0:
             return "<span class='badge' style='background:#f3f4f6'>▬ 0%</span>"
-
-        pct_act  = 100.0 * (nb_act  / cap)
-        pct_pred = 100.0 * (nb_pred / cap)
-        delta = pct_pred - pct_act
-
-        # seuil "stable"
-        if abs(delta) < 0.5:
-            symbol = "▬"
-            color  = "#e5e7eb"  # badge clair
-            fg     = "#111827"  # texte sombre
-        elif delta > 0:
-            symbol = "▲"
-            color  = "#dcfce7"  # vert clair
-            fg     = "#166534"  # vert foncé
-        else:
-            symbol = "▼"
-            color  = "#fee2e2"  # rouge clair
-            fg     = "#991b1b"  # rouge foncé
-
-        return (
-            f"<span class='badge' "
-            f"style='background:{color}; color:{fg}; border-color:rgba(0,0,0,0.08)'>"
-            f"{symbol} {delta:+.0f}%"
-            f"</span>"
-        )
-
+        delta = 100.0 * (nb_pred - nb_act) / cap
+        if abs(delta) < 0.5:  symbol, bg, fg = "▬", "#e5e7eb", "#111827"
+        elif delta > 0:       symbol, bg, fg = "▲", "#dcfce7", "#166534"
+        else:                 symbol, bg, fg = "▼", "#fee2e2", "#991b1b"
+        return f"<span class='badge' style='background:{bg}; color:{fg}; border-color:rgba(0,0,0,.08)'>{symbol} {delta:+.0f}%</span>"
 
     for _, r in df.iterrows():
-
-
         name = (r.get("name") or "—").strip()
         code = str(r.get("stationcode", ""))
-        lat = float(r.get("lat")) if r.get("lat") is not None and not pd.isna(r.get("lat")) else 0.0
-        lon = float(r.get("lon")) if r.get("lon") is not None and not pd.isna(r.get("lon")) else 0.0
-
+        lat  = float(r.get("lat")) if pd.notna(r.get("lat")) else 0.0
+        lon  = float(r.get("lon")) if pd.notna(r.get("lon")) else 0.0
 
         cap     = _to_int_safe(r.get("capacity"))
         nb_act  = _to_int_safe(r.get("numbikesavailable"))
         nb_pred = _to_int_safe(r.get("y_nb_pred"))
-
-        # valeur affichée dans le rond (actuel vs prévision selon le mode)
         nb_show = nb_pred if display_prediction else nb_act
+        ratio   = (nb_show / cap) if cap > 0 else np.nan
 
-        # ratio pour la couleur de l’anneau
-        ratio = (nb_show / cap) if cap > 0 else np.nan
-        col_ring = _ring_color(ratio)
+        col_ring = _ring_color(ratio)  # ton helper existant
         deg = int(max(0, min(1, 0 if pd.isna(ratio) else ratio)) * 360)
-
-        # pourcentages lisibles
-        pct_act  = f"{int(round(100*nb_act/cap))}%"  if cap > 0 else "—"
-        pct_pred = f"{int(round(100*nb_pred/cap))}%" if cap > 0 else "—"
-
-        # badge variation % (sur l’occupation)
-        delta_badge_html = _delta_badge(nb_act, nb_pred, cap)
-
         size = 52 if highlight_stationcode == code else 44
 
         icon_html = f"""
         <div style="position:relative; width:{size}px; height:{size}px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.25));">
-        <div style="width:100%; height:100%; border-radius:50%;
-                    background: conic-gradient({col_ring} {deg}deg, #e5e7eb 0deg);
-                    display:flex; align-items:center; justify-content:center;
-                    border:2px solid #263238; box-sizing:border-box;">
+          <div style="width:100%; height:100%; border-radius:50%;
+                      background: conic-gradient({col_ring} {deg}deg, #e5e7eb 0deg);
+                      display:flex; align-items:center; justify-content:center;
+                      border:2px solid #263238; box-sizing:border-box;">
             <div style="width:{size-12}px; height:{size-12}px; border-radius:50%; background:#fff;
                         display:flex; align-items:center; justify-content:center;
                         font: 700 {int(size*0.42)}px/1 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:#263238;">
-            {nb_show}
+              {nb_show}
             </div>
-        </div>
-        <div style="position:absolute; left:50%; bottom:-12px; transform:translateX(-50%);
-                    width:0; height:0; border-left:8px solid transparent; border-right:8px solid transparent;
-                    border-top:12px solid #263238; opacity:.9;"></div>
+          </div>
+          <div style="position:absolute; left:50%; bottom:-12px; transform:translateX(-50%);
+                      width:0; height:0; border-left:8px solid transparent; border-right:8px solid transparent;
+                      border-top:12px solid #263238; opacity:.9;"></div>
         </div>
         """
-        # ancre au bas du triangle : (centre X, rond + triangle)
         icon = folium.DivIcon(html=icon_html, icon_size=(size, size + 12), icon_anchor=(size/2, size + 12))
 
-
-        # --- popup avec % + variation ---
         popup_html = (
             f"<div style='font-family:Inter,system-ui,Segoe UI,Roboto,sans-serif;'>"
             f"<div style='font-weight:700;margin-bottom:.15rem'>{name}</div>"
@@ -430,14 +397,21 @@ def build_map(
             f"Actuel&nbsp;: <b>{nb_act}</b> / {cap}</span>"
             f"<span style='padding:.2rem .5rem;border-radius:8px;background:#eef2ff'>"
             f"Prévision T+1h&nbsp;: <b>{nb_pred}</b></span>"
-            f"{delta_badge_html}"
+            f"{_delta_badge(nb_act, nb_pred, cap)}"
             f"</div>"
             f"</div>"
         )
 
-        popup = folium.Popup(popup_html, max_width=300, show=(open_popup and highlight_stationcode == code))
-        folium.Marker((lat, lon), icon=icon, tooltip=f"{name} (#{code})", popup=popup).add_to(fg)
+        folium.Marker(
+            (lat, lon),
+            icon=icon,
+            tooltip=f"{name} (#{code})",
+            popup=folium.Popup(popup_html, max_width=300, show=(open_popup and highlight_stationcode == code)),
+        ).add_to(mc)
+
+    folium.LayerControl(collapsed=True).add_to(m)
     return m
+
 
 def find_nearest_station(
     df: pd.DataFrame,
@@ -500,8 +474,9 @@ except Exception:
     fetched_local = pd.Timestamp.utcnow().tz_localize("UTC").tz_convert("Europe/Paris")
 
 # prédiction T+1h
-pred_df = predict_nbvelos_t1h(df_now)  # stationcode, y_nb_pred
+pred_df = predict_nbvelos_t1h(df_now)
 df_with_pred = df_now.merge(pred_df, on="stationcode", how="left")
+
 
 # Clip par capacité si dispo
 if "capacity" in df_with_pred:
