@@ -224,20 +224,21 @@ def write_station_page(st_id: str, k: pd.Series, fig_dir: Path, out_md: Path) ->
 - MAE : {mae:.2f} — RMSE : {rmse:.2f} — Biais : {bias:.2f}
 
 ## Occupation — sparkline
-![sparkline](/assets/figs/stations/{st_id}/sparkline.png)
+![sparkline](../assets/figs/stations/{st_id}/sparkline.png)
 
 ## Profil horaire (moyenne & médiane)
-![hourly](/assets/figs/stations/{st_id}/hourly.png)
+![hourly](../assets/figs/stations/{st_id}/hourly.png)
 
 ## Observé vs Prédit (fenêtre récente)
-![ovsp](/assets/figs/stations/{st_id}/obs_vs_pred.png)
+![ovsp](../assets/figs/stations/{st_id}/obs_vs_pred.png)
 
 ## Résidus (histogramme)
-![resid](/assets/figs/stations/{st_id}/residual_hist.png)
+![resid](../assets/figs/stations/{st_id}/residual_hist.png)
 '''.strip()
 
-    ensure_dir(out_md)
+    out_md.parent.mkdir(parents=True, exist_ok=True)
     out_md.write_text(txt, encoding="utf-8")
+
 
 
 def write_index(pages: List[Tuple[str, str]], out_md: Path, strategy: str) -> None:
