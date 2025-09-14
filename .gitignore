@@ -40,10 +40,9 @@ warehouse.duckdb
 # Exports de travail (racine)
 # on ignore tout docs/exports sauf quelques fichiers utiles
 docs/exports/*
+!docs/exports/baseline.json
 !docs/exports/auto/
 !docs/exports/auto/*.md
-!docs/exports/baseline.json
-
 
 # -------------------------
 # Assets du site
