@@ -1,0 +1,20 @@
+{
+  "metrics": {
+    "mae_24h": 4.020813517792257,
+    "rmse_24h": 5.890576044151744,
+    "relerr_24h": 0.6154700171110433,
+    "mae_7d": 4.729603096888759,
+    "rmse_7d": 6.93480134101886
+  },
+  "psi": {
+    "occ_ratio_bin": NaN,
+    "temp_C": NaN,
+    "wind_mps": NaN,
+    "precip_mm": NaN
+  },
+  "train": {
+    "mae": null,
+    "rmse": null,
+    "n_valid": null
+  }
+}

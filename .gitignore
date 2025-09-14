@@ -38,14 +38,12 @@ data/
 warehouse.duckdb
 
 # Exports de travail (racine)
-exports/
-!exports/.keep        # garde le dossier vide dans le repo
-
-# Exports dans la doc (re-générables par scripts)
-docs/exports/
-# On garde les insights auto (Markdown) pour lecture directe
+# on ignore tout docs/exports sauf quelques fichiers utiles
+docs/exports/*
 !docs/exports/auto/
 !docs/exports/auto/*.md
+!docs/exports/baseline.json
+
 
 # -------------------------
 # Assets du site
