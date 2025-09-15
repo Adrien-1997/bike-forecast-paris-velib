@@ -1,302 +1,240 @@
 # tools/datasets.py
-# Point d'entrée unique pour lire docs/exports/velib.parquet,
-# normaliser le schéma, reconstruire y_true / y_pred si absents,
-# et fournir des vues prêtes pour "Usage" et "Performance".
+# Normalise les données Vélib' en deux jeux :
+#   - events.parquet : ts (UTC, 15 min), station_id, bikes, capacity, occ[, lat, lon, name, meteo...]
+#   - perf.parquet   : ts (UTC, 15 min), station_id, y_true (T+h), y_pred (optionnel), y_pred_baseline (persistance), horizon_min
 #
-# Usage (depuis la racine du repo) :
+# Usage principal (appelé par generate_monitoring.py) :
 #   python tools/datasets.py --input docs/exports/velib.parquet --horizon 60 \
-#       --out-events docs/exports/events.parquet \
-#       --out-perf docs/exports/perf.parquet
+#          --out-events docs/exports/events.parquet --out-perf docs/exports/perf.parquet --lag-steps 0
 #
-# Options :
-#   --horizon 60            # minutes (par défaut 60)
-#   --last-days 7           # filtre sur les X derniers jours (optionnel)
-#   --csv                   # exporte en CSV au lieu de Parquet
-#
-# Sorties :
-#   events: [ts, station_id, bikes, capacity, (lat, lon, name optionnels)]
-#   perf:   [ts, station_id, y_true, y_pred, horizon_min]
-#
+# Notes :
+# - On ne produit PAS de y_pred modèle ici (il sera injecté par tools/apply_model.py).
+# - y_true est calculé comme bikes(T+steps) via shift(-steps) par station.
+# - y_pred_baseline = bikes(T) (persistance).
+# - ts est conservé en UTC et arrondi au pas 15 minutes (ou pas détecté).
+# - --lag-steps permet de décaler une éventuelle colonne y_pred déjà présente (rare).
+
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, List
-from unicodedata import normalize
+from pathlib import Path
+from typing import Optional, Tuple, Dict, Any
 
 import numpy as np
 import pandas as pd
-from pathlib import Path
-
-import sys
-try:
-    sys.stdout.reconfigure(encoding="utf-8")
-except Exception:
-    pass
 
 
-@dataclass
-class Meta:
-    bin_minutes: int
-    steps_for_horizon: int
-    horizon_minutes: int
-    n_stations: int
-    ts_min: pd.Timestamp
-    ts_max: pd.Timestamp
+ROOT = Path(__file__).resolve().parents[1]
+DOCS = ROOT / "docs"
+EXPORTS = DOCS / "exports"
 
 
-# --------- Helpers ---------
+# --------------------------- Mapping colonnes source -> canonique ---------------------------
 
-def _first_present(cols: List[str], present: set) -> Optional[str]:
-    for c in cols:
-        if c in present:
-            return c
-    return None
-
-
-def _to_naive_utc(s: pd.Series) -> pd.Series:
-    """Parse datetimes as UTC then drop tz to keep them naive (compatible plotting)."""
-    dt = pd.to_datetime(s, utc=True, errors="coerce")
-    return dt.dt.tz_localize(None)
-
-
-def _infer_bin_minutes(df: pd.DataFrame, ts_col: str, sid_col: str) -> int:
-    """Infère la granularité (minutes) à partir de la médiane des pas temporels par station."""
-    g = df.sort_values([sid_col, ts_col]).copy()
-    dmins = g.groupby(sid_col)[ts_col].diff().dt.total_seconds().div(60.0)
-    med = float(dmins[dmins > 0].median())
-    # Arrondir à un pas standard raisonnable
-    candidates = np.array([1, 5, 10, 15, 30, 60, 120])
-    if np.isnan(med) or med <= 0:
-        return 15  # défaut raisonnable
-    idx = np.argmin(np.abs(candidates - med))
-    return int(candidates[idx])
+DEFAULT_MAP: Dict[str, str] = {
+    "ts": "tbin_utc",
+    "station_id": "stationcode",
+    "bikes": "nb_velos_bin",
+    "capacity": "capacity_bin",
+    "occ": "occ_ratio_bin",
+    "lat": "lat",
+    "lon": "lon",
+    "name": "name",
+    "hour_utc": "hour_utc",
+    # météo (optionnelles)
+    "temp_C": "temp_C",
+    "precip_mm": "precip_mm",
+    "wind_mps": "wind_mps",
+    # prédictions éventuelles présentes en entrée (rare)
+    "y_pred": "y_pred",
+}
 
 
-def _rename_and_normalize(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
-    """
-    Renomme en colonnes canoniques : ts, station_id, bikes, capacity (+ lat, lon, name si présents).
-    Retourne (df, mapping d'origine->canonique).
-    """
-    cols = set(df.columns)
+# --------------------------- IO util ---------------------------
 
-    station_col = _first_present(["stationcode", "station_id", "station", "code"], cols)
-    time_col    = _first_present(["tbin_utc", "tbin", "timestamp_utc", "timestamp"], cols)
-    bikes_col   = _first_present(["nb_velos_bin", "bikes", "available_bikes", "n_bikes"], cols)
-    cap_col     = _first_present(["capacity_bin", "nb_bornes_bin", "capacity", "dock_count", "num_docks"], cols)
-    lat_col     = _first_present(["lat", "latitude"], cols)
-    lon_col     = _first_present(["lon", "longitude"], cols)
-    name_col    = _first_present(["name", "station_name", "nom"], cols)
-
-    required = [station_col, time_col, bikes_col]
-    if any(c is None for c in required):
-        missing = ["station_id" if station_col is None else None,
-                   "ts" if time_col is None else None,
-                   "bikes" if bikes_col is None else None]
-        missing = [m for m in missing if m]
-        raise ValueError(f"Colonnes indispensables manquantes dans velib.parquet: {missing}")
-
-    out = pd.DataFrame()
-    out["station_id"] = df[station_col].astype(str)
-    out["ts"] = _to_naive_utc(df[time_col])
-    out["bikes"] = pd.to_numeric(df[bikes_col], errors="coerce")
-
-    if cap_col is not None:
-        out["capacity"] = pd.to_numeric(df[cap_col], errors="coerce")
-    else:
-        out["capacity"] = np.nan
-
-    if lat_col is not None:  out["lat"] = pd.to_numeric(df[lat_col], errors="coerce")
-    if lon_col is not None:  out["lon"] = pd.to_numeric(df[lon_col], errors="coerce")
-    if name_col is not None: out["name"] = df[name_col].astype(str)
-
-    mapping = {
-        "station_id": station_col,
-        "ts": time_col,
-        "bikes": bikes_col,
-        "capacity": cap_col or "",
-        "lat": lat_col or "",
-        "lon": lon_col or "",
-        "name": name_col or "",
-    }
-    return out, mapping
-
-
-def _ensure_sorted(df: pd.DataFrame) -> pd.DataFrame:
-    return df.sort_values(["station_id", "ts"]).reset_index(drop=True)
-
-
-def _make_truth_pred(
-    df: pd.DataFrame,
-    horizon_minutes: int,
-    bin_minutes: int,
-    y_true_col_candidates: List[str],
-    y_pred_col_candidates: List[str],
-    original: pd.DataFrame,
-) -> Tuple[pd.DataFrame, bool, bool]:
-    """
-    Construit y_true / y_pred si absents, en décalant 'bikes' par ± steps.
-    steps = round(horizon_minutes / bin_minutes).
-    Si y_true/y_pred existent déjà dans le parquet original, on les réutilise.
-    Retourne (df_out, used_existing_y_true, used_existing_y_pred).
-    """
-    steps = max(1, int(round(horizon_minutes / bin_minutes)))
-
-    # Reprendre y_true/y_pred si déjà présents dans le fichier original
-    cols = set(original.columns)
-    y_true_col = _first_present(y_true_col_candidates, cols)
-    y_pred_col = _first_present(y_pred_col_candidates, cols)
-
-    out = df.copy()
-    used_true = False
-    used_pred = False
-
-    if y_true_col:
-        out["y_true"] = pd.to_numeric(original[y_true_col], errors="coerce").values
-        used_true = True
-    else:
-        out["y_true"] = (
-            out.groupby("station_id")["bikes"].shift(-steps)
-        )
-
-    if y_pred_col:
-        out["y_pred"] = pd.to_numeric(original[y_pred_col], errors="coerce").values
-        used_pred = True
-    else:
-        # Baseline naïve : valeur actuelle pour t+H => shift(+steps)
-        out["y_pred"] = (
-            out.groupby("station_id")["bikes"].shift(steps)
-        )
-
-    return out, used_true, used_pred
-
-
-# --------- Public API ---------
-
-def load_normalized(path: Path, horizon_minutes: int = 60, last_days: Optional[int] = None) -> Tuple[pd.DataFrame, Meta, Dict[str, str]]:
-    """
-    Charge docs/exports/velib.parquet (ou .csv), normalise les colonnes
-    et ajoute y_true/y_pred si absents. Retourne (df, meta, mapping).
-    """
-    path = Path(path)
+def _read_any(path: Path) -> pd.DataFrame:
+    """Lit parquet ou csv (auto-détection)."""
     if not path.exists():
-        alt = path.with_suffix(".csv")
-        if alt.exists():
-            path = alt
-        else:
-            raise FileNotFoundError(f"Fichier introuvable: {path}")
-
-    if path.suffix.lower() == ".parquet":
-        raw = pd.read_parquet(path)
-    elif path.suffix.lower() == ".csv":
-        raw = pd.read_csv(path)
-    else:
-        raise ValueError("Format non supporté (attendu .parquet ou .csv)")
-
-    base, mapping = _rename_and_normalize(raw)
-    base = _ensure_sorted(base)
-
-    # Filtre temporel optionnel
-    if last_days is not None and last_days > 0:
-        tmax = base["ts"].max()
-        tmin = tmax - pd.Timedelta(days=last_days)
-        base = base[base["ts"].between(tmin, tmax)].copy()
-
-    # Granularité
-    bin_minutes = _infer_bin_minutes(base, "ts", "station_id")
-
-    # Construit y_true / y_pred (ou les réutilise si présents)
-    ytrue_candidates = ["y_true", "nb_velos_tplus", "ytrue"]
-    ypred_candidates = ["y_pred", "nb_velos_pred", "ypred"]
-
-    perf, used_true, used_pred = _make_truth_pred(
-        base, horizon_minutes, bin_minutes, ytrue_candidates, ypred_candidates, raw
-    )
-
-    # Nettoyage & indicateurs
-    perf["horizon_min"] = int(horizon_minutes)
-    # Clamp y_* si capacité dispo
-    if "capacity" in perf.columns:
-        cap_safe = perf["capacity"].replace(0, np.nan)
-        perf["y_true"] = np.clip(perf["y_true"], 0, cap_safe)
-        perf["y_pred"] = np.clip(perf["y_pred"], 0, cap_safe)
-
-    # Méta
-    meta = Meta(
-        bin_minutes=bin_minutes,
-        steps_for_horizon=max(1, int(round(horizon_minutes / bin_minutes))),
-        horizon_minutes=int(horizon_minutes),
-        n_stations=int(perf["station_id"].nunique()),
-        ts_min=pd.to_datetime(perf["ts"]).min(),
-        ts_max=pd.to_datetime(perf["ts"]).max(),
-    )
-
-    # Tables prêtes
-    events_cols = ["ts", "station_id", "bikes", "capacity"]
-    extra_cols = [c for c in ["lat", "lon", "name"] if c in perf.columns]
-    events = perf[events_cols + extra_cols].copy()
-
-    perf_out = perf[["ts", "station_id", "y_true", "y_pred", "horizon_min"]].dropna().reset_index(drop=True)
-
-    return (events.reset_index(drop=True),
-            perf_out.reset_index(drop=True),
-            meta,
-            mapping,
-            {"used_existing_y_true": used_true, "used_existing_y_pred": used_pred})
+        raise FileNotFoundError(f"[datasets] Introuvable: {path}")
+    suf = path.suffix.lower()
+    if suf in (".parquet", ".pq"):
+        return pd.read_parquet(path)
+    if suf in (".csv", ".txt"):
+        return pd.read_csv(path)
+    # fallback parquet
+    return pd.read_parquet(path)
 
 
-def export_df(df: pd.DataFrame, path: Path, as_csv: bool = False) -> None:
-    path = Path(path)
+def _write_any(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if as_csv or path.suffix.lower() == ".csv":
-        df.to_csv(path, index=False, encoding="utf-8")
+    suf = path.suffix.lower()
+    if suf in (".csv", ".txt"):
+        df.to_csv(path, index=False)
     else:
         df.to_parquet(path, index=False)
 
 
-def sanity_report(meta: Meta, stats: Dict[str, bool]) -> str:
-    lines = [
-        f"- Stations: {meta.n_stations}",
-        f"- Période:  {meta.ts_min}  →  {meta.ts_max}",
-        f"- Pas temps: {meta.bin_minutes} min",
-        f"- Horizon:   {meta.horizon_minutes} min  (steps={meta.steps_for_horizon})",
-        f"- y_true existant: {stats['used_existing_y_true']}",
-        f"- y_pred existant: {stats['used_existing_y_pred']}",
-    ]
-    return "\n".join(lines)
+# --------------------------- Helpers temps / pas ---------------------------
+
+def _coerce_ts_utc_15min(s: pd.Series) -> pd.Series:
+    """Convertit en datetime (UTC) puis floor 15 minutes."""
+    ts = pd.to_datetime(s, utc=True, errors="coerce")
+    # si déjà timezone-naive mais censé être UTC, on le localise en UTC
+    if ts.dt.tz is None:
+        ts = ts.dt.tz_localize("UTC")
+    return ts.dt.floor("15min").dt.tz_convert("UTC").dt.tz_localize(None)
 
 
-# --------- CLI ---------
+def _infer_step_minutes(ts: pd.Series) -> int:
+    """Détecte (grossièrement) le pas dominant en minutes (par ex. 15)."""
+    t = pd.to_datetime(ts, utc=False, errors="coerce").sort_values().dropna()
+    if len(t) < 3:
+        return 15
+    diffs = (t.diff().dropna().value_counts(normalize=True).index)
+    if len(diffs) == 0:
+        return 15
+    # on prend la différence la plus fréquente
+    step = int(round(diffs[0] / np.timedelta64(1, "m")))
+    # clamp raisonnable
+    if step <= 0 or step > 120:
+        return 15
+    return step
+
+
+# --------------------------- Normalisation ---------------------------
+
+def load_normalized(input_path: Path,
+                    horizon_minutes: int = 60,
+                    last_days: Optional[int] = None
+                    ) -> Tuple[pd.DataFrame, pd.DataFrame, int, Dict[str, Any], Dict[str, str]]:
+    """
+    Normalise la table source → events + perf (sans y_pred modèle).
+    Retourne : (events, perf, steps, dtypes_raw, mapping_utilisé)
+    """
+    raw = _read_any(input_path)
+
+    # mapping dynamique : garder uniquement les colonnes présentes
+    mapping = {k: v for k, v in DEFAULT_MAP.items() if v in raw.columns}
+
+    df = raw.rename(columns={v: k for k, v in mapping.items()}).copy()
+
+    # ts en UTC, floor pas 15 min
+    if "ts" not in df.columns:
+        raise KeyError("[datasets] La colonne temporelle 'ts' (ex. tbin_utc) est absente de la source.")
+    df["ts"] = _coerce_ts_utc_15min(df["ts"])
+
+    # filtre fenêtre récente si demandé
+    if last_days and last_days > 0:
+        tmax = df["ts"].max()
+        if pd.notna(tmax):
+            df = df[df["ts"] >= (tmax - pd.Timedelta(days=last_days))].copy()
+
+    # station_id au format str
+    if "station_id" not in df.columns:
+        raise KeyError("[datasets] La colonne 'station_id' (ex. stationcode) est requise.")
+    df["station_id"] = df["station_id"].astype(str)
+
+    # compléments numériques
+    for c in ("bikes", "capacity", "occ"):
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # météo optionnelle
+    for c in ("temp_C", "precip_mm", "wind_mps"):
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # pas & steps
+    base_step = _infer_step_minutes(df["ts"])
+    steps = max(int(round(horizon_minutes / max(base_step, 1))), 1)
+
+    # EVENTS (colonnes utiles si présentes)
+    event_cols = ["ts", "station_id", "bikes", "capacity", "occ",
+                  "lat", "lon", "name", "hour_utc", "temp_C", "precip_mm", "wind_mps"]
+    events = df[[c for c in event_cols if c in df.columns]].copy()
+
+    # PERF
+    # y_true = bikes(T+steps) si bikes dispo
+    perf_keys = ["ts", "station_id"]
+    perf = df[perf_keys].drop_duplicates().sort_values(perf_keys).copy()
+
+    if "bikes" in df.columns:
+        # pour calculer y_true, on a besoin des bikes groupés par station au pas natif
+        tmp = df[["ts", "station_id", "bikes"]].sort_values(perf_keys).copy()
+        tmp["y_true"] = tmp.groupby("station_id")["bikes"].shift(-steps)
+        tmp["y_pred_baseline"] = tmp.groupby("station_id")["bikes"].shift(0)  # persistance
+        perf = perf.merge(tmp.drop(columns=["bikes"]), on=perf_keys, how="left")
+    else:
+        perf["y_true"] = np.nan
+        perf["y_pred_baseline"] = np.nan
+
+    perf["horizon_min"] = int(horizon_minutes)
+
+    # si la source contenait déjà une colonne y_pred (rare) → l'aligner optionnellement plus tard
+    if "y_pred" in df.columns:
+        yp = (df[perf_keys + ["y_pred"]]
+              .dropna(subset=["y_pred"])
+              .drop_duplicates(perf_keys)
+              .copy())
+        perf = perf.merge(yp, on=perf_keys, how="left")
+
+    # types clean
+    for c in ("y_true", "y_pred", "y_pred_baseline"):
+        if c in perf.columns:
+            perf[c] = pd.to_numeric(perf[c], errors="coerce")
+
+    dtypes_raw = {c: str(t) for c, t in raw.dtypes.items()}
+    return events, perf, steps, dtypes_raw, mapping
+
+
+# --------------------------- CLI ---------------------------
 
 def main():
-    ap = argparse.ArgumentParser(description="Normalize velib exports and build events/perf tables.")
-    ap.add_argument("--input", type=Path, default=Path("docs/exports/velib.parquet"))
-    ap.add_argument("--horizon", type=int, default=60, help="Horizon de prédiction, en minutes (défaut 60)")
-    ap.add_argument("--last-days", type=int, default=None, help="Filtrer sur les N derniers jours")
-    ap.add_argument("--out-events", type=Path, default=Path("docs/exports/events.parquet"))
-    ap.add_argument("--out-perf", type=Path, default=Path("docs/exports/perf.parquet"))
-    ap.add_argument("--csv", action="store_true", help="Exporter en CSV")
+    ap = argparse.ArgumentParser(description="Normalise la source Vélib' en events/perf (UTC, 15min).")
+    ap.add_argument("--input", type=Path, required=True, help="Fichier source (parquet/csv).")
+    ap.add_argument("--horizon", type=int, default=60, help="Horizon en minutes (ex. 60).")
+    ap.add_argument("--last-days", type=int, default=None, help="Filtrer sur N derniers jours (optionnel).")
+    ap.add_argument("--out-events", type=Path, default=EXPORTS / "events.parquet")
+    ap.add_argument("--out-perf", type=Path, default=EXPORTS / "perf.parquet")
+    ap.add_argument("--lag-steps", type=int, default=0, help="Décalage à appliquer à y_pred si présent (ex. -4).")
+    ap.add_argument("--as-csv", action="store_true", help="Écrit en CSV au lieu de parquet.")
     args = ap.parse_args()
 
-    events, perf, meta, mapping, used = load_normalized(
-        args.input, horizon_minutes=args.horizon, last_days=args.last_days
+    events, perf, steps, dtypes_raw, mapping = load_normalized(
+        input_path=args.input,
+        horizon_minutes=args.horizon,
+        last_days=args.last_days
     )
 
-    export_df(events, args.out_events, as_csv=args.csv)
-    export_df(perf, args.out_perf, as_csv=args.csv)
+    # appliquer un décalage y_pred si demandé (rare, utile si y_pred a été posée à T+h)
+    if args.lag_steps != 0 and "y_pred" in perf.columns:
+        perf["y_pred"] = perf.groupby("station_id")["y_pred"].shift(args.lag_steps)
 
+    # métrique de couverture simple (pour logs)
+    def _cov(d: pd.DataFrame, cols):
+        return {c: round(d[c].notna().mean() * 100, 2) for c in cols if c in d.columns}
+
+    print("[COVERAGE %]", _cov(perf, ["y_true", "y_pred", "y_pred_baseline"]))
+
+    # écriture fichiers
+    args.out_events.parent.mkdir(parents=True, exist_ok=True)
+    args.out_perf.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.as_csv:
+        _write_any(events, args.out_events.with_suffix(".csv"))
+        _write_any(perf, args.out_perf.with_suffix(".csv"))
+    else:
+        _write_any(events, args.out_events)
+        _write_any(perf, args.out_perf)
+
+    # logs finaux
     print("[OK] Datasets prêt.")
-    # APRÈS (NA-safe & Windows console-safe)
-    from unicodedata import normalize
-    try:
-        print(sanity_report(meta, used))
-    except UnicodeEncodeError:
-        txt = sanity_report(meta, used).replace("→", "->")
-        print(normalize("NFKD", txt).encode("ascii", "ignore").decode("ascii"))
-
+    print(f"- Stations: {events['station_id'].nunique()}")
+    print(f"- Pas: ~{_infer_step_minutes(events['ts'])} min × steps={steps} (horizon={args.horizon} min)")
+    print(f"- mapping source → canonique : {mapping}")
     print(f"[events] → {args.out_events}")
     print(f"[perf]   → {args.out_perf}")
-    print(f"[mapping] colonnes source → canonique : {mapping}")
+
 
 if __name__ == "__main__":
     main()

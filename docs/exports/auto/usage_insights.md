@@ -1,9 +1,9 @@
 # Points clés — Usage du réseau
 
-- **Occupation moyenne** : 0.38 — médiane 0.31 (IQR 0.44).
-- **Sous-tension (<10%)** : 16.4% ; **Surtension (>90%)** : 5.4%.
-- **Fenêtre analysée** : 07 Sep 2025 → 14 Sep 2025.
-- **Stations les plus volatiles** (écart-type d’occupation) : 15039.0, 13104.0, 13020.0, 9023.0, 2009.0.
+- **Occupation moyenne** : 0.38 — médiane 0.31 (IQR 0.43).
+- **Sous-tension (<10%)** : 16.3% ; **Surtension (>90%)** : 5.4%.
+- **Fenêtre analysée** : 07 Sep 2025 → 15 Sep 2025.
+- **Stations les plus volatiles** (écart-type d’occupation) : 15039.0, 13104.0, 13020.0, 5115.0, 9023.0.
 - **Répartition des typologies (clustering)** : C-1: 100.0%
 
 ### Lecture rapide
