@@ -1,16 +1,17 @@
 # tools/build_station_profiles.py
 # Génère des pages station (Markdown) et figures :
-#   - sparkline.png (7j)
-#   - hourly.png (profil horaire moyen)
-#   - obs_vs_pred.png (24h, auto-align display si décalage détecté)
-#   - residual_hist.png
+#   - sparkline.png (7j)            [y_true only]
+#   - hourly.png (profil horaire)   [y_true vs y_pred DISP aligné]
+#   - obs_vs_pred.png (24h)         [y_true vs y_pred DISP aligné]
+#   - residual_hist.png             [résiduels avec y_pred DISP aligné]
 #
 # Règles :
 # - Données en UTC ; conversion tz uniquement pour l'affichage (--tz).
-# - Comparaison stricte y_pred(T) vs y_true(T).
+# - Comparaison stricte y_pred(T) vs y_true(T) dans les datasets.
 # - Fallback y_pred -> y_pred_baseline si besoin.
-# - Auto-align d'affichage : décale y_pred dans les FIGURES si un lag résiduel est détecté.
-# - CI-safe : backend Agg, protections contre colonnes manquantes, et pas d'échec hard.
+# - Auto-align d'affichage : si un lag résiduel est détecté (corr max à k≠0),
+#   on crée une colonne y_pred_disp = y_pred.shift(k) pour les FIGURES uniquement.
+# - CI-safe : backend Agg, protections colonnes manquantes, pas d'échec hard.
 
 from __future__ import annotations
 
@@ -98,6 +99,23 @@ def _fallback_pred_if_needed(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _apply_display_lag(df_s: pd.DataFrame, max_steps: int = 8) -> tuple[pd.DataFrame, int, float]:
+    """
+    Calcule le meilleur lag sur la fenêtre station et retourne un DF avec y_pred_disp = y_pred.shift(lag).
+    Si pas de y_pred / pas assez de points, on renvoie y_pred_disp=y_pred et lag=0.
+    """
+    disp = df_s.copy()
+    lag, r = 0, np.nan
+    if "y_true" in disp.columns and "y_pred" in disp.columns:
+        sub = disp.dropna(subset=["y_true", "y_pred"])
+        if len(sub) >= 20:  # un minimum pour estimer une corr
+            lag, r = _best_lag(sub["y_true"], sub["y_pred"], max_steps=max_steps)
+    disp["y_pred_disp"] = disp.get("y_pred")
+    if lag != 0 and "y_pred" in disp.columns:
+        disp["y_pred_disp"] = disp["y_pred"].shift(lag)
+    return disp, lag, r
+
+
 def _savefig(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(path, dpi=150)
@@ -117,91 +135,91 @@ def plot_sparkline(df_s: pd.DataFrame, tz: str | None, out: Path):
     _savefig(out)
 
 
-def plot_hourly_profile(df_s: pd.DataFrame, tz: str | None, out: Path):
-    if df_s.empty:
+def plot_hourly_profile(df_s_disp: pd.DataFrame, tz: str | None, out: Path, lag_info: tuple[int, float] | None):
+    if df_s_disp.empty:
         return
-    tloc = _to_local(df_s["ts"], tz)
-    df = df_s.copy()
+    tloc = _to_local(df_s_disp["ts"], tz)
+    df = df_s_disp.copy()
     df["hour"] = tloc.dt.hour
-    cols = [c for c in ["y_true", "y_pred"] if c in df.columns]
-    if not cols:
-        return
+    # utiliser y_pred_disp si dispo
+    cols = ["y_true"] + (["y_pred_disp"] if "y_pred_disp" in df.columns else (["y_pred"] if "y_pred" in df.columns else []))
     prof = df.groupby("hour")[cols].mean().dropna(how="all")
     if prof.empty:
         return
     plt.figure(figsize=(8, 3))
     if "y_true" in prof.columns:
         plt.plot(prof.index, prof["y_true"], label="Observed")
-    if "y_pred" in prof.columns:
-        plt.plot(prof.index, prof["y_pred"], label="Predicted")
-    plt.title("Hourly profile (mean)")
+    ypred_col = "y_pred_disp" if "y_pred_disp" in prof.columns else ("y_pred" if "y_pred" in prof.columns else None)
+    if ypred_col:
+        plt.plot(prof.index, prof[ypred_col], label="Predicted")
+    title = "Hourly profile (mean)"
+    if lag_info:
+        k, r = lag_info
+        if not np.isnan(r):
+            title += f" — lag*={k}×15min, corr={r:.3f}"
+    plt.title(title)
     plt.xlabel("Hour"); plt.ylabel("Bikes")
     plt.xticks(range(0, 24, 2))
     plt.legend()
     _savefig(out)
 
 
-def plot_obs_vs_pred_24h(df_s: pd.DataFrame, tz: str | None, out: Path, auto_align_display: bool = True):
-    """
-    Trace y_true vs y_pred sur 24h pour une station.
-    Si auto_align_display=True, détecte un lag résiduel et décale y_pred pour l'AFFICHAGE uniquement.
-    """
-    if df_s.empty or "y_true" not in df_s.columns:
+def plot_obs_vs_pred_24h(df_s_disp: pd.DataFrame, tz: str | None, out: Path, lag_info: tuple[int, float] | None):
+    """Trace y_true vs y_pred_disp sur 24h pour une station (affichage)."""
+    if df_s_disp.empty or "y_true" not in df_s_disp.columns:
         return
-    tmax = df_s["ts"].max()
-    sub = df_s[df_s["ts"] >= (tmax - pd.Timedelta(hours=24))].copy()
-    sub = sub.dropna(subset=["y_true"])
-    if sub.empty or "y_pred" not in sub.columns:
+    tmax = df_s_disp["ts"].max()
+    sub = df_s_disp[df_s_disp["ts"] >= (tmax - pd.Timedelta(hours=24))].copy()
+    # choisir colonne y_pred à afficher
+    ypred_col = "y_pred_disp" if "y_pred_disp" in sub.columns else ("y_pred" if "y_pred" in sub.columns else None)
+    if ypred_col is None:
         return
-    sub = sub.dropna(subset=["y_pred"])
+    sub = sub.dropna(subset=["y_true", ypred_col])
     if sub.empty:
         return
 
-    lag, r = 0, np.nan
-    disp = sub.copy()
-    if auto_align_display:
-        lag, r = _best_lag(sub["y_true"], sub["y_pred"], max_steps=8)
-        if lag != 0:
-            disp["y_pred"] = disp["y_pred"].shift(lag)
-            disp = disp.dropna(subset=["y_true", "y_pred"])
-
-    if disp.empty:
-        return
-
-    x = _to_local(disp["ts"], tz)
+    x = _to_local(sub["ts"], tz)
     plt.figure(figsize=(8, 3))
-    plt.plot(x, disp["y_true"], label="Observed (y_true)")
-    plt.plot(x, disp["y_pred"], label="Predicted (y_pred)")
+    plt.plot(x, sub["y_true"], label="Observed (y_true)")
+    plt.plot(x, sub[ypred_col], label="Predicted (y_pred)")
     title = "Last 24h"
-    if auto_align_display and not np.isnan(r):
-        title += f" — lag*={lag} steps (15min), corr={r:.3f}"
+    if lag_info:
+        k, r = lag_info
+        if not np.isnan(r):
+            title += f" — lag*={k}×15min, corr={r:.3f}"
     plt.title(title)
     plt.xlabel(f"Time ({tz or 'UTC'})"); plt.ylabel("Bikes")
     plt.legend()
     _savefig(out)
 
 
-def plot_residual_hist(df_s: pd.DataFrame, out: Path):
-    if df_s.empty or "y_pred" not in df_s.columns or "y_true" not in df_s.columns:
+def plot_residual_hist(df_s_disp: pd.DataFrame, out: Path):
+    ypred_col = "y_pred_disp" if "y_pred_disp" in df_s_disp.columns else ("y_pred" if "y_pred" in df_s_disp.columns else None)
+    if df_s_disp.empty or ypred_col is None or "y_true" not in df_s_disp.columns:
         return
-    sub = df_s.dropna(subset=["y_true", "y_pred"]).copy()
+    sub = df_s_disp.dropna(subset=["y_true", ypred_col]).copy()
     if sub.empty:
         return
-    resid = (sub["y_pred"] - sub["y_true"]).astype(float)
+    resid = (sub[ypred_col] - sub["y_true"]).astype(float)
     plt.figure(figsize=(6, 3))
     plt.hist(resid, bins=40)
-    plt.title("Residuals (y_pred - y_true)")
+    plt.title("Residuals (y_pred - y_true) [display-aligned]")
     plt.xlabel("Residual"); plt.ylabel("Count")
     _savefig(out)
 
 
 # ------------------------- page markdown -------------------------
 
-def write_md(station_id: str, name: str | None, files: dict[str, Path], out_md: Path):
+def write_md(station_id: str, name: str | None, files: dict[str, Path], out_md: Path, lag_info: tuple[int, float] | None):
     out_md.parent.mkdir(parents=True, exist_ok=True)
     title = f"Station {station_id}" + (f" — {name}" if name else "")
+    lag_line = ""
+    if lag_info:
+        k, r = lag_info
+        if not np.isnan(r):
+            lag_line = f"\n> Display alignment applied: `lag* = {k} × 15min`, corr ≈ {r:.3f}\n"
     md = f"""# {title}
-
+{lag_line}
 Figures:
 
 - Sparkline (7d): ![]({files['spark'].as_posix()})
@@ -287,6 +305,13 @@ def _run(
                 continue
             df_s = _fallback_pred_if_needed(df_s)
 
+            # appliquer le lag d'affichage (unique, réutilisé sur tous les plots station)
+            if auto_align_display:
+                df_disp, k, r = _apply_display_lag(df_s, max_steps=8)
+                lag_info = (k, r)
+            else:
+                df_disp, lag_info = df_s.copy(), None
+
             base = STATIONS_DIR / f"{sid}"
             files = {
                 "spark": base / "sparkline.png",
@@ -295,12 +320,12 @@ def _run(
                 "resid":  base / "residual_hist.png",
             }
 
-            plot_sparkline(df_s, tz, files["spark"])
-            plot_hourly_profile(df_s, tz, files["hourly"])
-            plot_obs_vs_pred_24h(df_s, tz, files["ovsp"], auto_align_display=auto_align_display)
-            plot_residual_hist(df_s, files["resid"])
+            plot_sparkline(df_s, tz, files["spark"])  # y_true only
+            plot_hourly_profile(df_disp, tz, files["hourly"], lag_info)
+            plot_obs_vs_pred_24h(df_disp, tz, files["ovsp"], lag_info)
+            plot_residual_hist(df_disp, files["resid"])
 
-            write_md(sid, names.get(str(sid)), files, base.with_suffix(".md"))
+            write_md(sid, names.get(str(sid)), files, base.with_suffix(".md"), lag_info)
             ok_pages += 1
         except Exception as e:
             print(f"[ERR] station {sid}: {e}; skipping")
@@ -332,12 +357,11 @@ def main(
             tz=tz,
             auto_align_display=auto_align_display,
         )
-        # Toujours succès pour ne pas casser la CI (les autres assets ont de la valeur)
+        # Toujours succès pour ne pas casser la CI
         return 0
     except Exception as e:
         print(f"[ERR] build_station_profiles failed: {e}")
         traceback.print_exc()
-        # Ne pas faire échouer le pipeline
         return 0
 
 
@@ -361,6 +385,6 @@ if __name__ == "__main__":
             select_k=args.select,
             by=args.by,
             tz=args.tz,
-            auto_align_display=not args.no_auto_align_display,
+            auto_align_display=not args.no-auto-align_display,
         )
     )
