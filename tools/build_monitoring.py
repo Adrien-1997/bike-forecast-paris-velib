@@ -1,249 +1,468 @@
 # tools/build_monitoring.py
-# Génère des indicateurs de monitoring :
-#  - mon_data_health.png      : complétude & volumes
-#  - mon_psi.png              : Population Stability Index (features clés)
-#  - mon_feature_importance.png: importance proxy (corrélations simples)
-#  - mon_error_trend.png      : MAE quotidien (y_pred vs y_true)
-#  - tables: data_health.csv | psi_features.csv | feature_importance_proxy.csv | daily_error.csv
+# Rapport Monitoring (Data & Modèle) — pro & détaillé
+# Garde la structure existante et ajoute :
+# - Tables: global_metrics, error_by_horizon, residuals_summary, calibration, feature_importance_proxy...
+# - Visuels: global metrics bar, error by horizon line, residual histogram, calibration curve,
+#            feature importance (corr & MI si dispo), data health, PSI (si dispo), trend d'erreur.
 #
-# Règles:
-# - Les données restent en UTC; tz optionnel pour affichage.
-# - La performance compare STRICTEMENT y_pred(T) vs y_true(T).
-# - Si y_pred est manquant sur toute la fenêtre, fallback baseline.
+# Hypothèses douces:
+# - docs/exports/perf.parquet : colonnes attendues au minimum: ts, y_true, y_pred (ou y_pred_baseline)
+#   Optionnels: station_id, horizon_min, features_* (ou noms de colonnes de features)
+# - docs/exports/events.parquet : optionnel (pour meta)
+#
+# Sorties:
+# - docs/assets/tables/*.csv
+# - docs/assets/figs/*.png
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import List, Optional, Tuple, Dict
+
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
 import numpy as np
 import pandas as pd
+
 import matplotlib
-matplotlib.use("Agg")  # <- backend non interactif pour CI/headless
+matplotlib.use("Agg")   # headless/CI
 import matplotlib.pyplot as plt
+
+# sklearn est optionnel (mutual information)
+try:
+    from sklearn.feature_selection import mutual_info_regression
+    _HAS_SKLEARN = True
+except Exception:
+    _HAS_SKLEARN = False
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
 EXPORTS = DOCS / "exports"
 ASSETS = DOCS / "assets"
 FIGS = ASSETS / "figs"
-TBLS = ASSETS / "tables"
+TABLES = ASSETS / "tables"
 
-plt.rcParams.update({"figure.autolayout": True})
+PERF_PARQ = EXPORTS / "perf.parquet"
+EVENTS_PARQ = EXPORTS / "events.parquet"  # optionnel
 
+plt.rcParams.update({
+    "figure.autolayout": True,
+    "axes.grid": True,
+})
 
-# ------------------------- utils -------------------------
+# --------------------------------------------------------------------------------------
+# Utils
+# --------------------------------------------------------------------------------------
 
 def _ensure_dirs():
     FIGS.mkdir(parents=True, exist_ok=True)
-    TBLS.mkdir(parents=True, exist_ok=True)
+    TABLES.mkdir(parents=True, exist_ok=True)
 
-
-def _to_local(ts: pd.Series, tz: str | None) -> pd.Series:
-    if tz:
-        return pd.to_datetime(ts, utc=True, errors="coerce").dt.tz_convert(tz)
-    return pd.to_datetime(ts, utc=False, errors="coerce")
-
-
-def _savefig(path: Path):
+def _safe_savefig(path: Path, dpi: int = 150):
     path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(path, dpi=150)
+    plt.savefig(path, dpi=dpi)
     plt.close()
 
+def _coerce_dt(s) -> pd.Series:
+    return pd.to_datetime(s, utc=False, errors="coerce")
 
-def _psi(reference: pd.Series, current: pd.Series, bins: int = 20) -> float:
-    """Population Stability Index simple (mêmes bornes sur ref & cur)."""
-    ref = pd.to_numeric(reference, errors="coerce").dropna().astype(float)
-    cur = pd.to_numeric(current, errors="coerce").dropna().astype(float)
-    if len(ref) < 10 or len(cur) < 10:
+def _has_cols(df: pd.DataFrame, cols: List[str]) -> bool:
+    return all(c in df.columns for c in cols)
+
+def _fmt_pct(x: float) -> float:
+    try:
+        return float(x) * 100.0
+    except Exception:
         return np.nan
-    qs = np.quantile(ref, np.linspace(0, 1, bins + 1))
-    qs[0], qs[-1] = -np.inf, np.inf
-    ref_hist, _ = np.histogram(ref, bins=qs)
-    cur_hist, _ = np.histogram(cur, bins=qs)
-    ref_p = np.where(ref_hist == 0, 1e-6, ref_hist) / max(ref_hist.sum(), 1)
-    cur_p = np.where(cur_hist == 0, 1e-6, cur_hist) / max(cur_hist.sum(), 1)
-    return float(np.sum((cur_p - ref_p) * np.log(cur_p / ref_p)))
 
+# --------------------------------------------------------------------------------------
+# Chargement & Préparation
+# --------------------------------------------------------------------------------------
 
-def _mae(a: pd.Series, b: pd.Series) -> float:
-    m = a.notna() & b.notna()
-    if not m.any(): return np.nan
-    return float(np.mean(np.abs(a[m] - b[m])))
+def load_perf(perf_path: Path) -> pd.DataFrame:
+    try:
+        perf = pd.read_parquet(perf_path)
+    except Exception as e:
+        raise RuntimeError(f"Impossible de lire {perf_path}: {e}")
 
+    # Colonnes minimales
+    if "ts" not in perf.columns:
+        raise RuntimeError("La colonne 'ts' est requise dans perf.parquet")
+    if "y_true" not in perf.columns:
+        raise RuntimeError("La colonne 'y_true' est requise dans perf.parquet")
 
-# ------------------------- plots -------------------------
+    # y_pred fallback baseline
+    if "y_pred" not in perf.columns or perf["y_pred"].dropna().empty:
+        if "y_pred" not in perf.columns:
+            perf["y_pred"] = np.nan
+        if "y_pred_baseline" in perf.columns:
+            perf["y_pred"] = perf["y_pred"].fillna(perf["y_pred_baseline"])
 
-def plot_data_health(events: pd.DataFrame, perf: pd.DataFrame, tz: str | None, out: Path):
-    # Completeness (y_true, y_pred) et volume par jour
-    p = perf.copy()
-    p["date"] = _to_local(p["ts"], tz).dt.date
-    agg = p.groupby("date").agg(
-        rows=("ts", "size"),
-        y_true_cov=("y_true", lambda s: float(s.notna().mean()) * 100.0),
-        y_pred_cov=("y_pred", lambda s: float(s.notna().mean()) * 100.0)
-    ).reset_index()
+    perf["ts"] = _coerce_dt(perf["ts"])
+    if "station_id" in perf.columns:
+        perf["station_id"] = perf["station_id"].astype(str)
 
-    plt.figure(figsize=(10, 4))
-    ax1 = plt.gca()
-    ax1.plot(pd.to_datetime(agg["date"]), agg["rows"], label="Rows (perf)")
-    ax1.set_ylabel("Rows")
-    ax2 = ax1.twinx()
-    ax2.plot(pd.to_datetime(agg["date"]), agg["y_true_cov"], linestyle="--", label="y_true %")
-    ax2.plot(pd.to_datetime(agg["date"]), agg["y_pred_cov"], linestyle="--", label="y_pred %")
-    ax2.set_ylabel("Coverage (%)")
-    ax1.set_title("Data health (volume & coverage)")
-    ax1.set_xlabel(f"Date ({tz or 'UTC'})")
-    ax1.legend(loc="upper left"); ax2.legend(loc="upper right")
-    _savefig(out)
+    # clamp raisonnable si capacity dispo (optionnel)
+    if "capacity" in perf.columns:
+        perf["y_true"] = perf["y_true"].clip(lower=0, upper=perf["capacity"])
+        perf["y_pred"] = perf["y_pred"].clip(lower=0, upper=perf["capacity"])
 
-    agg.to_csv(TBLS / "data_health.csv", index=False)
+    return perf
 
+# --------------------------------------------------------------------------------------
+# Métriques
+# --------------------------------------------------------------------------------------
 
-def plot_psi_features(events: pd.DataFrame, perf: pd.DataFrame, last_days: int, out_fig: Path, out_tbl: Path):
-    # Fenêtre ref = 'last_days * 2 à last_days' ; current = 'last_days'
-    p = perf.copy()
-    p = p.sort_values("ts")
-    tmax = p["ts"].max()
-    if pd.isna(tmax):
-        return
-    cur_start = tmax - pd.Timedelta(days=last_days)
-    ref_start = tmax - pd.Timedelta(days=2 * last_days)
-    ref = p[(p["ts"] >= ref_start) & (p["ts"] < cur_start)]
-    cur = p[p["ts"] >= cur_start]
+def compute_global_metrics(df: pd.DataFrame) -> Dict[str, float]:
+    sub = df.dropna(subset=["y_true", "y_pred"]).copy()
+    if sub.empty:
+        return {"MAE": np.nan, "RMSE": np.nan, "MAPE": np.nan, "R2": np.nan, "Coverage": 0.0}
 
-    # features candidates (si présentes)
-    cand = [
-        "nb_velos_bin","nb_bornes_bin","capacity_bin","occ_ratio_bin",
-        "temp_C","precip_mm","wind_mps"
-    ]
-    # si events a lat/lon/name, on les ignore (non numériques / stationnaires)
-    # on essaie aussi quelques features dérivées éventuelles en perf
-    cand = [c for c in cand if c in events.columns or c in perf.columns]
+    y = sub["y_true"].astype(float).values
+    yhat = sub["y_pred"].astype(float).values
+    err = yhat - y
+    mae = np.mean(np.abs(err))
+    rmse = float(np.sqrt(np.mean(err**2)))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mape = np.mean(np.abs(err) / np.where(y == 0, np.nan, np.abs(y)))
+    if np.allclose(np.var(y), 0.0, atol=1e-12):
+        r2 = np.nan
+    else:
+        r2 = 1.0 - (np.sum(err**2) / np.sum((y - np.mean(y))**2))
 
-    rows = []
-    for c in cand:
-        r = _psi(ref.get(c, pd.Series(dtype=float)), cur.get(c, pd.Series(dtype=float)))
-        rows.append({"feature": c, "psi": r})
-    df_psi = pd.DataFrame(rows).sort_values("psi", ascending=False)
-    df_psi.to_csv(out_tbl, index=False)
+    cov = sub["y_pred"].notna().mean()
 
-    plt.figure(figsize=(8, 4))
-    plt.barh(df_psi["feature"], df_psi["psi"])
-    plt.gca().invert_yaxis()
-    plt.xlabel("PSI (higher = bigger shift)")
-    plt.title(f"Feature Stability (PSI) — ref=[{2*last_days}-{last_days}]d vs cur=[{last_days}]d")
-    _savefig(out_fig)
+    return {"MAE": float(mae), "RMSE": float(rmse), "MAPE": float(mape), "R2": float(r2), "Coverage": float(cov)}
 
+def compute_error_by_horizon(df: pd.DataFrame) -> pd.DataFrame:
+    if "horizon_min" not in df.columns:
+        return pd.DataFrame()
+    sub = df.dropna(subset=["y_true", "y_pred", "horizon_min"]).copy()
+    if sub.empty:
+        return pd.DataFrame()
+    sub["abs_err"] = (sub["y_pred"] - sub["y_true"]).abs()
+    g = sub.groupby("horizon_min")["abs_err"].agg(["mean", "median", "count"]).reset_index()
+    g.rename(columns={"mean": "MAE", "median": "MedAE", "count": "N"}, inplace=True)
+    return g.sort_values("horizon_min")
 
-def plot_feature_importance_proxy(perf: pd.DataFrame, out_fig: Path, out_tbl: Path):
-    # Proxy très simple : |corr(y_pred, feature)| sur la fenêtre (quand dispo)
-    p = perf.copy()
+def compute_residuals_summary(df: pd.DataFrame) -> pd.DataFrame:
+    sub = df.dropna(subset=["y_true", "y_pred"]).copy()
+    if sub.empty:
+        return pd.DataFrame()
+    sub["residual"] = (sub["y_pred"] - sub["y_true"]).astype(float)
+    return pd.DataFrame({
+        "mean": [sub["residual"].mean()],
+        "std":  [sub["residual"].std()],
+        "p10":  [sub["residual"].quantile(0.10)],
+        "p50":  [sub["residual"].quantile(0.50)],
+        "p90":  [sub["residual"].quantile(0.90)],
+        "n":    [len(sub)],
+    })
 
-    # features candidates plausibles dans perf
-    cand = [c for c in p.columns if c.startswith(("lag_", "roll_", "trend_", "temp_", "precip_", "wind_", "occ_"))]
+def compute_daily_error(df: pd.DataFrame) -> pd.DataFrame:
+    sub = df.dropna(subset=["ts", "y_true", "y_pred"]).copy()
+    if sub.empty:
+        return pd.DataFrame()
+    sub["date"] = sub["ts"].dt.date
+    sub["abs_err"] = (sub["y_pred"] - sub["y_true"]).abs()
+    return sub.groupby("date")["abs_err"].mean().reset_index(name="MAE")
 
-    rows = []
-    for c in cand[:80]:  # limite raisonnable
+def compute_calibration_table(df: pd.DataFrame, q: int = 10) -> pd.DataFrame:
+    sub = df.dropna(subset=["y_true", "y_pred"]).copy()
+    if sub.empty:
+        return pd.DataFrame()
+    try:
+        sub["bin"] = pd.qcut(sub["y_pred"], q=q, duplicates="drop")
+    except Exception:
+        return pd.DataFrame()
+    tab = sub.groupby("bin", observed=False).agg(
+        y_pred_mean=("y_pred", "mean"),
+        y_true_mean=("y_true", "mean"),
+        n=("y_true", "size")
+    ).reset_index(drop=False)
+    return tab
+
+# --------------------------------------------------------------------------------------
+# Feature importance proxy
+# --------------------------------------------------------------------------------------
+
+def detect_feature_columns(df: pd.DataFrame) -> List[str]:
+    # Heuristique: toutes colonnes numériques non cibles et non meta évidentes
+    exclude = {"y_true", "y_pred", "y_pred_baseline", "ts", "station_id", "horizon_min", "capacity"}
+    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    feat_cols = [c for c in num_cols if c not in exclude]
+    # aussi autoriser certaines colonnes catégorielles encodées
+    return feat_cols
+
+def compute_feature_importance(df: pd.DataFrame) -> pd.DataFrame:
+    sub = df.dropna(subset=["y_true"]).copy()
+    if sub.empty:
+        return pd.DataFrame(columns=["feature","abs_corr_y_true","abs_corr_residual","mi_y_true","score"])
+
+    features = detect_feature_columns(sub)
+    if not features:
+        return pd.DataFrame(columns=["feature","abs_corr_y_true","abs_corr_residual","mi_y_true","score"])
+
+    out = []
+    # Corrélation (abs) avec y_true et avec le résidu (si y_pred dispo)
+    if "y_pred" in sub.columns and sub["y_pred"].notna().any():
+        sub["residual"] = (sub["y_pred"] - sub["y_true"]).astype(float)
+    else:
+        sub["residual"] = np.nan
+
+    for f in features:
         try:
-            sub = p[[c, "y_pred"]].dropna()
-            if len(sub) < 10:
-                corr = np.nan
-            else:
-                corr = float(sub.corr().iloc[0, 1])
+            c_true = float(pd.to_numeric(sub[f], errors="coerce").corr(pd.to_numeric(sub["y_true"], errors="coerce")))
         except Exception:
-            corr = np.nan
-        rows.append({"feature": c, "abs_corr_with_y_pred": (abs(corr) if pd.notna(corr) else np.nan)})
+            c_true = np.nan
+        try:
+            c_res = float(pd.to_numeric(sub[f], errors="coerce").corr(pd.to_numeric(sub["residual"], errors="coerce")))
+        except Exception:
+            c_res = np.nan
+        out.append({"feature": f, "abs_corr_y_true": abs(c_true) if pd.notna(c_true) else np.nan,
+                    "abs_corr_residual": abs(c_res) if pd.notna(c_res) else np.nan})
 
-    df_imp = pd.DataFrame(rows)
+    imp = pd.DataFrame(out)
 
-    # Si aucune feature candidate ou tout NaN → produire un CSV minimal et sortir proprement
-    if df_imp.empty or ("abs_corr_with_y_pred" not in df_imp.columns):
-        pd.DataFrame(columns=["feature", "abs_corr_with_y_pred"]).to_csv(out_tbl, index=False)
+    # Mutual Information (optionnelle)
+    if _HAS_SKLEARN:
+        try:
+            X = sub[features].apply(pd.to_numeric, errors="coerce").fillna(0.0).values
+            y = pd.to_numeric(sub["y_true"], errors="coerce").fillna(0.0).values
+            mi = mutual_info_regression(X, y, random_state=0)
+            imp["mi_y_true"] = mi
+        except Exception:
+            imp["mi_y_true"] = np.nan
+    else:
+        imp["mi_y_true"] = np.nan
+
+    # Score agrégé simple pour le tri
+    imp["score"] = imp[["abs_corr_y_true", "abs_corr_residual", "mi_y_true"]].fillna(0.0).sum(axis=1)
+    return imp.sort_values("score", ascending=False).reset_index(drop=True)
+
+# --------------------------------------------------------------------------------------
+# Data Health & PSI (si disponible)
+# --------------------------------------------------------------------------------------
+
+def compute_data_health(df: pd.DataFrame) -> pd.DataFrame:
+    # Part de manquants par colonne, part d'out-of-range basique si capacity.
+    out = []
+    for c in ["y_true", "y_pred"]:
+        if c in df.columns:
+            na = df[c].isna().mean()
+            row = {"metric": f"{c}_missing_ratio", "value": float(na)}
+            out.append(row)
+    if "capacity" in df.columns:
+        for c in ["y_true", "y_pred"]:
+            if c in df.columns:
+                out_range = ( (df[c] < 0) | (df[c] > df["capacity"]) ).mean()
+                out.append({"metric": f"{c}_out_of_range_ratio", "value": float(out_range)})
+    return pd.DataFrame(out)
+
+def compute_psi(ref: pd.Series, cur: pd.Series, bins: int = 10) -> float:
+    # Population Stability Index simple
+    try:
+        r, _ = np.histogram(ref.dropna(), bins=bins)
+        c, _ = np.histogram(cur.dropna(), bins=bins)
+        r = r / (r.sum() + 1e-12)
+        c = c / (c.sum() + 1e-12)
+        psi = np.sum((c - r) * np.log((c + 1e-12) / (r + 1e-12)))
+        return float(psi)
+    except Exception:
+        return np.nan
+
+def compute_psi_features(df: pd.DataFrame) -> pd.DataFrame:
+    sub = df.copy()
+    if sub.empty or "ts" not in sub.columns:
+        return pd.DataFrame(columns=["feature", "psi"])  # ← colonnes explicites
+
+    sub = sub.sort_values("ts")
+    n = len(sub)
+    if n < 50:
+        return pd.DataFrame(columns=["feature", "psi"])  # ← colonnes explicites
+
+    mid = n // 2
+    ref = sub.iloc[:mid]
+    cur = sub.iloc[mid:]
+
+    feats = detect_feature_columns(sub)
+    if not feats:
+        return pd.DataFrame(columns=["feature", "psi"])  # ← rien à calculer
+
+    out = []
+    for f in feats:
+        try:
+            psi = compute_psi(pd.to_numeric(ref[f], errors="coerce"),
+                              pd.to_numeric(cur[f], errors="coerce"))
+        except Exception:
+            psi = np.nan
+        out.append({"feature": f, "psi": psi})
+
+    if not out:
+        return pd.DataFrame(columns=["feature", "psi"])  # ← sécurité
+
+    df_out = pd.DataFrame(out, columns=["feature", "psi"])
+    return df_out.sort_values("psi", ascending=False)
+
+
+# --------------------------------------------------------------------------------------
+# Plots
+# --------------------------------------------------------------------------------------
+
+def plot_global_metrics_bar(metrics: Dict[str, float], out: Path):
+    keys = ["MAE", "RMSE", "MAPE", "R2", "Coverage"]
+    vals = [metrics.get(k, np.nan) for k in keys]
+    plt.figure(figsize=(7, 3.2))
+    plt.bar(keys, vals)
+    plt.title("Métriques globales du modèle")
+    plt.ylabel("Valeur")
+    _safe_savefig(out)
+
+def plot_error_by_horizon(df: pd.DataFrame, out: Path):
+    if df.empty:
         return
+    plt.figure(figsize=(8, 3))
+    plt.plot(df["horizon_min"], df["MAE"])
+    if "MedAE" in df.columns:
+        plt.plot(df["horizon_min"], df["MedAE"])
+        plt.legend(["MAE", "MedAE"])
+    else:
+        plt.legend(["MAE"])
+    plt.title("Erreur par horizon (minutes)")
+    plt.xlabel("Horizon (min)"); plt.ylabel("Erreur (vélos)")
+    _safe_savefig(out)
 
-    df_imp = df_imp.dropna(subset=["abs_corr_with_y_pred"]).sort_values(
-        "abs_corr_with_y_pred", ascending=False
-    ).head(30)
+def plot_residual_histogram(df: pd.DataFrame, out: Path):
+    sub = df.dropna(subset=["y_true", "y_pred"]).copy()
+    if sub.empty:
+        return
+    resid = (sub["y_pred"] - sub["y_true"]).astype(float)
+    plt.figure(figsize=(7, 3))
+    plt.hist(resid, bins=40)
+    mu, sig = float(resid.mean()), float(resid.std())
+    plt.title(f"Résidus (prédit − observé) — μ={mu:.2f}, σ={sig:.2f}")
+    plt.xlabel("Écart (vélos)"); plt.ylabel("Occurrences")
+    _safe_savefig(out)
 
-    # Toujours écrire un CSV, même si df_imp est vide
-    df_imp.to_csv(out_tbl, index=False)
+def plot_calibration_curve(tab: pd.DataFrame, out: Path):
+    if tab.empty:
+        return
+    plt.figure(figsize=(6, 6))
+    plt.plot(tab["y_pred_mean"], tab["y_true_mean"])
+    # diagonale parfaite
+    mn = float(min(tab["y_pred_mean"].min(), tab["y_true_mean"].min()))
+    mx = float(max(tab["y_pred_mean"].max(), tab["y_true_mean"].max()))
+    plt.plot([mn, mx], [mn, mx], linestyle="--")
+    plt.title("Calibration (moyenne par quantile de y_pred)")
+    plt.xlabel("y_pred (moy. par quantile)")
+    plt.ylabel("y_true (moy. par quantile)")
+    _safe_savefig(out)
 
-    if df_imp.empty:
-        return  # rien à tracer
-
-    plt.figure(figsize=(8, 6))
-    plt.barh(df_imp["feature"], df_imp["abs_corr_with_y_pred"])
+def plot_feature_importance(imp: pd.DataFrame, out: Path, top_k: int = 20):
+    if imp.empty:
+        return
+    df = imp.head(top_k).copy()
+    # barres sur score, annotations corr/mi
+    plt.figure(figsize=(9, max(3, 0.35*len(df))))
+    plt.barh(df["feature"], df["score"])
     plt.gca().invert_yaxis()
-    plt.xlabel("|corr(y_pred, feature)|")
-    plt.title("Feature importance proxy (correlations)")
-    _savefig(out_fig)
+    plt.title("Importance des features (proxy)")
+    plt.xlabel("Score (|corr(y)| + |corr(resid)| + MI)")
+    _safe_savefig(out)
 
+def plot_daily_error(trend: pd.DataFrame, out: Path):
+    if trend.empty:
+        return
+    plt.figure(figsize=(9, 3))
+    plt.plot(pd.to_datetime(trend["date"]), trend["MAE"])
+    plt.title("Tendance d'erreur (MAE quotidienne)")
+    plt.xlabel("Date"); plt.ylabel("MAE (vélos)")
+    _safe_savefig(out)
 
+def plot_data_health(health: pd.DataFrame, out: Path):
+    if health.empty:
+        return
+    plt.figure(figsize=(8, 3))
+    plt.bar(health["metric"], health["value"])
+    plt.title("Data health — ratios")
+    plt.ylabel("Part")
+    plt.xticks(rotation=30, ha="right")
+    _safe_savefig(out)
 
-def plot_error_trend(perf: pd.DataFrame, tz: str | None, out_fig: Path, out_tbl: Path):
-    p = perf.dropna(subset=["y_true"]).copy()
-    # fallback baseline si y_pred absent
-    if "y_pred" not in p.columns or p["y_pred"].dropna().empty:
-        if "y_pred_baseline" in p.columns:
-            print("[INFO] 'y_pred' absent → utilisation de 'y_pred_baseline' pour le monitoring.")
-            p["y_pred"] = p["y_pred_baseline"]
-        else:
-            p["y_pred"] = np.nan
+def plot_psi_features(psi: pd.DataFrame, out: Path, top_k: int = 20):
+    if psi.empty:
+        return
+    df = psi.head(top_k)
+    plt.figure(figsize=(9, max(3, 0.35*len(df))))
+    plt.barh(df["feature"], df["psi"])
+    plt.gca().invert_yaxis()
+    plt.title("PSI par feature (début vs fin de période)")
+    plt.xlabel("PSI")
+    _safe_savefig(out)
 
-    p["date"] = _to_local(p["ts"], tz).dt.date
-    daily = p.groupby("date").apply(lambda g: pd.Series({
-        "MAE": _mae(g["y_true"], g["y_pred"]),
-        "RMSE": float(np.sqrt(np.mean((g["y_pred"].astype(float) - g["y_true"].astype(float))**2)))
-    })).reset_index()
+# --------------------------------------------------------------------------------------
+# Orchestration
+# --------------------------------------------------------------------------------------
 
-    daily.to_csv(out_tbl, index=False)
-
-    plt.figure(figsize=(10, 4))
-    plt.plot(pd.to_datetime(daily["date"]), daily["MAE"], label="MAE")
-    plt.plot(pd.to_datetime(daily["date"]), daily["RMSE"], label="RMSE")
-    plt.title("Daily error trend")
-    plt.xlabel(f"Date ({tz or 'UTC'})"); plt.ylabel("Error")
-    plt.legend()
-    _savefig(out_fig)
-
-
-# ------------------------- main -------------------------
-
-def main(events_path: Path, perf_path: Path, last_days: int, tz: str | None):
+def run(perf_path: Path = PERF_PARQ) -> int:
     _ensure_dirs()
+    perf = load_perf(perf_path)
 
-    events = pd.read_parquet(events_path)
-    perf = pd.read_parquet(perf_path)
+    # 1) Métriques globales
+    gmetrics = compute_global_metrics(perf)
+    pd.DataFrame([gmetrics]).to_csv(TABLES / "global_metrics.csv", index=False)
+    plot_global_metrics_bar(gmetrics, FIGS / "mon_global_metrics.png")
 
-    # types
-    for df in (events, perf):
-        df["ts"] = pd.to_datetime(df["ts"], utc=False, errors="coerce")
-        if "station_id" in df.columns:
-            df["station_id"] = df["station_id"].astype(str)
+    # 2) Erreur par horizon
+    err_h = compute_error_by_horizon(perf)
+    if not err_h.empty:
+        err_h.to_csv(TABLES / "error_by_horizon.csv", index=False)
+        plot_error_by_horizon(err_h, FIGS / "mon_error_by_horizon.png")
 
-    # fenêtre
-    if last_days and last_days > 0:
-        tmax = perf["ts"].max()
-        if pd.notna(tmax):
-            perf = perf[perf["ts"] >= (tmax - pd.Timedelta(days=last_days))].copy()
-            events = events[events["ts"] >= (tmax - pd.Timedelta(days=last_days))].copy()
+    # 3) Résidus
+    res_sum = compute_residuals_summary(perf)
+    if not res_sum.empty:
+        res_sum.to_csv(TABLES / "residuals_summary.csv", index=False)
+    plot_residual_histogram(perf, FIGS / "mon_residual_hist.png")
 
-    # figures/tables
-    plot_data_health(events, perf, tz, FIGS / "mon_data_health.png")
-    plot_psi_features(events, perf, last_days, FIGS / "mon_psi.png", TBLS / "psi_features.csv")
-    plot_feature_importance_proxy(perf, FIGS / "mon_feature_importance.png", TBLS / "feature_importance_proxy.csv")
-    plot_error_trend(perf, tz, FIGS / "mon_error_trend.png", TBLS / "daily_error.csv")
+    # 4) Calibration
+    calib = compute_calibration_table(perf, q=10)
+    if not calib.empty:
+        calib.to_csv(TABLES / "calibration_table.csv", index=False)
+        plot_calibration_curve(calib, FIGS / "mon_calibration.png")
 
-    print("[OK] Monitoring assets generated:")
-    print(" - figs: mon_data_health.png | mon_psi.png | mon_feature_importance.png | mon_error_trend.png")
-    print(" - tbls: data_health.csv | psi_features.csv | feature_importance_proxy.csv | daily_error.csv")
+    # 5) Tendance d’erreur quotidienne
+    trend = compute_daily_error(perf)
+    if not trend.empty:
+        trend.to_csv(TABLES / "daily_error.csv", index=False)
+        plot_daily_error(trend, FIGS / "mon_error_trend.png")
+
+    # 6) Data health
+    health = compute_data_health(perf)
+    if not health.empty:
+        health.to_csv(TABLES / "data_health.csv", index=False)
+        plot_data_health(health, FIGS / "mon_data_health.png")
+
+    # 7) PSI (début vs fin) — features numériques
+    psi = compute_psi_features(perf)
+    if not psi.empty:
+        psi.to_csv(TABLES / "psi_features.csv", index=False)
+        plot_psi_features(psi, FIGS / "mon_psi.png")
+
+    # 8) Importance de features (corr + MI si dispo)
+    imp = compute_feature_importance(perf)
+    if not imp.empty:
+        imp.to_csv(TABLES / "feature_importance_proxy.csv", index=False)
+        plot_feature_importance(imp, FIGS / "mon_feature_importance.png")
+
+    print("[OK] Monitoring model report generated in assets/figs and assets/tables")
+    return 0
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Build monitoring indicators from events/perf")
-    ap.add_argument("--events", type=Path, default=EXPORTS / "events.parquet")
-    ap.add_argument("--perf", type=Path, default=EXPORTS / "perf.parquet")
-    ap.add_argument("--last-days", type=int, default=7)
-    ap.add_argument("--tz", type=str, default=None, help="Affichage (ex: Europe/Paris). Données restent en UTC.")
+    ap = argparse.ArgumentParser(description="Build detailed monitoring report (model + data)")
+    ap.add_argument("--perf", type=Path, default=PERF_PARQ)
     args = ap.parse_args()
-    main(events_path=args.events, perf_path=args.perf, last_days=args.last_days, tz=args.tz)
+    raise SystemExit(run(perf_path=args.perf))
