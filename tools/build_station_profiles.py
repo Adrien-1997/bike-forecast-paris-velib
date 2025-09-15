@@ -66,8 +66,10 @@ def _best_lag(a: pd.Series, b: pd.Series, max_steps: int = 8) -> tuple[int, floa
 def _safe_group_cov(df: pd.DataFrame) -> pd.Series:
     """Couverture y_pred par station, sans exiger l'existence de la colonne y_pred."""
     if "y_pred" not in df.columns:
+        # Série de 0.0 indexée par station_id
         return df.groupby("station_id").size().astype(float).mul(0.0)
-    return df.groupby("station_id").apply(lambda g: g["y_pred"].notna().mean())
+    # Utiliser la série directement pour éviter le FutureWarning
+    return df.groupby("station_id")["y_pred"].apply(lambda s: s.notna().mean())
 
 
 def _station_selector(df: pd.DataFrame, k: int, by: str) -> list[str]:
@@ -75,15 +77,28 @@ def _station_selector(df: pd.DataFrame, k: int, by: str) -> list[str]:
     if df.empty:
         return []
     cov = _safe_group_cov(df).fillna(0.0)
-    vol = df.groupby("station_id")["y_true"].std(min_count=10).fillna(0.0) if "y_true" in df.columns else cov*0.0
-    cnt = df.groupby("station_id").size()
+
+    # std sans min_count (compat pandas old) + pénalisation si peu de points
+    if "y_true" in df.columns:
+        grp = df.groupby("station_id")["y_true"]
+        vol = grp.std()                   # pas d'arg min_count ici
+        n   = grp.count()
+        # mettre 0.0 si < 10 points utilisables (équivalent min_count=10)
+        vol = vol.where(n >= 10, 0.0).fillna(0.0)
+    else:
+        vol = cov * 0.0
+
+    cnt = df.groupby("station_id").size().astype(float)
+
     if by == "volatility":
         score = vol
     elif by == "coverage":
         score = cov
     else:
-        score = cnt.astype(float)
-    score = score * (1.0 + cov)  # boost stations bien couvertes en y_pred
+        score = cnt
+
+    # boost stations bien couvertes en y_pred
+    score = score * (1.0 + cov)
     return score.sort_values(ascending=False).head(k).index.astype(str).tolist()
 
 
@@ -385,6 +400,6 @@ if __name__ == "__main__":
             select_k=args.select,
             by=args.by,
             tz=args.tz,
-            auto_align_display=not args.no-auto-align_display,
+            auto_align_display=not args.no_auto_align_display,
         )
     )
