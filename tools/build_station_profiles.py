@@ -32,6 +32,7 @@ DOCS = ROOT / "docs"
 EXPORTS = DOCS / "exports"
 ASSETS = DOCS / "assets"
 STATIONS_DIR = DOCS / "stations"
+IMG_STATIONS_DIR = DOCS / "assets" / "figs" / "stations"   # <== nouvel emplacement figures
 
 plt.rcParams.update({"figure.autolayout": True})
 
@@ -40,17 +41,16 @@ plt.rcParams.update({"figure.autolayout": True})
 
 def _to_local(ts: pd.Series, tz: str | None) -> pd.Series:
     if tz:
-        # suppose ts en UTC naive → localise en UTC puis convertit
         return pd.to_datetime(ts, utc=True, errors="coerce").dt.tz_convert(tz)
     return pd.to_datetime(ts, utc=False, errors="coerce")
 
 
 def _ensure_dirs():
     STATIONS_DIR.mkdir(parents=True, exist_ok=True)
+    IMG_STATIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _best_lag(a: pd.Series, b: pd.Series, max_steps: int = 8) -> tuple[int, float]:
-    """Trouve le décalage (en steps de 15 min) qui maximise corr(y_true, y_pred.shift(k))."""
     best_r, best_k = -np.inf, 0
     a = pd.to_numeric(a, errors="coerce")
     b = pd.to_numeric(b, errors="coerce")
@@ -64,46 +64,28 @@ def _best_lag(a: pd.Series, b: pd.Series, max_steps: int = 8) -> tuple[int, floa
 
 
 def _safe_group_cov(df: pd.DataFrame) -> pd.Series:
-    """Couverture y_pred par station, sans exiger l'existence de la colonne y_pred."""
     if "y_pred" not in df.columns:
-        # Série de 0.0 indexée par station_id
         return df.groupby("station_id").size().astype(float).mul(0.0)
-    # Utiliser la série directement pour éviter le FutureWarning
-    return df.groupby("station_id")["y_pred"].apply(lambda s: s.notna().mean())
+    return df.groupby("station_id").apply(lambda g: g["y_pred"].notna().mean())
 
 
 def _station_selector(df: pd.DataFrame, k: int, by: str) -> list[str]:
-    """Sélectionne k stations selon un critère, en pénalisant la faible couverture y_pred."""
     if df.empty:
         return []
     cov = _safe_group_cov(df).fillna(0.0)
-
-    # std sans min_count (compat pandas old) + pénalisation si peu de points
-    if "y_true" in df.columns:
-        grp = df.groupby("station_id")["y_true"]
-        vol = grp.std()                   # pas d'arg min_count ici
-        n   = grp.count()
-        # mettre 0.0 si < 10 points utilisables (équivalent min_count=10)
-        vol = vol.where(n >= 10, 0.0).fillna(0.0)
-    else:
-        vol = cov * 0.0
-
-    cnt = df.groupby("station_id").size().astype(float)
-
+    vol = df.groupby("station_id")["y_true"].std().fillna(0.0) if "y_true" in df.columns else cov*0.0
+    cnt = df.groupby("station_id").size()
     if by == "volatility":
         score = vol
     elif by == "coverage":
         score = cov
     else:
-        score = cnt
-
-    # boost stations bien couvertes en y_pred
+        score = cnt.astype(float)
     score = score * (1.0 + cov)
     return score.sort_values(ascending=False).head(k).index.astype(str).tolist()
 
 
 def _fallback_pred_if_needed(df: pd.DataFrame) -> pd.DataFrame:
-    """Si y_pred est vide pour une station, utiliser la baseline (sans écraser les valeurs déjà présentes)."""
     out = df.copy()
     if "y_pred" not in out.columns or out["y_pred"].dropna().empty:
         if "y_pred" not in out.columns:
@@ -115,15 +97,11 @@ def _fallback_pred_if_needed(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _apply_display_lag(df_s: pd.DataFrame, max_steps: int = 8) -> tuple[pd.DataFrame, int, float]:
-    """
-    Calcule le meilleur lag sur la fenêtre station et retourne un DF avec y_pred_disp = y_pred.shift(lag).
-    Si pas de y_pred / pas assez de points, on renvoie y_pred_disp=y_pred et lag=0.
-    """
     disp = df_s.copy()
     lag, r = 0, np.nan
     if "y_true" in disp.columns and "y_pred" in disp.columns:
         sub = disp.dropna(subset=["y_true", "y_pred"])
-        if len(sub) >= 20:  # un minimum pour estimer une corr
+        if len(sub) >= 20:
             lag, r = _best_lag(sub["y_true"], sub["y_pred"], max_steps=max_steps)
     disp["y_pred_disp"] = disp.get("y_pred")
     if lag != 0 and "y_pred" in disp.columns:
@@ -135,6 +113,10 @@ def _savefig(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(path, dpi=150)
     plt.close()
+
+
+def _rel_from_station_md(png_path: Path) -> str:
+    return Path("..") / png_path.relative_to(DOCS)
 
 
 # ------------------------- plots par station -------------------------
@@ -156,7 +138,6 @@ def plot_hourly_profile(df_s_disp: pd.DataFrame, tz: str | None, out: Path, lag_
     tloc = _to_local(df_s_disp["ts"], tz)
     df = df_s_disp.copy()
     df["hour"] = tloc.dt.hour
-    # utiliser y_pred_disp si dispo
     cols = ["y_true"] + (["y_pred_disp"] if "y_pred_disp" in df.columns else (["y_pred"] if "y_pred" in df.columns else []))
     prof = df.groupby("hour")[cols].mean().dropna(how="all")
     if prof.empty:
@@ -180,12 +161,10 @@ def plot_hourly_profile(df_s_disp: pd.DataFrame, tz: str | None, out: Path, lag_
 
 
 def plot_obs_vs_pred_24h(df_s_disp: pd.DataFrame, tz: str | None, out: Path, lag_info: tuple[int, float] | None):
-    """Trace y_true vs y_pred_disp sur 24h pour une station (affichage)."""
     if df_s_disp.empty or "y_true" not in df_s_disp.columns:
         return
     tmax = df_s_disp["ts"].max()
     sub = df_s_disp[df_s_disp["ts"] >= (tmax - pd.Timedelta(hours=24))].copy()
-    # choisir colonne y_pred à afficher
     ypred_col = "y_pred_disp" if "y_pred_disp" in sub.columns else ("y_pred" if "y_pred" in sub.columns else None)
     if ypred_col is None:
         return
@@ -233,33 +212,29 @@ def write_md(station_id: str, name: str | None, files: dict[str, Path], out_md: 
         k, r = lag_info
         if not np.isnan(r):
             lag_line = f"\n> Display alignment applied: `lag* = {k} × 15min`, corr ≈ {r:.3f}\n"
+
+    spark_rel = _rel_from_station_md(files["spark"]).as_posix()
+    hourly_rel = _rel_from_station_md(files["hourly"]).as_posix()
+    ovsp_rel = _rel_from_station_md(files["ovsp"]).as_posix()
+    resid_rel = _rel_from_station_md(files["resid"]).as_posix()
+
     md = f"""# {title}
 {lag_line}
 Figures:
 
-- Sparkline (7d): ![]({files['spark'].as_posix()})
-- Hourly profile: ![]({files['hourly'].as_posix()})
-- Observed vs Predicted (24h): ![]({files['ovsp'].as_posix()})
-- Residuals: ![]({files['resid'].as_posix()})
+- Sparkline (7d): ![]({spark_rel})
+- Hourly profile: ![]({hourly_rel})
+- Observed vs Predicted (24h): ![]({ovsp_rel})
+- Residuals: ![]({resid_rel})
 """
     out_md.write_text(md, encoding="utf-8")
 
 
 # ------------------------- main -------------------------
 
-def _run(
-    events_path: Path,
-    perf_path: Path,
-    last_days: int,
-    hours: int,
-    select_k: int,
-    by: str,
-    tz: str | None,
-    auto_align_display: bool = True,
-) -> int:
+def _run(events_path: Path, perf_path: Path, last_days: int, hours: int, select_k: int, by: str, tz: str | None, auto_align_display: bool = True) -> int:
     _ensure_dirs()
 
-    # Lecture perf
     try:
         perf = pd.read_parquet(perf_path)
     except Exception as e:
@@ -272,7 +247,6 @@ def _run(
     perf["ts"] = pd.to_datetime(perf["ts"], utc=False, errors="coerce")
     perf["station_id"] = perf["station_id"].astype(str)
 
-    # Fenêtre LAST_DAYS (sélection)
     perf_full = perf.copy()
     if last_days and last_days > 0:
         tmax = perf_full["ts"].max()
@@ -282,25 +256,21 @@ def _run(
         print("[WARN] No data in last_days window; nothing to build.")
         return 0
 
-    # fallback global si y_pred vide
     has_pred = ("y_pred" in perf_full.columns) and perf_full["y_pred"].notna().any()
     if not has_pred and "y_pred_baseline" in perf_full.columns:
         print("[WARN] y_pred empty globally → using baseline everywhere")
         perf_full["y_pred"] = perf_full["y_pred_baseline"]
 
-    # Sélection stations
     selected = _station_selector(perf_full, k=select_k, by=by)
     if not selected:
         selected = (perf_full["station_id"].value_counts().head(select_k).index.astype(str).tolist())
     print(f"[INFO] Selected {len(selected)} stations: {selected[:6]}{'...' if len(selected)>6 else ''}")
 
-    # Fenêtre HOURS (plots)
     perf_plot = perf_full.copy()
     if hours and hours > 0:
         tmax = perf_plot["ts"].max()
         perf_plot = perf_plot[perf_plot["ts"] >= (tmax - pd.Timedelta(hours=hours))].copy()
 
-    # Noms stations (facultatif)
     names = {}
     try:
         ev = pd.read_parquet(events_path, columns=["station_id", "name"])
@@ -310,7 +280,6 @@ def _run(
     except Exception:
         print("[INFO] No station names found in events (optional).")
 
-    # Génération par station
     ok_pages = 0
     for sid in selected:
         try:
@@ -320,27 +289,26 @@ def _run(
                 continue
             df_s = _fallback_pred_if_needed(df_s)
 
-            # appliquer le lag d'affichage (unique, réutilisé sur tous les plots station)
             if auto_align_display:
                 df_disp, k, r = _apply_display_lag(df_s, max_steps=8)
                 lag_info = (k, r)
             else:
                 df_disp, lag_info = df_s.copy(), None
 
-            base = STATIONS_DIR / f"{sid}"
+            imgdir = IMG_STATIONS_DIR / f"{sid}"
             files = {
-                "spark": base / "sparkline.png",
-                "hourly": base / "hourly.png",
-                "ovsp":   base / "obs_vs_pred.png",
-                "resid":  base / "residual_hist.png",
+                "spark": imgdir / "sparkline.png",
+                "hourly": imgdir / "hourly.png",
+                "ovsp":   imgdir / "obs_vs_pred.png",
+                "resid":  imgdir / "residual_hist.png",
             }
 
-            plot_sparkline(df_s, tz, files["spark"])  # y_true only
+            plot_sparkline(df_s, tz, files["spark"])
             plot_hourly_profile(df_disp, tz, files["hourly"], lag_info)
             plot_obs_vs_pred_24h(df_disp, tz, files["ovsp"], lag_info)
             plot_residual_hist(df_disp, files["resid"])
 
-            write_md(sid, names.get(str(sid)), files, base.with_suffix(".md"), lag_info)
+            write_md(sid, names.get(str(sid)), files, STATIONS_DIR / f"{sid}.md", lag_info)
             ok_pages += 1
         except Exception as e:
             print(f"[ERR] station {sid}: {e}; skipping")
@@ -351,28 +319,9 @@ def _run(
     return ok_pages
 
 
-def main(
-    events_path: Path,
-    perf_path: Path,
-    last_days: int,
-    hours: int,
-    select_k: int,
-    by: str,
-    tz: str | None,
-    auto_align_display: bool = True,
-):
+def main(events_path: Path, perf_path: Path, last_days: int, hours: int, select_k: int, by: str, tz: str | None, auto_align_display: bool = True):
     try:
-        _run(
-            events_path=events_path,
-            perf_path=perf_path,
-            last_days=last_days,
-            hours=hours,
-            select_k=select_k,
-            by=by,
-            tz=tz,
-            auto_align_display=auto_align_display,
-        )
-        # Toujours succès pour ne pas casser la CI
+        _run(events_path=events_path, perf_path=perf_path, last_days=last_days, hours=hours, select_k=select_k, by=by, tz=tz, auto_align_display=auto_align_display)
         return 0
     except Exception as e:
         print(f"[ERR] build_station_profiles failed: {e}")
@@ -384,12 +333,12 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Build per-station pages with figures")
     ap.add_argument("--events", type=Path, default=EXPORTS / "events.parquet")
     ap.add_argument("--perf", type=Path, default=EXPORTS / "perf.parquet")
-    ap.add_argument("--last-days", type=int, default=7, help="Fenêtre jours (pour stats/volatilité)")
-    ap.add_argument("--hours", type=int, default=48, help="Fenêtre d'affichage pour les figures")
-    ap.add_argument("--select", type=int, default=12, help="Nombre de stations à documenter")
+    ap.add_argument("--last-days", type=int, default=7)
+    ap.add_argument("--hours", type=int, default=48)
+    ap.add_argument("--select", type=int, default=12)
     ap.add_argument("--by", type=str, default="volatility", choices=["volatility", "coverage", "count"])
-    ap.add_argument("--tz", type=str, default=None, help="Affichage (ex: Europe/Paris). Données restent en UTC.")
-    ap.add_argument("--no-auto-align-display", action="store_true", help="Désactive l'auto-alignement d'affichage.")
+    ap.add_argument("--tz", type=str, default=None)
+    ap.add_argument("--no-auto-align-display", action="store_true")
     args = ap.parse_args()
     sys.exit(
         main(
