@@ -10,3 +10,8 @@ python-dateutil>=2.9
 holidays>=0.57
 mkdocs>=1.6
 mkdocs-material>=9.5
+
+
+# ML
+lightgbm>=4.2
+scikit-learn>=1.2
