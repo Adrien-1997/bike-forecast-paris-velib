@@ -138,17 +138,38 @@ def plot_psi_features(events: pd.DataFrame, perf: pd.DataFrame, last_days: int, 
 def plot_feature_importance_proxy(perf: pd.DataFrame, out_fig: Path, out_tbl: Path):
     # Proxy très simple : |corr(y_pred, feature)| sur la fenêtre (quand dispo)
     p = perf.copy()
+
     # features candidates plausibles dans perf
     cand = [c for c in p.columns if c.startswith(("lag_", "roll_", "trend_", "temp_", "precip_", "wind_", "occ_"))]
+
     rows = []
     for c in cand[:80]:  # limite raisonnable
         try:
-            corr = float(p[[c, "y_pred"]].dropna().corr().iloc[0, 1])
+            sub = p[[c, "y_pred"]].dropna()
+            if len(sub) < 10:
+                corr = np.nan
+            else:
+                corr = float(sub.corr().iloc[0, 1])
         except Exception:
             corr = np.nan
-        rows.append({"feature": c, "abs_corr_with_y_pred": abs(corr) if pd.notna(corr) else np.nan})
-    df_imp = pd.DataFrame(rows).dropna().sort_values("abs_corr_with_y_pred", ascending=False).head(30)
+        rows.append({"feature": c, "abs_corr_with_y_pred": (abs(corr) if pd.notna(corr) else np.nan)})
+
+    df_imp = pd.DataFrame(rows)
+
+    # Si aucune feature candidate ou tout NaN → produire un CSV minimal et sortir proprement
+    if df_imp.empty or ("abs_corr_with_y_pred" not in df_imp.columns):
+        pd.DataFrame(columns=["feature", "abs_corr_with_y_pred"]).to_csv(out_tbl, index=False)
+        return
+
+    df_imp = df_imp.dropna(subset=["abs_corr_with_y_pred"]).sort_values(
+        "abs_corr_with_y_pred", ascending=False
+    ).head(30)
+
+    # Toujours écrire un CSV, même si df_imp est vide
     df_imp.to_csv(out_tbl, index=False)
+
+    if df_imp.empty:
+        return  # rien à tracer
 
     plt.figure(figsize=(8, 6))
     plt.barh(df_imp["feature"], df_imp["abs_corr_with_y_pred"])
@@ -156,6 +177,7 @@ def plot_feature_importance_proxy(perf: pd.DataFrame, out_fig: Path, out_tbl: Pa
     plt.xlabel("|corr(y_pred, feature)|")
     plt.title("Feature importance proxy (correlations)")
     _savefig(out_fig)
+
 
 
 def plot_error_trend(perf: pd.DataFrame, tz: str | None, out_fig: Path, out_tbl: Path):
