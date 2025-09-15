@@ -5,17 +5,7 @@
 #   3) apply_model.py        -> injecte y_pred (aligné T) dans perf.parquet
 #   4) build_performance.py  -> assets perf (y_pred vs y_true)
 #   5) build_monitoring.py   -> assets monitoring
-#   6) build_station_profiles.py -> pages/figs par station
-#
-# Exemple :
-#   python tools/generate_monitoring.py --input docs/exports/velib.parquet \
-#     --horizon 60 --lookback-days 14 --last-days 7 --tz Europe/Paris --clusters 6 \
-#     --hours 48 --select 12 --by volatility
-#
-# Notes :
-# - Les données restent en UTC ; --tz n’affecte que l’affichage des figures.
-# - L’offset T+h → T est corrigé dans apply_model.py (ne rien changer ici).
-# - Ajoute des logs lisibles et stoppe au premier échec (subprocess.check_call).
+#   6) build_station_profiles.py -> pages/figs par station (OPTIONNEL, n’échoue pas le pipeline)
 
 from __future__ import annotations
 
@@ -36,6 +26,18 @@ PERF = EXPORTS / "perf.parquet"
 def run(cmd: list[str | Path]) -> None:
     print("[RUN]", " ".join(map(str, cmd)))
     subprocess.check_call(list(map(str, cmd)))
+
+
+def run_optional(cmd: list[str | Path]) -> None:
+    """Exécute une étape non bloquante : log l’erreur mais ne casse pas le pipeline."""
+    print("[RUN-OPTIONAL]", " ".join(map(str, cmd)))
+    res = subprocess.run(list(map(str, cmd)), capture_output=True, text=True)
+    if res.returncode != 0:
+        print("[WARN] optional step failed (ignored):", " ".join(map(str, cmd)))
+        if res.stdout:
+            print("[STDOUT]\n", res.stdout)
+        if res.stderr:
+            print("[STDERR]\n", res.stderr)
 
 
 def main():
@@ -113,8 +115,8 @@ def main():
         *(["--tz", args.tz] if args.tz else []),
     ])
 
-    # 6) stations
-    run([
+    # 6) stations (OPTIONNELLE — ne doit pas casser le pipeline)
+    run_optional([
         sys.executable, TOOLS / "build_station_profiles.py",
         "--events", args.out_events,
         "--perf", args.out_perf,
