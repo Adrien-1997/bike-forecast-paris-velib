@@ -11,11 +11,6 @@
 # - Si y_pred est manquant pour une station, fallback sur y_pred_baseline (persistance).
 # - Auto-align d'affichage : si un lag résiduel est détecté (corr max à k≠0), on
 #   décale y_pred pour la figure (les fichiers parquet restent inchangés).
-#
-# Usage :
-#   python tools/build_station_profiles.py --events docs/exports/events.parquet \
-#       --perf docs/exports/perf.parquet --last-days 7 --hours 48 --select 12 \
-#       --by volatility --tz Europe/Paris --no-auto-align-display
 
 from __future__ import annotations
 
@@ -64,23 +59,33 @@ def _best_lag(a: pd.Series, b: pd.Series, max_steps: int = 8) -> tuple[int, floa
     return best_k, float(best_r)
 
 
+def _safe_group_cov(df: pd.DataFrame) -> pd.Series:
+    """Couverture y_pred par station, sans exiger l'existence de la colonne y_pred."""
+    if "y_pred" not in df.columns:
+        # renvoyer 0 pour toutes les stations
+        return df.groupby("station_id").size().astype(float).mul(0.0)
+    # groupby + apply pour éviter la sélection d'une colonne potentiellement manquante
+    return df.groupby("station_id").apply(lambda g: g["y_pred"].notna().mean())
+
+
 def _station_selector(df: pd.DataFrame, k: int, by: str) -> list[str]:
     """Sélectionne k stations selon un critère, en pénalisant la faible couverture y_pred."""
     if df.empty:
         return []
-    cov = df.groupby("station_id")["y_pred"].apply(
-        lambda s: s.notna().mean() if "y_pred" in df.columns else 0.0
-    )
-    vol = df.groupby("station_id")["y_true"].std(min_count=10).fillna(0.0)
+    cov = _safe_group_cov(df).fillna(0.0)
+    # volatilité observée (std de y_true)
+    vol = df.groupby("station_id")["y_true"].std(min_count=10).fillna(0.0) if "y_true" in df.columns else cov*0.0
     cnt = df.groupby("station_id").size()
     if by == "volatility":
         score = vol
     elif by == "coverage":
         score = cov
     else:
-        score = cnt
-    score = score * (1.0 + cov.fillna(0.0))  # boost stations bien couvertes en y_pred
-    return score.sort_values(ascending=False).head(k).index.astype(str).tolist()
+        score = cnt.astype(float)
+    # combinaison douce: boost stations bien couvertes en y_pred
+    score = score * (1.0 + cov)
+    sel = score.sort_values(ascending=False).head(k).index.astype(str).tolist()
+    return sel
 
 
 def _fallback_pred_if_needed(df: pd.DataFrame) -> pd.DataFrame:
@@ -120,12 +125,17 @@ def plot_hourly_profile(df_s: pd.DataFrame, tz: str | None, out: Path):
     tloc = _to_local(df_s["ts"], tz)
     df = df_s.copy()
     df["hour"] = tloc.dt.hour
-    prof = df.groupby("hour")[["y_true", "y_pred"]].mean().dropna()
+    cols = [c for c in ["y_true", "y_pred"] if c in df.columns]
+    if not cols:
+        return
+    prof = df.groupby("hour")[cols].mean().dropna(how="all")
     if prof.empty:
         return
     plt.figure(figsize=(8, 3))
-    plt.plot(prof.index, prof["y_true"], label="Observed")
-    plt.plot(prof.index, prof["y_pred"], label="Predicted")
+    if "y_true" in prof.columns:
+        plt.plot(prof.index, prof["y_true"], label="Observed")
+    if "y_pred" in prof.columns:
+        plt.plot(prof.index, prof["y_pred"], label="Predicted")
     plt.title("Hourly profile (mean)")
     plt.xlabel("Hour"); plt.ylabel("Bikes")
     plt.xticks(range(0, 24, 2))
@@ -141,7 +151,13 @@ def plot_obs_vs_pred_24h(df_s: pd.DataFrame, tz: str | None, out: Path, auto_ali
     if df_s.empty:
         return
     tmax = df_s["ts"].max()
-    sub = df_s[df_s["ts"] >= (tmax - pd.Timedelta(hours=24))].dropna(subset=["y_true", "y_pred"]).copy()
+    sub = df_s[df_s["ts"] >= (tmax - pd.Timedelta(hours=24))].copy()
+    sub = sub.dropna(subset=["y_true"])  # il faut au moins y_true
+    if sub.empty or "y_pred" not in sub.columns:
+        return
+
+    # drop lignes sans y_pred
+    sub = sub.dropna(subset=["y_pred"])
     if sub.empty:
         return
 
@@ -151,10 +167,11 @@ def plot_obs_vs_pred_24h(df_s: pd.DataFrame, tz: str | None, out: Path, auto_ali
     if auto_align_display:
         lag, r = _best_lag(sub["y_true"], sub["y_pred"], max_steps=8)
         if lag != 0:
-            disp = disp.copy()
             disp["y_pred"] = disp["y_pred"].shift(lag)
-            # drop na introduits par le shift
             disp = disp.dropna(subset=["y_true", "y_pred"])
+
+    if disp.empty:
+        return
 
     x = _to_local(disp["ts"], tz)
     plt.figure(figsize=(8, 3))
@@ -170,6 +187,8 @@ def plot_obs_vs_pred_24h(df_s: pd.DataFrame, tz: str | None, out: Path, auto_ali
 
 
 def plot_residual_hist(df_s: pd.DataFrame, out: Path):
+    if df_s.empty or "y_pred" not in df_s.columns:
+        return
     sub = df_s.dropna(subset=["y_true", "y_pred"]).copy()
     if sub.empty:
         return
@@ -255,32 +274,40 @@ def main(
     if not names:
         print("[INFO] No station names found in events; pages will use IDs only.")
 
+    # Génération par station (résiliente)
+    ok_pages = 0
     for sid in selected:
-        df_s = perf_plot[perf_plot["station_id"] == str(sid)].copy()
-        if df_s.empty:
-            continue
-        df_s = _fallback_pred_if_needed(df_s)
+        try:
+            df_s = perf_plot[perf_plot["station_id"] == str(sid)].copy()
+            if df_s.empty:
+                print(f"[WARN] station {sid}: no data in plotting window; skip")
+                continue
+            df_s = _fallback_pred_if_needed(df_s)
 
-        # chemins de sortie
-        base = STATIONS_DIR / f"{sid}"
-        files = {
-            "spark": base / "sparkline.png",
-            "hourly": base / "hourly.png",
-            "ovsp":   base / "obs_vs_pred.png",
-            "resid":  base / "residual_hist.png",
-        }
+            # chemins de sortie
+            base = STATIONS_DIR / f"{sid}"
+            files = {
+                "spark": base / "sparkline.png",
+                "hourly": base / "hourly.png",
+                "ovsp":   base / "obs_vs_pred.png",
+                "resid":  base / "residual_hist.png",
+            }
 
-        # figures
-        plot_sparkline(df_s, tz, files["spark"])
-        plot_hourly_profile(df_s, tz, files["hourly"])
-        plot_obs_vs_pred_24h(df_s, tz, files["ovsp"], auto_align_display=auto_align_display)
-        plot_residual_hist(df_s, files["resid"])
+            # figures
+            plot_sparkline(df_s, tz, files["spark"])
+            plot_hourly_profile(df_s, tz, files["hourly"])
+            plot_obs_vs_pred_24h(df_s, tz, files["ovsp"], auto_align_display=auto_align_display)
+            plot_residual_hist(df_s, files["resid"])
 
-        # markdown
-        write_md(sid, names.get(str(sid)), files, base.with_suffix(".md"))
+            # markdown
+            write_md(sid, names.get(str(sid)), files, base.with_suffix(".md"))
+            ok_pages += 1
+        except Exception as e:
+            # ne casse pas la CI pour une station défaillante
+            print(f"[ERR] station {sid}: {e}; skipping")
 
     print("[OK] Station profiles generated:")
-    print(f" - pages: {len(selected)} -> {STATIONS_DIR / '*.md'}")
+    print(f" - pages: {ok_pages} -> {STATIONS_DIR / '*.md'}")
     print(" - figs per station: sparkline.png | hourly.png | obs_vs_pred.png | residual_hist.png")
 
 
