@@ -12,7 +12,9 @@
 **Short-term forecasting (+60 min) and professional monitoring of the Vélib’ bike network in Paris.**  
 Public GBFS snapshots → normalized 15‑min aggregates → **features & model training** → monitoring with **auto‑retrain**.
 
-> Quick links: **Docs** → https://adrien-1997.github.io/bike-forecast-paris-velib/ • **App** → https://adrien-1997-bike-forecast-paris-velib-appstreamlit-app-vq1xma.streamlit.app/
+> Quick links:
+**Docs** → https://adrien-1997.github.io/bike-forecast-paris-velib/
+**App** → https://adrien-1997-bike-forecast-paris-velib-appstreamlit-app-vq1xma.streamlit.app/
 
 ---
 
