@@ -1,2 +1,0 @@
-best_lag_steps=0
-correlation=-2.0000

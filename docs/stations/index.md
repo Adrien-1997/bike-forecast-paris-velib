@@ -1,16 +1,14 @@
-# Profils de stations
+# Fiches stations
 
-_Stratégie de sélection : **volatility**_.
+Liste auto-générée (limite : 10/10 stations affichées).
 
-- [Abbé Groult - Convention — 15039](./15039.md)
-- [Gare d'Austerlitz - Quai Saint-Bernard — 13104](./13104.md)
-- [Paul Klee - Place Augusta Holmes — 13020](./13020.md)
-- [Buffon - Jardin des Plantes — 5115](./5115.md)
-- [Filles Saint-Thomas - Place de la Bourse — 2009](./2009.md)
-- [Laffitte - Italiens — 9023](./9023.md)
-- [Pau Casals - Neuve Tolbiac — 13054](./13054.md)
-- [Lavandieres Sainte Opportune - Rivoli — 1120](./1120.md)
-- [Saint-Marc - Feydeau — 2102](./2102.md)
-- [M.- A. Lagroua Weill-Hallé -  F. Dolto — 13055](./13055.md)
-- [Gare de Lyon - Place Louis Armand — 12151](./12151.md)
-- [Auguste Blanqui - Corvisart — 13009](./13009.md)
+- [#13054 — Pau Casals - Neuve Tolbiac](13054.md)
+- [#13125 — Gare d'Austerlitz - Pont Charles de Gaulle](13125.md)
+- [#7009 — Assemblée Nationale](7009.md)
+- [#8004 — Malesherbes - Place de la Madeleine](8004.md)
+- [#13055 — M.- A. Lagroua Weill-Hallé -  F. Dolto](13055.md)
+- [#12151 — Gare de Lyon - Place Louis Armand](12151.md)
+- [#2009 — Filles Saint-Thomas - Place de la Bourse](2009.md)
+- [#21021 — Enfants du Paradis - Peupliers](21021.md)
+- [#12001 — Bastille - Biscornet](12001.md)
+- [#7007 — Musée d'Orsay](7007.md)
