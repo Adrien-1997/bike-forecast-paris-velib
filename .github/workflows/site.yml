@@ -43,7 +43,7 @@ jobs:
           pip install -r requirements-doc.txt
 
       - name: Generate monitoring pages
-        run: python tools/generate_monitoring.py
+        run: python tools/generate_monitoring.py --horizon 60 --lookback-days 14 --last-days 7 --tz Europe/Paris
 
       - name: Decide retrain (PSI/perf)
         id: check

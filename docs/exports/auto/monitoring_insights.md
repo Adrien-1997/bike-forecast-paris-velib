@@ -1,7 +1,7 @@
 # Points clés — Monitoring (données & modèle)
 
 - **Données manquantes** — bikes: 0.0%, capacity: 0.0%.
-- **Drift (PSI)** — top: capacity (PSI 0.236) ; bikes (PSI 0.046) ; occ (PSI 0.009).
+- **Drift (PSI)** — top: capacity (PSI 0.235) ; bikes (PSI 0.044) ; occ (PSI 0.009).
 - **Features dominantes (proxy corrélation)** : occ, hour_cos, hour_sin, dow.
 - **MAE quotidien (dernier jour)** : nan (cf. `mon_error_trend.png`).
 
