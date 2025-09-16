@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+<head>
+    
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
+    
+            <meta name="viewport" content="width=device-width,
+                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                #map_fbda5346448a3b32907f3441d8573f4e {
+                    position: relative;
+                    width: 100.0%;
+                    height: 100.0%;
+                    left: 0.0%;
+                    top: 0.0%;
+                }
+                .leaflet-container { font-size: 1rem; }
+            </style>
+
+            <style>html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            </style>
+
+            <style>#map {
+                position:absolute;
+                top:0;
+                bottom:0;
+                right:0;
+                left:0;
+                }
+            </style>
+
+            <script>
+                L_NO_TOUCH = false;
+                L_DISABLE_3D = false;
+            </script>
+
+        
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.10.2/jquery-ui.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/iso8601-js-period@0.2.1/iso8601.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet-timedimension@1.1.1/dist/leaflet.timedimension.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.18.1/moment.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/8.4/styles/default.min.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet-timedimension@1.1.1/dist/leaflet.timedimension.control.css"/>
+</head>
+<body>
+    
+    
+            <div class="folium-map" id="map_fbda5346448a3b32907f3441d8573f4e" ></div>
+        
+</body>
+<script>
+    
+    
+            var map_fbda5346448a3b32907f3441d8573f4e = L.map(
+                "map_fbda5346448a3b32907f3441d8573f4e",
+                {
+                    center: [48.86789596055931, 2.352007795125246],
+                    crs: L.CRS.EPSG3857,
+                    ...{
+  "zoom": 12,
+  "zoomControl": true,
+  "preferCanvas": false,
+}
+
+                }
+            );
+
+            
+
+        
+    
+            var tile_layer_dc0b722c5993b8a293ff2f1b77a10a19 = L.tileLayer(
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                {
+  "minZoom": 0,
+  "maxZoom": 19,
+  "maxNativeZoom": 19,
+  "noWrap": false,
+  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors",
+  "subdomains": "abc",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
+
+            );
+        
+    
+            tile_layer_dc0b722c5993b8a293ff2f1b77a10a19.addTo(map_fbda5346448a3b32907f3441d8573f4e);
+        
+    
+            L.Control.TimeDimensionCustom = L.Control.TimeDimension.extend({
+                _getDisplayDateFormat: function(date){
+                    var newdate = new moment(date);
+                    console.log(newdate)
+                    return newdate.format("YYYY-MM-DD HH:mm:ss");
+                }
+            });
+            map_fbda5346448a3b32907f3441d8573f4e.timeDimension = L.timeDimension(
+                {
+                    period: "PT1H",
+                }
+            );
+            var timeDimensionControl = new L.Control.TimeDimensionCustom(
+                {
+  "position": "bottomleft",
+  "minSpeed": 0.1,
+  "maxSpeed": 10,
+  "autoPlay": true,
+  "loopButton": false,
+  "timeSliderDragUpdate": false,
+  "speedSlider": true,
+  "playerOptions": {
+  "transitionTime": 200,
+  "loop": true,
+  "startOver": true,
+},
+}
+            );
+            map_fbda5346448a3b32907f3441d8573f4e.addControl(this.timeDimensionControl);
+
+            var geoJsonLayer = L.geoJson({"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.4003649, 48.8679385]}, "properties": {"time": "2025-09-16T01:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Dupont de l'Eure - Gambetta \u2014 bikes=27"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.2608396783471107, 48.8479394142243]}, "properties": {"time": "2025-09-16T03:00:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Porte d'Auteuil \u2014 bikes=7"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.379864752692811, 48.91118557052621]}, "properties": {"time": "2025-09-16T04:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Edouard Poisson - Victor Hugo \u2014 bikes=21"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.354651279747486, 48.8437035476636]}, "properties": {"time": "2025-09-16T05:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Lac\u00e9p\u00e8de - Linn\u00e9 \u2014 bikes=8"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.249415814876557, 48.87525984132485]}, "properties": {"time": "2025-09-16T06:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Route de S\u00e8vres - Porte de Bagatelle \u2014 bikes=57"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.4451419711113, 48.847803063647]}, "properties": {"time": "2025-09-16T07:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Fontenay - Lib\u00e9ration \u2014 bikes=15"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.316423766314984, 48.885325169402904]}, "properties": {"time": "2025-09-16T08:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Legendre - Dulong \u2014 bikes=2"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3727085813879967, 48.91844993053703]}, "properties": {"time": "2025-09-16T09:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Parc Eli Lotar \u2014 bikes=2"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3601756244898, 48.89021003702]}, "properties": {"time": "2025-09-16T10:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Riquet - Marx Dormoy \u2014 bikes=4"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3963020229163, 48.778192750803]}, "properties": {"time": "2025-09-16T11:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Rouget de L'isle - Watteau \u2014 bikes=4"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.349364310503006, 48.86785342111862]}, "properties": {"time": "2025-09-16T12:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Caire - Dussoubs \u2014 bikes=38"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.340014585442034, 48.89104123261663]}, "properties": {"time": "2025-09-16T13:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Francoeur - Marcadet \u2014 bikes=4"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3622643, 48.8578329]}, "properties": {"time": "2025-09-16T14:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Payenne - Square George Ca\u00efn \u2014 bikes=22"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.343570403754711, 48.829522989420596]}, "properties": {"time": "2025-09-16T15:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Glaci\u00e8re - Soeur Catherine Marie \u2014 bikes=17"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3316044208059, 48.905741911394]}, "properties": {"time": "2025-09-16T16:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Garibaldi - Gabriel P\u00e9ri \u2014 bikes=12"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.4451419711113, 48.847803063647]}, "properties": {"time": "2025-09-16T17:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Fontenay - Lib\u00e9ration \u2014 bikes=6"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.35570102930069, 48.86860172112996]}, "properties": {"time": "2025-09-16T18:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Porte Saint-Martin \u2014 bikes=2"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.256898172199726, 48.947022436806705]}, "properties": {"time": "2025-09-16T19:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Gare d'Argenteuil \u2014 bikes=1"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.329955510795116, 48.78599652305309]}, "properties": {"time": "2025-09-16T20:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Marc Sangnier - Division Leclerc \u2014 bikes=18"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3329411447048, 48.833056477316]}, "properties": {"time": "2025-09-16T21:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Ren\u00e9 Coty - Place Denfert-Rochereau \u2014 bikes=1"}}]}, {
+                    pointToLayer: function (feature, latLng) {
+                        if (feature.properties.icon == 'marker') {
+                            if(feature.properties.iconstyle){
+                                return new L.Marker(latLng, {
+                                    icon: L.icon(feature.properties.iconstyle)});
+                            }
+                            //else
+                            return new L.Marker(latLng);
+                        }
+                        if (feature.properties.icon == 'circle') {
+                            if (feature.properties.iconstyle) {
+                                return new L.circleMarker(latLng, feature.properties.iconstyle)
+                                };
+                            //else
+                            return new L.circleMarker(latLng);
+                        }
+                        //else
+
+                        return new L.Marker(latLng);
+                    },
+                    style: function (feature) {
+                        return feature.properties.style;
+                    },
+                    onEachFeature: function(feature, layer) {
+                        if (feature.properties.popup) {
+                        layer.bindPopup(feature.properties.popup);
+                        }
+                        if (feature.properties.tooltip) {
+                        layer.bindTooltip(feature.properties.tooltip);
+                        }
+                    }
+                })
+
+            var timestamped_geo_json_ddb278baa0cf58198730eaa595182d5c = L.timeDimension.layer.geoJson(
+                geoJsonLayer,
+                {
+                    updateTimeDimension: true,
+                    addlastPoint: true,
+                    duration: "PT10M",
+                }
+            ).addTo(map_fbda5346448a3b32907f3441d8573f4e);
+        
+</script>
+</html>

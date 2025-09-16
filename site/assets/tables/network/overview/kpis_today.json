@@ -1,0 +1,12 @@
+{
+  "timestamp_snapshot_utc": "2025-09-16T21:45:00",
+  "active_stations": 1240,
+  "offline_stations": 233,
+  "total_stations": 1473,
+  "bike_availability_rate": 97.33870967741936,
+  "dock_availability_rate": 98.62903225806451,
+  "penury_rate": 2.661290322580645,
+  "saturation_rate": 1.2903225806451613,
+  "coverage_last_days_pct": 43.23,
+  "volatility_today_median_bikes_std": 5.091
+}

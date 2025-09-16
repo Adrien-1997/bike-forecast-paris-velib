@@ -1,0 +1,13 @@
+column,dtype,non_null_pct,example
+bikes,int32,100.0,4
+capacity,Int32,99.97,17
+hour_utc,datetime64[us],100.0,2025-09-07T23:00:00
+lat,float64,99.6,48.87077436024
+lon,float64,99.6,2.3496496368327
+name,object,99.6,Hauteville - Bonne Nouvelle
+occ,float64,99.97,0.23529411764705882
+precip_mm,float64,100.0,0.0
+station_id,object,100.0,10003
+temp_C,float64,100.0,21.8
+ts,datetime64[us],100.0,2025-09-07T23:00:00
+wind_mps,float64,100.0,9.0

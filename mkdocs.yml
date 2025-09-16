@@ -50,13 +50,27 @@ markdown_extensions:
 
 nav:
   - Accueil: index.md
-  - Usage du réseau:
-      - Vue d’ensemble: usage/index.md
-      - Profils de stations: stations/index.md
-  - Performance des prévisions:
-      - Métriques & visuels: monitoring/metrics.md
-  - Monitoring (données & modèle):
-      - Vue d’ensemble: monitoring/index.md
-      - Drift des données: monitoring/data_drift.md
-      - Modèle: monitoring/model.md
-  - Exports: exports/index.md
+
+  - Réseau:
+      - Index: network/index.md
+      - Aperçu du réseau: network/overview.md
+      - Stations & profils: network/stations.md
+      - Dynamiques spatio-temporelles: network/dynamics.md
+
+  - Modèle:
+      - Index: model/index.md
+      - Performance & baseline: model/performance.md
+      - Pipeline d’entraînement & features: model/pipeline.md
+      - Explicabilité & calibration: model/explainability.md
+
+  - Monitoring:
+      - Index: monitoring/index.md
+      - Santé des données: monitoring/data-health.md
+      - Drift des données: monitoring/drift.md
+      - Santé du modèle: monitoring/model-health.md
+
+  - Données:
+      - Index: data/index.md
+      - Exports: data/exports.md
+      - Dictionnaire & schéma: data/dictionary.md
+      - Méthodologie & licences: data/methodology.md
