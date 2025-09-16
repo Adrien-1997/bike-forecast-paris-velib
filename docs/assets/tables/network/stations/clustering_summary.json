@@ -1,0 +1,9 @@
+{
+  "sklearn_available": true,
+  "k_requested": 6,
+  "k_effective": 6,
+  "silhouette": 0.22055304050445557,
+  "davies_bouldin": 1.544275809522149,
+  "n_stations": 1473,
+  "n_features": 91
+}

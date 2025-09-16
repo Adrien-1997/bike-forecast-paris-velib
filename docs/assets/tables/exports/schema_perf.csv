@@ -1,0 +1,7 @@
+column,dtype
+horizon_min,int64
+station_id,object
+ts,"datetime64[us, UTC]"
+y_pred,float64
+y_pred_baseline,int32
+y_true,float64

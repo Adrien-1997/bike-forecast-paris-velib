@@ -1,0 +1,12 @@
+check,status,detail
+col:ts,pass,
+col:station_id,pass,
+col:bikes,pass,
+type:ts:datetime64,pass,
+type:station_id:str,pass,
+type:bikes:numeric,pass,
+bikes>=0,pass,negatives=0
+docks_avail>=0,pass,negatives=0
+capacity>0,pass,nonpositive=0
+"no_duplicates(ts,station)",pass,dups=0
+temporal_coverage,warn,bins=387/860 (45.00%)

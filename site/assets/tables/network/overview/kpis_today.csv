@@ -1,0 +1,2 @@
+timestamp_snapshot_utc,active_stations,offline_stations,total_stations,bike_availability_rate,dock_availability_rate,penury_rate,saturation_rate,coverage_last_days_pct,volatility_today_median_bikes_std
+2025-09-16T21:45:00,1240,233,1473,97.33870967741936,98.62903225806451,2.661290322580645,1.2903225806451613,43.23,5.091

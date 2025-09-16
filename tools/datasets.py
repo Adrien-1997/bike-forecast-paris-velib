@@ -23,6 +23,14 @@ from typing import Optional, Tuple, Dict, Any
 import numpy as np
 import pandas as pd
 
+import sys, os
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
@@ -231,7 +239,7 @@ def main():
     print("[OK] Datasets prêt.")
     print(f"- Stations: {events['station_id'].nunique()}")
     print(f"- Pas: ~{_infer_step_minutes(events['ts'])} min × steps={steps} (horizon={args.horizon} min)")
-    print(f"- mapping source → canonique : {mapping}")
+    print(f"- mapping source -> canonique : {mapping}")
     print(f"[events] → {args.out_events}")
     print(f"[perf]   → {args.out_perf}")
 

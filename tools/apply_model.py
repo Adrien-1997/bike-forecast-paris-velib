@@ -1,15 +1,19 @@
 # tools/apply_model.py
-# Applique le modèle entraîné et injecte `y_pred` dans docs/exports/perf.parquet.
-# Aligne les prédictions à l'instant T (pas T+h), mappe station_id de façon stable,
-# et garantit des clés uniques (ts, station_id).
+# Applique le modèle entraîné et injecte y_pred dans docs/exports/perf.parquet.
 
 from __future__ import annotations
-
 import argparse
 from pathlib import Path
-import sys
+import sys, os
 import pandas as pd
 import numpy as np
+
+# --- UTF-8 stdout (Windows safe) ---
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 # --- Repo root importable ---
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,20 +22,31 @@ if str(ROOT) not in sys.path:
 
 from src.forecast import load_model_bundle                   # (model, feat_cols)
 from src.features import _load_base_15min                    # base 15 min (tbin_utc, +meta)
-from src.cal_features import add_calendar_features, feature_cols as calfeat_cols
+from src.cal_features import add_calendar_features           # calendrier
+
+# Tente d'importer feature_cols (liste) OU feature_cols() (fonction)
+def _load_calfeat_cols() -> list[str]:
+    try:
+        from src.cal_features import feature_cols as _fc
+    except Exception:
+        return []
+    try:
+        return list(_fc() if callable(_fc) else _fc)
+    except Exception:
+        return []
+
+CALFEAT_COLS = _load_calfeat_cols()
 
 DOCS = ROOT / "docs"
 EXPORTS = DOCS / "exports"
-EVENTS_PATH = EXPORTS / "events.parquet"
-PERF_PATH = EXPORTS / "perf.parquet"
+DEFAULT_EVENTS_PATH = EXPORTS / "events.parquet"
+DEFAULT_PERF_PATH = EXPORTS / "perf.parquet"
 
 
 # --------------------------- Features d'inférence ---------------------------
 
 def build_inference_frame(horizon_minutes: int, lookback_days: int) -> pd.DataFrame:
-    """
-    Construit les features comme à l'entraînement, en préservant tbin_utc/name/lat/lon.
-    """
+    """Construit les features comme à l'entraînement, en préservant tbin_utc/name/lat/lon."""
     base = _load_base_15min().copy()
 
     # fenêtre temporelle
@@ -71,28 +86,32 @@ def build_inference_frame(horizon_minutes: int, lookback_days: int) -> pd.DataFr
         base = add_lags_rollings(base)
 
     # features calendaires
-    base = add_calendar_features(base, tz="Europe/Paris")
+    base = add_calendar_features(base, tz="Europe/Paris")  # tz uniquement pour features cal.
 
-    # jeu de colonnes numériques attendu (remplissage 0.0 si manquant)
-    num_cols = [
-        "nb_velos_bin","nb_bornes_bin","capacity_bin","occ_ratio_bin",
-        "temp_C","precip_mm","wind_mps",
-        *[f"lag_nb_{b}b" for b in (1,2,3,4,8,16)],
-        *[f"lag_occ_{b}b" for b in (1,2,3,4,8,16)],
-        "roll_nb_4b","roll_nb_8b","roll_occ_4b","roll_occ_8b",
-        "trend_nb_4b","trend_occ_4b",
-        *calfeat_cols(base),
-    ]
-    seen=set(); num_cols=[c for c in num_cols if not (c in seen or seen.add(c))]
-    for c in num_cols:
-        if c not in base.columns:
-            base[c] = 0.0
-    base[num_cols] = (
-        base[num_cols]
-        .apply(pd.to_numeric, errors="coerce")
-        .replace([np.inf, -np.inf], np.nan)
-        .fillna(0.0)
-        .astype("float32")
+    # renommer/garantir colonnes attendues
+    if "nb_velos_bin" in base.columns:
+        base["y_src"] = base["nb_velos_bin"]
+
+    # compléter colonnes manquantes (calendaires)
+    for col in CALFEAT_COLS:
+        if col not in base.columns:
+            base[col] = 0
+
+    # types cohérents
+    for c in base.columns:
+        if (
+            c.endswith("_bin")
+            or c.startswith(("lag_", "roll_", "trend_"))
+            or c in CALFEAT_COLS
+        ):
+            base[c] = pd.to_numeric(base[c], errors="coerce")
+    base["occ_ratio_bin"] = pd.to_numeric(base.get("occ_ratio_bin", np.nan), errors="coerce")
+
+    # nettoyer / fillna
+    base = (
+        base.replace([np.inf, -np.inf], np.nan)
+            .fillna(0.0)
+            .astype("float32", errors="ignore")
     )
 
     # garder tbin_utc/name/lat/lon pour mapping station
@@ -105,12 +124,12 @@ def build_inference_frame(horizon_minutes: int, lookback_days: int) -> pd.DataFr
 
 # --------------------------- Main ---------------------------
 
-def main(horizon: int, lookback_days: int):
+def main(horizon: int, lookback_days: int, events_path: Path, perf_path: Path) -> None:
     # fichiers requis
-    if not PERF_PATH.exists():
-        raise FileNotFoundError(f"[apply_model] Introuvable: {PERF_PATH}")
-    if not EVENTS_PATH.exists():
-        raise FileNotFoundError(f"[apply_model] Introuvable: {EVENTS_PATH}")
+    if not perf_path.exists():
+        raise FileNotFoundError(f"[apply_model] Introuvable: {perf_path}")
+    if not events_path.exists():
+        raise FileNotFoundError(f"[apply_model] Introuvable: {events_path}")
 
     # modèle + colonnes de features
     model, feat_cols = load_model_bundle(horizon_minutes=horizon)
@@ -123,13 +142,15 @@ def main(horizon: int, lookback_days: int):
         if c not in df.columns:
             df[c] = 0.0
 
-    X = (df[feat_cols]
-         .apply(pd.to_numeric, errors="coerce")
-         .replace([np.inf, -np.inf], np.nan)
-         .fillna(0.0)
-         .astype("float32"))
+    X = (
+        df[feat_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+        .fillna(0.0)
+        .astype("float32")
+    )
 
-    # prédiction (cible T+h), mais on va horodater à T (voir plus bas)
+    # --- Prédiction modèle → colonne standard y_pred -----------------
     df["y_pred"] = model.predict(X).astype(float)
 
     # ------------------ PREDS (ts, y_pred, name, lat, lon) ------------------
@@ -137,82 +158,105 @@ def main(horizon: int, lookback_days: int):
     if ts_src is None:
         raise KeyError("[apply_model] Aucune colonne temporelle trouvée (tbin_utc/ts).")
 
+    # s'assurer que la colonne y_pred existe (renomme y_pred_model au besoin)
+    if "y_pred" not in df.columns:
+        if "y_pred_model" in df.columns:
+            df = df.rename(columns={"y_pred_model": "y_pred"})
+        else:
+            raise KeyError("[apply_model] y_pred manquante — calcule la prédiction modèle avant ce bloc.")
+
     preds = df[[ts_src, "y_pred", "name", "lat", "lon"]].copy()
     preds.rename(columns={ts_src: "ts"}, inplace=True)
     preds["ts"] = pd.to_datetime(preds["ts"], utc=False, errors="coerce").dt.floor("15min")
 
-    # ❗ Correction d’offset : tbin_utc est le bin cible (T+h). On ramène l’horodatage au bin source T.
-    preds["ts"] = preds["ts"] - pd.Timedelta(minutes=horizon)
-
-    # normalisation pour mapping
+    # normaliser meta pour la clé de mapping (arrondir coords + lower name)
+    for k in ("name", "lat", "lon"):
+        if k not in preds.columns:
+            preds[k] = np.nan
     preds["name"] = preds["name"].astype(str).str.strip().str.lower()
     preds["lat"]  = pd.to_numeric(preds["lat"], errors="coerce").round(5)
     preds["lon"]  = pd.to_numeric(preds["lon"], errors="coerce").round(5)
 
-    # ------------------ Mapping station_id (one-to-one) ------------------
-    events = pd.read_parquet(EVENTS_PATH, columns=["ts","station_id","name","lat","lon"]).copy()
+    events = pd.read_parquet(events_path, columns=["ts","name","lat","lon","station_id"]).copy()
     events["ts"] = pd.to_datetime(events["ts"], utc=False, errors="coerce").dt.floor("15min")
     events["station_id"] = events["station_id"].astype(str)
     events["name"] = events["name"].astype(str).str.strip().str.lower()
     events["lat"]  = pd.to_numeric(events["lat"], errors="coerce").round(5)
     events["lon"]  = pd.to_numeric(events["lon"], errors="coerce").round(5)
 
-    # fenêtre des events limitée à preds (évite volumétrie)
-    tmin, tmax = preds["ts"].min(), preds["ts"].max()
-    events = events[(events["ts"] >= tmin) & (events["ts"] <= tmax)].copy()
-
-    # clé combinée
+    # clé de mapping SANS dépendre de ts (dernière association connue)
     preds["__k"]  = preds["name"] + "|" + preds["lat"].astype(str) + "|" + preds["lon"].astype(str)
     events["__k"] = events["name"] + "|" + events["lat"].astype(str) + "|" + events["lon"].astype(str)
+    emap = (events.dropna(subset=["__k","station_id"])
+                .sort_values("ts")
+                .drop_duplicates("__k", keep="last")[["__k","station_id"]])
 
-    # un seul station_id par (ts, __k)
-    events = events.sort_values(["ts"]).drop_duplicates(subset=["ts","__k"], keep="last")
-
-    # merge many-to-one (pas de duplication)
-    try:
-        preds = preds.merge(events[["ts","__k","station_id"]], on=["ts","__k"], how="left", validate="many_to_one")
-    except Exception:
-        preds = preds.merge(events[["ts","__k","station_id"]], on=["ts","__k"], how="left")
-
-    preds = preds.dropna(subset=["station_id"]).drop(columns=["__k"]).copy()
+    preds = preds.merge(emap, on="__k", how="left").drop(columns="__k")
+    preds = preds.dropna(subset=["station_id"]).copy()
     preds["station_id"] = preds["station_id"].astype(str)
 
-    # ------------------ Alignement aux clés de perf & dédup ------------------
-    perf_keys = pd.read_parquet(PERF_PATH, columns=["ts","station_id"])
+    # ------------------ Alignement temporel sur T (fallback si T=0) ------------------
+    perf_keys = pd.read_parquet(perf_path, columns=["ts","station_id"]).drop_duplicates()
     perf_keys["ts"] = pd.to_datetime(perf_keys["ts"], utc=False, errors="coerce").dt.floor("15min")
     perf_keys["station_id"] = perf_keys["station_id"].astype(str)
 
-    print("[apply_model] preds bruts:", len(preds))
-    preds = preds.merge(perf_keys.drop_duplicates(), on=["ts","station_id"], how="inner")
-    print("[apply_model] preds alignés (dans perf):", len(preds))
+    candidates = {
+        "T"  : preds["ts"],
+        "T-h": preds["ts"] - pd.Timedelta(minutes=horizon),
+        "T+h": preds["ts"] + pd.Timedelta(minutes=horizon),
+    }
 
-    # une ligne unique par (ts, station_id)
+    def _hits(ts_series: pd.Series) -> int:
+        tmp = preds.copy()
+        tmp["ts"] = ts_series
+        return tmp.merge(perf_keys, on=["ts","station_id"], how="inner").shape[0]
+
+    hits = {k: _hits(v) for k, v in candidates.items()}
+    print(f"[apply_model] test alignement (T/T-h/T+h): {hits}")
+
+    if hits["T"] > 0:
+        preds["ts"] = candidates["T"]
+        chosen = "T"
+    else:
+        chosen = "T-h" if hits["T-h"] >= hits["T+h"] else "T+h"
+        preds["ts"] = candidates[chosen]
+    print(f"[apply_model] alignement retenu: {chosen}")
+
+    # garder uniq (ts, station_id)
     preds = preds.groupby(["ts","station_id"], as_index=False)["y_pred"].mean()
 
-    # ------------------ Merge dans perf.parquet ------------------
-    perf = pd.read_parquet(PERF_PATH)
+    # ------------------ Merge : ÉCRASE TOUJOURS y_pred par la sortie modèle ---------
+    perf = pd.read_parquet(perf_path)
     perf["ts"] = pd.to_datetime(perf["ts"], utc=False, errors="coerce").dt.floor("15min")
     perf["station_id"] = perf["station_id"].astype(str)
 
-    out = perf.merge(preds, on=["ts","station_id"], how="left", suffixes=("", "_new"))
+    out = perf.merge(preds.rename(columns={"y_pred": "y_pred_model"}),
+                    on=["ts","station_id"], how="left")
 
-    # Combinaison robuste (si une ancienne y_pred existe déjà)
-    if "y_pred" in out.columns and "y_pred_new" in out.columns:
-        out["y_pred"] = out["y_pred"].combine_first(out["y_pred_new"])
-        out.drop(columns=["y_pred_new"], inplace=True)
-    elif "y_pred_new" in out.columns and "y_pred" not in out.columns:
-        out.rename(columns={"y_pred_new": "y_pred"}, inplace=True)
+    # on supprime toute ancienne y_pred, puis on pose la nouvelle (modèle)
+    if "y_pred" in out.columns:
+        out.drop(columns=["y_pred"], inplace=True)
+    out.rename(columns={"y_pred_model": "y_pred"}, inplace=True)
 
-    out.to_parquet(PERF_PATH, index=False)
+    # contrôle de couverture
+    matched = out["y_pred"].notna().mean()*100.0
+    print(f"[apply_model] couverture modèle après merge: {matched:.2f}%")
+    if matched == 0:
+        raise RuntimeError("0% de prédictions modèle écrites. Vérifier mapping/horizon/features.")
+
+    out.to_parquet(perf_path, index=False)
 
     cov = (out[["y_true", "y_pred"]].notna().mean() * 100).round(2).to_dict()
-    print(f"[apply_model] OK → {PERF_PATH.resolve()}")
-    print("[apply_model] couverture après merge:", cov)
+    print(f"[apply_model] OK -> {perf_path.resolve()}")
+    print("[apply_model] couverture apres merge:", cov)
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Appliquer le modèle et injecter y_pred (aligné T) dans perf.parquet")
+    ap = argparse.ArgumentParser(description="Appliquer le modèle et injecter y_pred (aligne T) dans perf.parquet")
     ap.add_argument("--horizon", type=int, default=60, help="Horizon minutes (doit matcher le modèle)")
-    ap.add_argument("--lookback-days", type=int, default=30, help="Fenêtre de reconstruction des features")
+    ap.add_argument("--lookback-days", type=int, default=30, help="Fenetre de reconstruction des features")
+    ap.add_argument("--events", type=Path, default=DEFAULT_EVENTS_PATH, help="Chemin vers events.parquet")
+    ap.add_argument("--perf", type=Path, default=DEFAULT_PERF_PATH, help="Chemin vers perf.parquet")
+    ap.add_argument("--tz", type=str, default=None, help="(Ignore) TZ non utilisee par apply_model")
     args = ap.parse_args()
-    main(horizon=args.horizon, lookback_days=args.lookback_days)
+    main(horizon=args.horizon, lookback_days=args.lookback_days, events_path=args.events, perf_path=args.perf)
