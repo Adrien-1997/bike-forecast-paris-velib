@@ -1,17 +1,18 @@
 # tools/build_data_exports.py
-# Page builder — "Data / Exports"
+# Page builder — "Data / Exports" + page Markdown visuelle (docs/data/exports.md)
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple
 
 import numpy as np
 import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 
 # --------------------------- Paths ---------------------------
 
@@ -19,12 +20,14 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
 ASSETS = DOCS / "assets"
 TABLES_DIR = ASSETS / "tables" / "exports"
-FIGS_DIR = ASSETS / "figs" / "exports"
-
+FIGS_DIR = ASSETS / "figs" / "data" / "export"
+OUT_MD = DOCS / "data" / "exports.md"  # <-- page Markdown générée
 
 def _mkdirs() -> None:
-    TABLES_DIR.mkdir(parents=True, exist_ok=True)
-    FIGS_DIR.mkdir(parents=True, exist_ok=True)
+    for d in (TABLES_DIR, FIGS_DIR, OUT_MD.parent):
+        d.mkdir(parents=True, exist_ok=True)
+
+# --------------------------- Utils ---------------------------
 
 def _save_fig(path: Path) -> None:
     plt.tight_layout()
@@ -54,12 +57,20 @@ def _align_ts(df: pd.DataFrame, ts_col: str = "ts") -> pd.DataFrame:
     df[ts_col] = pd.to_datetime(df[ts_col], errors="coerce", utc=True).dt.floor("15min")
     return df
 
+def rel_from_md(md_path: Path, target: Path) -> str:
+    """Chemin relatif (POSIX) depuis md_path vers target, compatible MkDocs
+    (use_directory_urls: true). Ex. docs/data/exports.md -> ../../assets/..."""
+    md_rel = Path(md_path).resolve().relative_to(DOCS.resolve())
+    parts = md_rel.with_suffix("").parts  # ('data','exports') ou ('index',)
+    depth = len(parts) if parts[-1] != "index" else len(parts) - 1
+    prefix = "../" * max(depth, 0)
+    rel_from_docs = Path(target).resolve().relative_to(DOCS.resolve()).as_posix()
+    return (prefix + rel_from_docs).replace("//", "/")
 
 # --------------------------- Contract checks ---------------------------
 
 def _events_contract(df: pd.DataFrame) -> pd.DataFrame:
     checks = []
-
     def add(name: str, status: str, level: str = "hard", detail: Optional[str] = None) -> None:
         checks.append({"check": name, "status": status, "level": level, "detail": detail})
 
@@ -111,10 +122,8 @@ def _events_contract(df: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame(checks)
 
-
 def _perf_contract(df: pd.DataFrame) -> pd.DataFrame:
     checks = []
-
     def add(name: str, status: str, level: str = "hard", detail: Optional[str] = None) -> None:
         checks.append({"check": name, "status": status, "level": level, "detail": detail})
 
@@ -143,7 +152,6 @@ def _perf_contract(df: pd.DataFrame) -> pd.DataFrame:
             detail=f"misaligned_pct={mis:.3f}%")
 
     return pd.DataFrame(checks)
-
 
 # --------------------------- Catalog & gauges ---------------------------
 
@@ -182,8 +190,90 @@ def _plot_gauges(events_stats: Dict[str, object], perf_stats: Dict[str, object])
     plt.title("Volumes (rows)")
     _save_fig(FIGS_DIR / "gauge_rows.png")
 
+# --------------------------- Markdown rendering ---------------------------
 
-# --------------------------- Main ---------------------------
+MD_TEMPLATE = """# Exports
+
+Cette page liste **tout ce qui est publié** (fichiers de données et tables dérivées) et rappelle le **contrat minimal** pour les consommer sans surprise.
+
+> **Build (UTC)** : `{build_utc}`  
+> **Fenêtre `events`** : `{ev_ts_min}` → `{ev_ts_max}` · **rows** = {ev_rows:,} · **stations** ≈ {ev_stations}  
+> **Fenêtre `perf`** : `{pf_ts_min}` → `{pf_ts_max}` · **rows** = {pf_rows:,}
+
+---
+
+## Coup d’œil visuel
+![Fraîcheur]({gauge_fresh_rel})  ![Volumes]({gauge_rows_rel})
+
+---
+
+## Fichiers principaux
+- **`docs/exports/events.parquet`**  
+  - **Clé** : `(ts, station_id)` unique.  
+  - **Colonnes canoniques (si présentes)** :  
+    - `ts` *(UTC, 15 min)* — horodatage du **bin source**.  
+    - `station_id` *(str)* — identifiant station stable.  
+    - `bikes` *(int ≥ 0)* — vélos disponibles.  
+    - `capacity` *(int ≥ 0)* — capacité estimée du dock.  
+    - `occ` *(float ∈ [0,1])* — ratio d’occupation (ex. `bikes / capacity`, si capacité connue).  
+    - **Métadonnées** : `name` *(str)*, `lat` *(float)*, `lon` *(float)*, `hour_utc` *(0–23)*.  
+    - **Météo (optionnelles)** : `temp_C` *(°C)*, `precip_mm` *(mm)*, `wind_mps` *(m/s)*.
+- **`docs/exports/perf.parquet`**  
+  - **Clé** : `(ts, station_id)` unique.  
+  - **Colonnes canoniques** :  
+    - `ts` *(UTC, 15 min)* — **même bin source T** que `events`.  
+    - `station_id` *(str)*.  
+    - `y_true` *(float/int ≥ 0)* — cible observée à **T+h** (ramenée à T via `shift(-steps)`).  
+    - `y_pred_baseline` *(float ≥ 0)* — **persistance** (valeur observée à T).  
+    - `y_pred` *(float ≥ 0, optionnel)* — prédiction **modèle** alignée sur T (injectée après coup).  
+    - `horizon_min` *(int > 0, ex. 60)* — horizon en minutes.
+
+---
+
+## Tables secondaires (lecture & monitoring)
+Exportées sous `docs/assets/tables/exports/` :
+- Schémas : `{schema_events_rel}` · `{schema_perf_rel}`
+- Contrats : `{contract_events_rel}` · `{contract_perf_rel}`
+- Catalog : `{catalog_rel}` · Build info : `{build_info_rel}`
+
+---
+
+## Cadence & fraîcheur
+- Ingestion et normalisation **toutes les 15 minutes** (ou au rythme de la source).  
+- Les assets analytiques (tables/figures) sont régénérés **plusieurs fois par jour**.  
+- Cette page précise **la date/heure du dernier build** et la **fenêtre couverte**.
+
+---
+
+## Garanties minimales
+- Pas de **fusion en avance** (aucune fuite de futur) ; `perf.parquet` est strictement aligné **à T**.  
+- **Aucune imputation lourde** dans les exports (ni interpolation) : les trous reflètent l’état réel de l’ingestion.  
+- Clés `(ts, station_id)` **sans doublons** ; horodatages **arrondis 15 min**.
+"""
+
+def _render_md(ev_stats: Dict[str, object], pf_stats: Dict[str, object]) -> str:
+    return MD_TEMPLATE.format(
+        build_utc=_now_iso(),
+        ev_ts_min=ev_stats.get("ts_min"),
+        ev_ts_max=ev_stats.get("ts_max"),
+        ev_rows=ev_stats.get("rows", 0),
+        ev_stations=ev_stats.get("stations", 0),
+        pf_ts_min=pf_stats.get("ts_min"),
+        pf_ts_max=pf_stats.get("ts_max"),
+        pf_rows=pf_stats.get("rows", 0),
+
+        gauge_fresh_rel=rel_from_md(OUT_MD, FIGS_DIR / "gauge_freshness.png"),
+        gauge_rows_rel=rel_from_md(OUT_MD, FIGS_DIR / "gauge_rows.png"),
+
+        schema_events_rel=rel_from_md(OUT_MD, TABLES_DIR / "schema_events.csv"),
+        schema_perf_rel=rel_from_md(OUT_MD, TABLES_DIR / "schema_perf.csv"),
+        contract_events_rel=rel_from_md(OUT_MD, TABLES_DIR / "contract_events_report.csv"),
+        contract_perf_rel=rel_from_md(OUT_MD, TABLES_DIR / "contract_perf_report.csv"),
+        catalog_rel=rel_from_md(OUT_MD, TABLES_DIR / "catalog.csv"),
+        build_info_rel=rel_from_md(OUT_MD, TABLES_DIR / "build_info.json"),
+    )
+
+# --------------------------- Main flow ---------------------------
 
 def main(events_path: Path, perf_path: Path) -> None:
     _mkdirs()
@@ -192,7 +282,6 @@ def main(events_path: Path, perf_path: Path) -> None:
     events = _read_parquet(events_path)
     # Normaliser types clés
     if "station_id" not in events.columns:
-        # tolérer d'autres noms usuels
         for c in ("stationcode", "stationCode", "id"):
             if c in events.columns:
                 events = events.rename(columns={c: "station_id"})
@@ -211,7 +300,6 @@ def main(events_path: Path, perf_path: Path) -> None:
         perf = _align_ts(perf, "ts")
         perf["station_id"] = perf["station_id"].astype(str)
     else:
-        # Placeholder vide si absent
         perf = pd.DataFrame(columns=["ts", "station_id", "y_true", "y_pred_baseline"])
 
     # Schémas
@@ -241,15 +329,22 @@ def main(events_path: Path, perf_path: Path) -> None:
     }
     (TABLES_DIR / "build_info.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
 
-    # Petites jauges (facultatif)
+    # Jauges
     _plot_gauges(ev_stats, pf_stats)
 
+    # Page Markdown
+    md = _render_md(ev_stats, pf_stats)
+    with open(OUT_MD, "w", encoding="utf-8", newline="\n") as f:
+        f.write(md)
+
     print("[exports] Done.")
+    print(f"[exports] Page   → {OUT_MD}")
     print(f"[exports] Catalog → {TABLES_DIR / 'catalog.csv'}")
     print(f"[exports] Contracts → {TABLES_DIR / 'contract_events_report.csv'} ; {TABLES_DIR / 'contract_perf_report.csv'}")
 
+# --------------------------- CLI compatibility ---------------------------
 
-def _resolve_paths_from_cli(args) -> tuple[Path, Path]:
+def _resolve_paths_from_cli(args) -> Tuple[Path, Path]:
     """
     Compatibilité CLI :
       - ancien mode : --events ... --perf ...
@@ -267,13 +362,12 @@ def _resolve_paths_from_cli(args) -> tuple[Path, Path]:
         raise SystemExit("CLI error: fournir --events <path> ou --exports-dir <dir> contenant events.parquet")
     if perf is None:
         # On passe quand même un chemin (même s'il n'existe pas) : main gère l'absence.
-        perf = (base / "perf.parquet") if base else Path("docs/exports/perf.parquet")
+        perf = (base / "perf.parquet") if base else DOCS / "exports" / "perf.parquet"
 
     return events, perf
 
-
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Build 'Data / Exports' inventory & contract checks")
+    ap = argparse.ArgumentParser(description="Build 'Data / Exports' inventory, contract checks & Markdown page")
     ap.add_argument("--events", type=Path, required=False, help="Path to events.parquet")
     ap.add_argument("--perf", type=Path, required=False, help="Path to perf.parquet (peut ne pas exister)")
     ap.add_argument("--exports-dir", type=Path, required=False, help="Dossier contenant events.parquet et perf.parquet")

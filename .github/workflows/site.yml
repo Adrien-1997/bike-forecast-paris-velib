@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
   schedule:
-    - cron: "0 */6 * * *"   # 00:00, 06:00, 12:00, 18:00 UTC
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -14,42 +14,51 @@ jobs:
   build-monitor:
     runs-on: ubuntu-latest
     env:
-      MPLBACKEND: Agg        # matplotlib headless
+      MPLBACKEND: Agg
+      TZ: Europe/Paris
+      PYTHONUTF8: "0"
+      PYTHONIOENCODING: "cp1252"
+    concurrency:
+      group: pages-build
+      cancel-in-progress: false
     outputs:
       need_retrain: ${{ steps.check.outputs.need_retrain }}
       max_psi: ${{ steps.check.outputs.max_psi }}
       mae_24h: ${{ steps.check.outputs.mae_24h }}
       mae_baseline: ${{ steps.check.outputs.mae_baseline }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
 
-      - name: Cache pip
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-docs-${{ hashFiles('requirements-doc.txt') }}
           restore-keys: ${{ runner.os }}-pip-docs-
 
-      - name: Install doc deps
+      - name: Install deps (docs + jq)
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-doc.txt
+          sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Generate monitoring pages
-        run: python tools/generate_monitoring.py --horizon 60 --lookback-days 14 --last-days 7 --tz Europe/Paris
+      - name: Build monitoring artifacts
+        run: |
+          python tools/build_monitoring.py \
+            --tz Europe/Paris \
+            --horizon 60 \
+            --last-days 14 \
+            --current-days 7 \
+            --reference-days 28
 
       - name: Decide retrain (PSI/perf)
         id: check
         env:
-          THRESH_PSI: "0.20"        # seuil PSI
-          THRESH_MAE_PCT: "1.20"    # +20% vs baseline
+          THRESH_PSI: "0.20"
+          THRESH_MAE_PCT: "1.20"
         run: |
           python tools/check_retrain.py | tee check.json
           echo "need_retrain=$(jq -r '.need_retrain' check.json)" >> "$GITHUB_OUTPUT"
@@ -62,7 +71,7 @@ jobs:
 
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v3
-        if: always()   # on publie même si pas de retrain
+        if: always()
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./site
@@ -73,35 +82,30 @@ jobs:
     if: needs.build-monitor.outputs.need_retrain == 'true'
     runs-on: ubuntu-latest
     env:
-      MPLBACKEND: Agg        # matplotlib headless aussi ici
+      MPLBACKEND: Agg
+      TZ: Europe/Paris
+      PYTHONUTF8: "0"
+      PYTHONIOENCODING: "cp1252"
     concurrency:
       group: pages-build
       cancel-in-progress: false
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
 
-      - name: Cache pip
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-train-${{ hashFiles('requirements-*.txt') }}
           restore-keys: ${{ runner.os }}-pip-train-
 
-      - name: Install training deps
+      - name: Install deps (train + docs)
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-train.txt
-
-      # ⚠️ génère des figures + mkdocs: il faut aussi les deps docs ici
-      - name: Install doc deps (for re-build after retrain)
-        run: |
           pip install -r requirements-doc.txt
 
       - name: Retrain LightGBM (T+60)
@@ -111,9 +115,12 @@ jobs:
           res = train(horizon_minutes=60, lookback_days=30)
           print(res)
           import json, pathlib
-          pathlib.Path("docs/exports").mkdir(parents=True, exist_ok=True)
-          with open("docs/exports/baseline.json", "w", encoding="utf-8") as f:
-              json.dump({"mae_valid": res["mae"], "rmse_valid": res["rmse"], "n_valid": res["n_valid"]}, f, indent=2)
+          p = pathlib.Path("docs/exports"); p.mkdir(parents=True, exist_ok=True)
+          with open(p/"baseline.json", "w", encoding="cp1252", newline="") as f:
+              json.dump(
+                  {"mae_valid": res["mae"], "rmse_valid": res["rmse"], "n_valid": res["n_valid"]},
+                  f, indent=2, ensure_ascii=True
+              )
           PY
 
       - name: Commit new model + baseline
@@ -121,23 +128,21 @@ jobs:
           set -euxo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # 1) Stage & commit d'abord (même si ignorés par .gitignore → -f)
           git add -f docs/exports/baseline.json || true
           git add -f models/*.joblib || true
-
-          git commit -m "ci: retrain model on drift/perf threshold" || echo "no changes"
-
-          # 2) Se rebaser sur la dernière version distante (autoStash si jamais il reste qqch)
+          git commit -m "ci: retrain model on drift/perf threshold [skip ci]" || echo "no changes"
           git fetch origin main
           git -c rebase.autoStash=true pull --rebase origin main
-
-          # 3) Push
           git push origin HEAD:main
 
-      - name: Regenerate monitoring (importances à jour)
+      - name: Rebuild monitoring
         run: |
-          python tools/generate_monitoring.py
+          python tools/build_monitoring.py \
+            --tz Europe/Paris \
+            --horizon 60 \
+            --last-days 14 \
+            --current-days 7 \
+            --reference-days 28
           mkdocs build --clean
 
       - name: Deploy to gh-pages

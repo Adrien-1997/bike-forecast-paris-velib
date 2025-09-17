@@ -25,6 +25,9 @@
 #   maps/
 #     - model_error_by_station_7d.html  (if lat/lon available)
 #
+# Page Markdown rendue :
+#   docs/monitoring/model-health.md
+#
 # CLI:
 #   python tools/build_monitoring_model_health.py --perf docs/exports/perf.parquet --last-days 30 --tz Europe/Paris [--horizon 60]
 #
@@ -32,7 +35,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -41,9 +44,12 @@ import matplotlib.pyplot as plt
 # Optional for maps
 try:
     import folium
+    from branca.element import Element  # ⬅️ pour injecter la légende HTML
     HAS_FOLIUM = True
 except Exception:
     HAS_FOLIUM = False
+    Element = None
+
 
 
 # --------------------------- Paths ---------------------------
@@ -53,16 +59,61 @@ DOCS = ROOT / "docs"
 ASSETS = DOCS / "assets"
 FIGS_DIR = ASSETS / "figs" / "monitoring" / "model_health"
 TABLES_DIR = ASSETS / "tables" / "monitoring" / "model_health"
-MAPS_DIR = DOCS / "maps"
+MAPS_DIR = ASSETS / "maps"
+OUT_MD = DOCS / "monitoring" / "model-health.md"
 STATION_CLUSTERS = ASSETS / "tables" / "network" / "stations" / "station_clusters.csv"
 
 
 # --------------------------- Utils ---------------------------
+def _load_any_station_coords() -> Optional[pd.DataFrame]:
+    """
+    Cherche dans docs/assets/tables/network/stations/ un CSV contenant
+    (station_id, lat, lon). Retourne le premier trouvé, sinon None.
+    """
+    base = STATION_CLUSTERS.parent  # .../network/stations/
+    if not base.exists():
+        return None
+    candidates = sorted([p for p in base.glob("*.csv") if p.is_file()])
+    for p in candidates:
+        try:
+            df = pd.read_csv(p, dtype={"station_id": str})
+            cols = {c.lower(): c for c in df.columns}
+            if "station_id" in {k.lower() for k in df.columns} and \
+               "lat" in {k.lower() for k in df.columns} and \
+               "lon" in {k.lower() for k in df.columns}:
+                # Normalise les noms
+                sid = cols.get("station_id", "station_id")
+                lat = cols.get("lat", "lat")
+                lon = cols.get("lon", "lon")
+                out = df[[sid, lat, lon]].rename(columns={sid: "station_id", lat: "lat", lon: "lon"})
+                out["station_id"] = out["station_id"].astype(str)
+                out["lat"] = pd.to_numeric(out["lat"], errors="coerce")
+                out["lon"] = pd.to_numeric(out["lon"], errors="coerce")
+                return out.dropna(subset=["lat","lon"])
+        except Exception:
+            continue
+    return None
+
+def _ensure_latlon(perf: pd.DataFrame) -> pd.DataFrame:
+    """
+    Si lat/lon manquants ou vides dans perf, tente une jointure avec un
+    registre stations (station_id, lat, lon) trouvé automatiquement.
+    """
+    needs_merge = ("lat" not in perf.columns) or ("lon" not in perf.columns) \
+                  or perf["lat"].isna().all() or perf["lon"].isna().all()
+    if not needs_merge:
+        return perf
+    reg = _load_any_station_coords()
+    if reg is None or reg.empty:
+        return perf  # on laissera la carte se désactiver proprement
+    return perf.merge(reg, on="station_id", how="left")
+
 
 def _mkdirs() -> None:
     FIGS_DIR.mkdir(parents=True, exist_ok=True)
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
     MAPS_DIR.mkdir(parents=True, exist_ok=True)
+    OUT_MD.parent.mkdir(parents=True, exist_ok=True)
 
 def _save_fig(path: Path) -> None:
     plt.tight_layout()
@@ -114,13 +165,20 @@ def _localize(df: pd.DataFrame, tz: Optional[str]) -> pd.DataFrame:
         return df.assign(date_local=ldt.dt.date, dow=ldt.dt.dayofweek, hour=ldt.dt.hour)
     return df.assign(date_local=df["ts"].dt.date, dow=df["ts"].dt.dayofweek, hour=df["ts"].dt.hour)
 
+def _rel_from_md(md_path: Path, target: Path) -> str:
+    """Chemin relatif depuis md_path vers target, compatible MkDocs (use_directory_urls: true)."""
+    md_rel = Path(md_path).resolve().relative_to(DOCS.resolve())
+    parts = md_rel.with_suffix("").parts  # ('monitoring','model-health') / ('index',)
+    depth = len(parts) if parts[-1] != "index" else len(parts) - 1
+    prefix = "../" * max(depth, 0)
+    rel_from_docs = Path(target).resolve().relative_to(DOCS.resolve()).as_posix()
+    return (prefix + rel_from_docs).replace("//", "/")
+
 
 # ---------- Robust metrics (no warnings on empty/NaN slices) ----------
 
 def _metrics(y_true: pd.Series, y_hat: pd.Series) -> dict:
-    """
-    Compute MAE/RMSE/bias/var on finite pairs only. Returns NaN if no valid pair.
-    """
+    """Compute MAE/RMSE/bias/var on finite pairs only. Returns NaN if no valid pair."""
     yt = pd.to_numeric(y_true, errors="coerce").to_numpy(dtype=float, copy=False)
     yh = pd.to_numeric(y_hat,  errors="coerce").to_numpy(dtype=float, copy=False)
 
@@ -217,7 +275,7 @@ def window_metrics(df: pd.DataFrame, days: int) -> dict:
         "ts_min": win["ts"].min().isoformat(), "ts_max": win["ts"].max().isoformat()
     }
 
-def segments_7d(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+def segments_7d(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     w7 = window_slice(df, 7)
     out: Dict[str, pd.DataFrame] = {}
 
@@ -438,27 +496,250 @@ def plot_top_degrading(df: pd.DataFrame) -> None:
     _save_fig(FIGS_DIR / "top_degrading_stations.png")
 
 def map_error_by_station_7d(df: pd.DataFrame) -> None:
+    # Enrichit lat/lon si nécessaire
+    df = _ensure_latlon(df)
+
     w7 = window_slice(df, 7)
-    if not HAS_FOLIUM or "lat" not in w7.columns or "lon" not in w7.columns or w7["lat"].isna().all():
+    if not HAS_FOLIUM:
+        print("[model-health/map] Folium absent → carte non générée.")
         return
-    by_st = (w7.groupby(["station_id","lat","lon"])
+    if "lat" not in w7.columns or "lon" not in w7.columns:
+        print("[model-health/map] Colonnes lat/lon absentes → carte non générée.")
+        return
+    if w7["lat"].isna().all() or w7["lon"].isna().all():
+        print("[model-health/map] Aucune coordonnée valide → carte non générée.")
+        return
+
+    by_st = (w7.dropna(subset=["lat","lon"])
+               .groupby(["station_id","lat","lon"], as_index=False)
                .apply(lambda g: pd.Series({
                    "mae": _metrics(g["y_true"], g["y_pred"])["mae"],
                    "bias": _metrics(g["y_true"], g["y_pred"])["me"],
                    "n": int(len(g))
-               }))).reset_index()
+               }))
+               .reset_index(drop=True))
+
+    if by_st.empty:
+        print("[model-health/map] Pas de points agrégés → carte non générée.")
+        return
+
+    # Stats pour la légende
+    ms = by_st["mae"].astype(float).dropna()
+    mae_min = float(ms.min()) if not ms.empty else float("nan")
+    mae_med = float(ms.median()) if not ms.empty else float("nan")
+    mae_max = float(ms.max()) if not ms.empty else float("nan")
+
     lat0 = float(by_st["lat"].median()); lon0 = float(by_st["lon"].median())
     m = folium.Map(location=[lat0, lon0], zoom_start=12, tiles="cartodbpositron")
+
     for _, r in by_st.iterrows():
-        col = "red" if r["bias"] > 0 else "blue"
-        rad = 3 + min(10, float(r["mae"]))
+        col = "red" if (pd.notna(r['bias']) and r["bias"] > 0) else "blue"
+        rad = 3 + (float(r["mae"]) if pd.notna(r["mae"]) else 0.0)  # taille ∝ MAE (capée ci-dessous)
+        rad = max(3.0, min(13.0, rad))
         folium.CircleMarker(
             location=[float(r["lat"]), float(r["lon"])],
             radius=rad, color=col, fill=True, fill_opacity=0.85,
-            tooltip=f"{r['station_id']} • MAE={r['mae']:.2f} • bias={r['bias']:.2f} • n={int(r['n'])}"
+            tooltip=f"{r['station_id']} • MAE={_fmt_float(r['mae'],2)} • biais={_fmt_float(r['bias'],2)} • n={int(r['n'])}"
         ).add_to(m)
-    m.save(str(MAPS_DIR / "model_error_by_station_7d.html"))
 
+    # Légende (HTML injecté)
+    if Element is not None:
+        legend_html = f"""
+<div style="
+  position: fixed; bottom: 20px; right: 20px; z-index: 9999;
+  background: white; padding: 10px 12px; border: 1px solid #bbb;
+  border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.2);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  font-size: 12px; line-height: 1.25;">
+  <div style="font-weight: 600; margin-bottom: 6px;">Légende</div>
+  <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+    <span style="width:12px;height:12px;border-radius:50%;background:#e41a1c;display:inline-block;border:1px solid #999;"></span>
+    <span>Biais &gt; 0 (rouge)</span>
+  </div>
+  <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+    <span style="width:12px;height:12px;border-radius:50%;background:#377eb8;display:inline-block;border:1px solid #999;"></span>
+    <span>Biais ≤ 0 (bleu)</span>
+  </div>
+  <div style="margin-top:4px;">Taille ∝ MAE (capée à 13 px)</div>
+  <div style="margin-top:4px; opacity:.8;">MAE min/med/max&nbsp;: {mae_min:.2f} / {mae_med:.2f} / {mae_max:.2f}</div>
+</div>
+""".strip()
+        m.get_root().html.add_child(Element(legend_html))
+
+    out_path = MAPS_DIR / "model_error_by_station_7d.html"
+    m.save(str(out_path))
+    print(f"[model-health/map] Carte → {out_path}")
+
+
+
+
+# --------------------------- Markdown rendering ---------------------------
+
+MD_TEMPLATE = """# Santé du modèle
+
+**Objectif.** Surveiller la **performance dans le temps**, la **calibration** et la **couverture** des prédictions, pour décider d’un **ré-entraînement** ou d’un **fallback**.
+
+## Questions auxquelles la page répond
+- L’erreur (MAE/RMSE) se **dégrade-t-elle** ? Où (heures, clusters, zones) ?
+- Le **lift** vs baseline reste-t-il positif et stable ?
+- La **calibration** est-elle correcte globalement et par segments ?
+- La **couverture** (`% y_pred` disponible) est-elle conforme ?
+
+## Indicateurs clés
+- **MAE / RMSE / biais** par jour et par segments (heure, station, cluster, zone).
+- **Lift** vs persistance = `(MAE_base − MAE_model) / MAE_base`.
+- **Calibration** : pente/intercept `y_true ~ y_pred` (global & segments).
+- **Couverture prédictive** : part d’horodatages avec `y_pred`.
+- **Stabilité résiduelle** : variance des résidus, auto-corrélation.
+
+---
+
+## Résumé rapide (fenêtres récentes)
+- **Fenêtre 7j** — MAE: **{mae7}**, Lift: **{lift7}**, Couverture: **{cov7}%**  
+- **Fenêtre 28j** — MAE: **{mae28}**, Lift: **{lift28}**, Couverture: **{cov28}%**  
+- **Dernier jour** — Couverture prédictive: **{cov_last}%**  
+- **Alertes** : Dégradation {alert_deg} · Couverture {alert_cov} · Calibration {alert_cal} · Fallback {alert_fb} · Gating retrain {alert_retrain}
+
+> **Plage temporelle analysée** : {ts_min} → {ts_max} (timezone: **{tz}**) · Horizon: **{horizon_label}** · Série quotidienne exportée: **{last_days} jours**
+
+---
+
+## Visualisations
+### Séries (MAE / lift / couverture)
+![MAE]({fig_mae})
+![Lift]({fig_lift})
+![Couverture]({fig_cov})
+
+### Calibration (pente β par heure, 7j)
+![Calibration β]({fig_calib})
+
+### Stabilité des résidus
+![ACF]({fig_acf})
+
+### Top stations en dégradation
+![Top stations]({fig_topdeg})
+
+### Carte d’erreur (7 derniers jours)
+{map_block}
+
+
+---
+
+## Téléchargements & tables
+- **Fenêtres** : `{win_csv}`
+- **Jours** : `{daily_csv}`
+- **Segments 7j** : stations `{seg_st_csv}`, heures `{seg_hr_csv}`{seg_cl_csv}{seg_zo_csv}
+- **Calibration** : global `{cal_glob_csv}` ; par heure `{cal_hr_csv}`
+- **Couverture** : `{cov_csv}`
+- **ACF résidus** : `{acf_csv}`
+- **Top dégradations** : `{topdeg_csv}`
+- **Synthèse alertes** : `{alerts_csv}`
+
+---
+
+## Seuils / Politiques (par défaut)
+- **Dégradation** : MAE_7j − MAE_28j > 10 % **et** lift_7j < lift_28j − 5 pts → **Alerte**.
+- **Couverture** : < 99 % sur J-1 → **Alerte**.
+- **Calibration** : |pente−1| > 0,1 **ou** |intercept| > 0,5 → **Alerte**.
+- **Gating ré-entraînement** : 3 alertes “Dégradation” sur 10 jours → **Planifier retrain**.
+- **Fallback** : couverture < 95 % **ou** lift < 0 sur 3 jours → activer **baseline** le temps du correctif.
+
+> **Limites** — La performance agrégée peut masquer des **poches locales** de dégradation → toujours lire les découpages.
+"""
+
+def _fmt_float(x: float, nd=3) -> str:
+    return "—" if not np.isfinite(x) else f"{x:.{nd}f}"
+
+def _fmt_pct(x: float, nd=2) -> str:
+    return "—" if not np.isfinite(x) else f"{x:.{nd}f}"
+
+def _flag(b: Optional[bool]) -> str:
+    if b is True: return "⚠️"
+    if b is False: return "✅"
+    return "—"
+
+def _write_markdown(
+    tz: Optional[str],
+    horizon: Optional[int],
+    last_days: int,
+    win7: dict,
+    win28: dict,
+    alerts: pd.DataFrame,
+    have_cluster: bool,
+    have_zone: bool,
+) -> None:
+    # Chemins relatifs depuis la page MD
+    fig_mae   = _rel_from_md(OUT_MD, FIGS_DIR / "mae_rmse_daily.png")
+    fig_lift  = _rel_from_md(OUT_MD, FIGS_DIR / "lift_daily.png")
+    fig_cov   = _rel_from_md(OUT_MD, FIGS_DIR / "coverage_daily.png")
+    fig_calib = _rel_from_md(OUT_MD, FIGS_DIR / "calibration_beta_by_hour_7d.png")
+    fig_acf   = _rel_from_md(OUT_MD, FIGS_DIR / "residuals_acf.png")
+    fig_topdeg= _rel_from_md(OUT_MD, FIGS_DIR / "top_degrading_stations.png")
+
+    # Carte: construire un bloc conditionnel
+    map_path   = MAPS_DIR / "model_error_by_station_7d.html"
+    map_exists = map_path.exists()
+    if map_exists:
+        map_rel = _rel_from_md(OUT_MD, map_path)
+        map_block = f"""
+<div style="margin: 0.5rem 0;">
+  <iframe src="{map_rel}" style="width:100%;height:520px;border:0" loading="lazy" title="Carte erreur 7j"></iframe>
+</div>
+<p><a href="{map_rel}" target="_blank" rel="noopener">Ouvrir la carte dans un nouvel onglet ↗</a></p>
+""".strip()
+    else:
+        map_block = "_Carte non disponible (coords manquantes ou Folium absent)._"
+
+    daily_csv = _rel_from_md(OUT_MD, TABLES_DIR / "daily_metrics.csv")
+    win_csv   = _rel_from_md(OUT_MD, TABLES_DIR / "window_metrics.csv")
+    seg_st_csv= _rel_from_md(OUT_MD, TABLES_DIR / "error_by_station_7d.csv")
+    seg_hr_csv= _rel_from_md(OUT_MD, TABLES_DIR / "error_by_hour_7d.csv")
+    seg_cl_csv= f", clusters `{_rel_from_md(OUT_MD, TABLES_DIR / 'error_by_cluster_7d.csv')}`" if have_cluster else ""
+    seg_zo_csv= f", zones `{_rel_from_md(OUT_MD, TABLES_DIR / 'error_by_zone_7d.csv')}`" if have_zone else ""
+    cal_glob_csv = _rel_from_md(OUT_MD, TABLES_DIR / "calibration_global_7d.csv")
+    cal_hr_csv   = _rel_from_md(OUT_MD, TABLES_DIR / "calibration_by_hour_7d.csv")
+    cov_csv      = _rel_from_md(OUT_MD, TABLES_DIR / "coverage_j1_j7_j28.csv")
+    acf_csv      = _rel_from_md(OUT_MD, TABLES_DIR / "residuals_acf.csv")
+    topdeg_csv   = _rel_from_md(OUT_MD, TABLES_DIR / "top_degrading_stations.csv")
+    alerts_csv   = _rel_from_md(OUT_MD, TABLES_DIR / "alerts_summary.csv")
+
+    # Valeurs
+    mae7   = _fmt_float(win7.get("mae_model", np.nan))
+    mae28  = _fmt_float(win28.get("mae_model", np.nan))
+    lift7  = _fmt_float(win7.get("lift_vs_baseline", np.nan))
+    lift28 = _fmt_float(win28.get("lift_vs_baseline", np.nan))
+    cov7   = _fmt_pct(win7.get("coverage_pred_pct", np.nan))
+    cov28  = _fmt_pct(win28.get("coverage_pred_pct", np.nan))
+    ts_min = win28.get("ts_min", "—") or "—"
+    ts_max = win28.get("ts_max", "—") or "—"
+    tzlabel = tz or "UTC"
+    horlabel = f"{int(horizon)} min" if horizon is not None else "—"
+
+    alert_row = alerts.iloc[0] if not alerts.empty else None
+    alert_deg = _flag(alert_row["degradation_window_alert"]) if alert_row is not None else "—"
+    alert_cov = _flag(alert_row["coverage_alert_j1"])       if alert_row is not None else "—"
+    alert_cal = _flag(alert_row.get("calibration_alert"))   if alert_row is not None else "—"
+    alert_fb  = _flag(alert_row["fallback_to_baseline"])    if alert_row is not None else "—"
+    alert_rt  = _flag(alert_row["retrain_gate"])            if alert_row is not None else "—"
+    cov_last  = _fmt_pct(alert_row["coverage_last_pct"])    if alert_row is not None else "—"
+
+    md = MD_TEMPLATE.format(
+        mae7=mae7, mae28=mae28, lift7=lift7, lift28=lift28,
+        cov7=cov7, cov28=cov28, cov_last=cov_last,
+        alert_deg=alert_deg, alert_cov=alert_cov, alert_cal=alert_cal, alert_fb=alert_fb, alert_retrain=alert_rt,
+        ts_min=ts_min, ts_max=ts_max, tz=tzlabel, horizon_label=horlabel, last_days=last_days,
+        fig_mae=fig_mae, fig_lift=fig_lift, fig_cov=fig_cov, fig_calib=fig_calib, fig_acf=fig_acf, fig_topdeg=fig_topdeg,
+        # fichiers
+        win_csv=win_csv, daily_csv=daily_csv,
+        seg_st_csv=seg_st_csv, seg_hr_csv=seg_hr_csv, seg_cl_csv=seg_cl_csv, seg_zo_csv=seg_zo_csv,
+        cal_glob_csv=cal_glob_csv, cal_hr_csv=cal_hr_csv, cov_csv=cov_csv, acf_csv=acf_csv, topdeg_csv=topdeg_csv, alerts_csv=alerts_csv,
+        # ⬇️ le paramètre manquant qui causait KeyError
+        map_block=map_block,
+    )
+
+    with open(OUT_MD, "w", encoding="utf-8", newline="\n") as f:
+        f.write(md)
+    print(f"[model-health] Markdown -> {OUT_MD}")
 
 # --------------------------- Main ---------------------------
 
@@ -489,10 +770,12 @@ def main(perf_path: Path, last_days: int, tz: Optional[str], horizon: Optional[i
 
     # Segments (7d)
     segs = segments_7d(perf)
+    have_cluster = "cluster" in segs
+    have_zone = "zone" in segs
     if "station" in segs: segs["station"].to_csv(TABLES_DIR / "error_by_station_7d.csv", index=False)
     if "hour" in segs:    segs["hour"].to_csv(TABLES_DIR / "error_by_hour_7d.csv", index=False)
-    if "cluster" in segs: segs["cluster"].to_csv(TABLES_DIR / "error_by_cluster_7d.csv", index=False)
-    if "zone" in segs:    segs["zone"].to_csv(TABLES_DIR / "error_by_zone_7d.csv", index=False)
+    if have_cluster:      segs["cluster"].to_csv(TABLES_DIR / "error_by_cluster_7d.csv", index=False)
+    if have_zone:         segs["zone"].to_csv(TABLES_DIR / "error_by_zone_7d.csv", index=False)
 
     # Calibration (7d)
     cal_glob, cal_hour = calibration_7d(perf)
@@ -517,6 +800,7 @@ def main(perf_path: Path, last_days: int, tz: Optional[str], horizon: Optional[i
 
     # Alerts
     alerts = compute_alerts(daily, win7, win28)
+    # Fill calibration alert with global α/β (7j)
     if not cal_glob.empty:
         a = float(cal_glob.iloc[0]["alpha"]); b = float(cal_glob.iloc[0]["beta"])
         cal_ok = (np.isfinite(b) and abs(b - 1.0) <= 0.1) and (np.isfinite(a) and abs(a) <= 0.5)
@@ -533,6 +817,11 @@ def main(perf_path: Path, last_days: int, tz: Optional[str], horizon: Optional[i
 
     # Map (optional)
     map_error_by_station_7d(perf)
+
+    # Markdown page
+    _write_markdown(tz=tz, horizon=horizon, last_days=last_days,
+                    win7=win7 or {}, win28=win28 or {}, alerts=alerts,
+                    have_cluster=have_cluster, have_zone=have_zone)
 
     print("[monitoring/model-health] Done.")
     print(f"[monitoring/model-health] Daily metrics → {TABLES_DIR / 'daily_metrics.csv'}")

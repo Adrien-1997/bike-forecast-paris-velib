@@ -1,9 +1,12 @@
 # tools/datasets.py
 # Normalise les données Vélib' en deux jeux :
 #   - events.parquet : ts (UTC, 15 min), station_id, bikes, capacity, occ[, lat, lon, name, meteo...]
-#   - perf.parquet   : ts (UTC, 15 min), station_id, y_true (T+h), y_pred (optionnel), y_pred_baseline (persistance), horizon_min
+#   - perf.parquet   : ts (UTC, 15 min, temps de décision T), station_id,
+#                      y_true (observé à T+h), y_pred (optionnel, injecté plus tard),
+#                      y_pred_baseline (persistance à T), horizon_min,
+#                      ts_decision (= T), ts_target (= T+h)  ← ajouté pour éviter tout décalage visuel.
 #
-# Usage principal (appelé par generate_monitoring.py) :
+# Usage principal (appelé par build_monitoring.py) :
 #   python tools/datasets.py --input docs/exports/velib.parquet --horizon 60 \
 #          --out-events docs/exports/events.parquet --out-perf docs/exports/perf.parquet --lag-steps 0
 #
@@ -11,7 +14,7 @@
 # - On ne produit PAS de y_pred modèle ici (il sera injecté par tools/apply_model.py).
 # - y_true est calculé comme bikes(T+steps) via shift(-steps) par station.
 # - y_pred_baseline = bikes(T) (persistance).
-# - ts est conservé en UTC et arrondi au pas 15 minutes (ou pas détecté).
+# - ts est conservé en UTC et arrondi au pas 15 minutes.
 # - --lag-steps permet de décaler une éventuelle colonne y_pred déjà présente (rare).
 
 from __future__ import annotations
@@ -29,7 +32,6 @@ try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
     pass
-
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -169,14 +171,21 @@ def load_normalized(input_path: Path,
     if "bikes" in df.columns:
         # pour calculer y_true, on a besoin des bikes groupés par station au pas natif
         tmp = df[["ts", "station_id", "bikes"]].sort_values(perf_keys).copy()
-        tmp["y_true"] = tmp.groupby("station_id")["bikes"].shift(-steps)
-        tmp["y_pred_baseline"] = tmp.groupby("station_id")["bikes"].shift(0)  # persistance
+        tmp["y_true"] = tmp.groupby("station_id")["bikes"].shift(-steps)          # = bikes(T+h)
+        tmp["y_pred_baseline"] = tmp.groupby("station_id")["bikes"].shift(0)      # = bikes(T)
         perf = perf.merge(tmp.drop(columns=["bikes"]), on=perf_keys, how="left")
     else:
         perf["y_true"] = np.nan
         perf["y_pred_baseline"] = np.nan
 
+    # Informations d'horizon
     perf["horizon_min"] = int(horizon_minutes)
+
+    # --- Axes explicites (pour affichage/analyses sans décalage visuel) ---
+    # ts = T (temps de décision) — on conserve la clé telle quelle,
+    # ts_target = T+h (où vit réellement y_true et où s'évaluent les prédictions)
+    perf["ts_decision"] = perf["ts"]
+    perf["ts_target"]   = perf["ts"] + pd.to_timedelta(int(horizon_minutes), unit="m")
 
     # si la source contenait déjà une colonne y_pred (rare) → l'aligner optionnellement plus tard
     if "y_pred" in df.columns:

@@ -1,2 +1,2 @@
-timestamp_snapshot_utc,active_stations,offline_stations,total_stations,bike_availability_rate,dock_availability_rate,penury_rate,saturation_rate,coverage_last_days_pct,volatility_today_median_bikes_std
-2025-09-16T21:45:00,1240,233,1473,97.33870967741936,98.62903225806451,2.661290322580645,1.2903225806451613,43.23,5.091
+snapshot_ts_utc,snapshot_ts_local,stations_universe,stations_active,stations_offline,availability_bike_pct,availability_dock_pct,penury_pct,saturation_pct,coverage_pct,volatility_today,last_days,ref_days
+2025-09-17 17:45:00,2025-09-17 19:45:00+02:00,1473,1119,354,96.87,99.73,3.13,0.27,89.82,5.21,14,28

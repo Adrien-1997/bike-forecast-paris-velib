@@ -1,403 +1,619 @@
 # tools/build_network_overview.py
-# Page builder — "Réseau / Aperçu du réseau"
-# Produces: KPIs tables, a day-profile chart (today vs median of past weeks),
-# and a snapshot map (penury/saturation) from events.parquet.
-#
-# CLI:
-#   python tools/build_network_overview.py --events docs/exports/events.parquet --last-days 7 --tz Europe/Paris
-#
+# Génère la page "Réseau / Aperçu" avec KPIs injectés, carte Folium et figures.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
-import sys
-import math
+from typing import Optional, Tuple, Dict, List
+import branca
+import os
 import json
+import math
 import numpy as np
 import pandas as pd
-
-# Optional but useful for the snapshot map (saved as HTML)
+import sys
 try:
-    import folium
-    HAS_FOLIUM = True
+    sys.stdout.reconfigure(encoding="cp1252", errors="replace")
+    sys.stderr.reconfigure(encoding="cp1252", errors="replace")
 except Exception:
-    HAS_FOLIUM = False
-
+    pass
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import folium
+from dateutil import tz
 
-# --------------------------- Paths & helpers ---------------------------
+# ------------------------- Chemins & utilitaires -------------------------
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
 ASSETS = DOCS / "assets"
-FIGS_DIR = ASSETS / "figs" / "network" / "overview"
-TABLES_DIR = ASSETS / "tables" / "network" / "overview"
-MAPS_DIR = ASSETS / "maps"
+FIGS = ASSETS / "figs" / "network" / "overview"
+TABLES = ASSETS / "tables" / "network" / "overview"
+MAPS = ASSETS / "maps"
+OUT_MD = DOCS / "network" / "overview.md"
 
-def _mkdirs() -> None:
-    FIGS_DIR.mkdir(parents=True, exist_ok=True)
-    TABLES_DIR.mkdir(parents=True, exist_ok=True)
-    MAPS_DIR.mkdir(parents=True, exist_ok=True)
+for d in (FIGS, TABLES, MAPS, OUT_MD.parent):
+    d.mkdir(parents=True, exist_ok=True)
 
-def _read_events(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        raise FileNotFoundError(f"[overview] Missing events file: {path}")
-    df = pd.read_parquet(path)
-    # Normalize expected columns
-    # Time
-    for tc in ("ts", "tbin_utc"):
-        if tc in df.columns:
-            df["ts"] = pd.to_datetime(df[tc], errors="coerce")
-            break
-    if "ts" not in df.columns:
-        raise KeyError("[overview] No 'ts' or 'tbin_utc' column in events.parquet")
-    df["ts"] = df["ts"].dt.floor("15min")
 
-    # Station key
-    sid = None
-    for c in ("station_id", "stationcode", "stationCode", "id"):
-        if c in df.columns:
-            sid = c
-            break
-    if sid is None:
-        raise KeyError("[overview] No station identifier column found (station_id/stationcode)")
-    df["station_id"] = df[sid].astype(str)
+def rel_from_md(md_path: Path, target: Path) -> str:
+    """Chemin relatif (POSIX) depuis md_path vers target, compatible MkDocs
+    (use_directory_urls: true). Ex. docs/network/overview.md -> ../../assets/..."""
+    md_rel = Path(md_path).resolve().relative_to(DOCS.resolve())
+    parts = md_rel.with_suffix("").parts           # ('network','overview') ou ('data','index')
+    depth = len(parts) if parts[-1] != "index" else len(parts) - 1
+    prefix = "../" * max(depth, 0)
+    rel_from_docs = Path(target).resolve().relative_to(DOCS.resolve()).as_posix()
+    return (prefix + rel_from_docs).replace("//", "/")
 
-    # Bikes (available)
-    bikes_col = None
-    for c in ("bikes", "nb_velos_bin", "velos_disponibles", "numBikesAvailable", "n_bikes"):
-        if c in df.columns:
-            bikes_col = c
-            break
-    if bikes_col is None:
-        raise KeyError("[overview] No bikes column found (bikes/nb_velos_bin/velos_disponibles)")
-    df["bikes"] = pd.to_numeric(df[bikes_col], errors="coerce").fillna(0).astype(float)
 
-    # Capacity and/or docks available
-    cap_col = None
-    for c in ("capacity", "cap", "dock_count", "n_docks"):
-        if c in df.columns:
-            cap_col = c
-            break
-    docks_col = None
-    for c in ("docks", "docks_disponibles", "numDocksAvailable", "places_disponibles"):
-        if c in df.columns:
-            docks_col = c
-            break
 
-    if docks_col is not None:
-        df["docks_avail"] = pd.to_numeric(df[docks_col], errors="coerce").fillna(np.nan).astype(float)
-    elif cap_col is not None:
-        cap = pd.to_numeric(df[cap_col], errors="coerce").astype(float)
-        df["docks_avail"] = (cap - df["bikes"]).where(cap.notna(), np.nan)
-        df["capacity"] = cap
-    else:
-        # No docks/capacity info → we can still compute bike availability, but not dock metrics
-        df["docks_avail"] = np.nan
 
-    # Station metadata
-    for c in ("name", "station_name", "label"):
-        if c in df.columns:
-            df["name"] = df[c].astype(str)
-            break
-    if "name" not in df.columns:
-        df["name"] = df["station_id"]
 
-    latcol = None
-    for c in ("lat", "latitude"):
-        if c in df.columns:
-            latcol = c
-            break
-    loncol = None
-    for c in ("lon", "lng", "longitude"):
-        if c in df.columns:
-            loncol = c
-            break
-    df["lat"] = pd.to_numeric(df.get(latcol, np.nan), errors="coerce")
-    df["lon"] = pd.to_numeric(df.get(loncol, np.nan), errors="coerce")
+# -------------------------- Détection de colonnes --------------------------
 
-    return df[["ts", "station_id", "name", "lat", "lon", "bikes", "docks_avail"]].copy()
+@dataclass
+class Cols:
+    ts: str
+    station: str
+    bikes: str
+    capacity: Optional[str] = None
+    docks_avail: Optional[str] = None
+    name: Optional[str] = None
+    lat: Optional[str] = None
+    lon: Optional[str] = None
 
-def _to_local_date(s: pd.Series, tz: str | None) -> pd.Series:
-    """Convert naive UTC timestamps to a local date for grouping (display only)."""
-    if tz:
-        # Treat input as UTC-naive → localize UTC → convert to tz → take date
-        return (s.dt.tz_localize("UTC").dt.tz_convert(tz).dt.date)
-    return s.dt.date  # still UTC-based date
+def detect_columns(df: pd.DataFrame) -> Cols:
+    lower = {c.lower(): c for c in df.columns}
+    def any_of(*cands):
+        for c in cands:
+            if c in lower: return lower[c]
+        return None
+    ts = any_of("ts","tbin_utc","timestamp","datetime")
+    st = any_of("station_id","stationcode","id","station")
+    bikes = any_of("bikes","nb_velos_bin","velos","velos_disponibles","bike_available","num_bikes_available")
+    cap = any_of("capacity","cap","dock_count","num_docks_total")
+    docks = any_of("docks_avail","docks_available","places_disponibles","free_docks","num_docks_available")
+    name = any_of("name","station_name","nom")
+    lat = any_of("lat","latitude")
+    lon = any_of("lon","lng","longitude")
+    if not ts or not st or not bikes:
+        raise KeyError(f"[overview] Colonnes minimales absentes (trouvé: ts={ts}, station={st}, bikes={bikes})")
+    return Cols(ts, st, bikes, cap, docks, name, lat, lon)
 
-def _kpi_snapshot(df: pd.DataFrame, tz: str | None) -> dict:
-    """KPIs at the latest timestamp available (closest snapshot)."""
-    tmax = df["ts"].max()
-    snap = df[df["ts"] == tmax].copy()
-    total_stations = df["station_id"].nunique()
-    active_stations = snap["station_id"].nunique()
-    offline_stations = total_stations - active_stations
+# -------------------------- Calculs temporels --------------------------
 
-    bikes = pd.to_numeric(snap["bikes"], errors="coerce")
-    docks = pd.to_numeric(snap["docks_avail"], errors="coerce")
+def to_local(df: pd.DataFrame, ts_col: str, tzname: str) -> pd.Series:
+    s = pd.to_datetime(df[ts_col], utc=False, errors="coerce")
+    # Les exports sont "UTC naïf arrondi 15 min" -> on les traite comme UTC puis convertit
+    s = s.dt.tz_localize("UTC", ambiguous="NaT", nonexistent="shift_forward").dt.tz_convert(tzname)
+    return s
 
-    # Availability flags
-    bike_avail = (bikes > 0)
-    dock_avail = (docks > 0) if docks.notna().any() else pd.Series([np.nan] * len(snap), index=snap.index)
+def today_bounds_local(series_local: pd.Series) -> Tuple[pd.Timestamp, pd.Timestamp]:
+    """Retourne min et max (début/fin) du jour local de la dernière observation."""
+    tmax = series_local.max()
+    start = tmax.normalize()
+    end = start + pd.Timedelta(days=1)
+    return start, end
 
-    # Structural states
-    penury = (bikes == 0)
-    saturation = (docks == 0) if docks.notna().any() else pd.Series([np.nan] * len(snap), index=snap.index)
+# -------------------------- KPIs & helpers --------------------------
 
-    kpi = {
-        "timestamp_snapshot_utc": tmax.isoformat(),
-        "active_stations": int(active_stations),
-        "offline_stations": int(offline_stations),
-        "total_stations": int(total_stations),
-        "bike_availability_rate": float(bike_avail.mean() * 100) if len(bike_avail) else np.nan,
-        "dock_availability_rate": float(dock_avail.mean() * 100) if dock_avail.notna().any() else np.nan,
-        "penury_rate": float(penury.mean() * 100) if len(penury) else np.nan,
-        "saturation_rate": float(saturation.mean() * 100) if saturation.notna().any() else np.nan,
+def part(x: pd.Series) -> float:
+    if x.size == 0: return float("nan")
+    return float((x.mean() * 100.0).round(2))
+
+def safe_ratio(n: float, d: float) -> float:
+    return float("nan") if d == 0 else round(100.0 * n / d, 2)
+
+def compute_snapshot_kpis(df: pd.DataFrame, cols: Cols, tzname: str, station_universe: List[str]) -> Tuple[dict, pd.DataFrame]:
+    # Snapshot = dernier timestamp
+    df = df.copy()
+    df["_ts_loc"] = to_local(df, cols.ts, tzname)
+    last_ts = df[cols.ts].max()
+    snap = df[df[cols.ts] == last_ts].copy()
+
+    # Dériver docks_avail si absent
+    docks_col = cols.docks_avail
+    if docks_col is None and cols.capacity:
+        docks = (pd.to_numeric(snap[cols.capacity], errors="coerce") - pd.to_numeric(snap[cols.bikes], errors="coerce")).clip(lower=0)
+        snap["__docks_avail"] = docks
+        docks_col = "__docks_avail"
+
+    bikes = pd.to_numeric(snap[cols.bikes], errors="coerce")
+    has_bike = bikes > 0
+    has_dock = None
+    sat = pen = None
+    if docks_col and docks_col in snap.columns:
+        docks = pd.to_numeric(snap[docks_col], errors="coerce")
+        has_dock = docks > 0
+        sat = docks == 0
+    pen = bikes == 0
+
+    active = snap[cols.station].astype(str).nunique()
+    universe = len(station_universe)
+    offline = max(universe - active, 0)
+
+    kpis = {
+        "snapshot_ts_utc": str(last_ts),
+        "snapshot_ts_local": str(to_local(pd.DataFrame({cols.ts:[last_ts]}), cols.ts, tzname).iloc[0]),
+        "stations_universe": universe,
+        "stations_active": int(active),
+        "stations_offline": int(offline),
+        "availability_bike_pct": part(has_bike) if has_bike is not None else float("nan"),
+        "availability_dock_pct": part(has_dock) if has_dock is not None else float("nan"),
+        "penury_pct": part(pen) if pen is not None else float("nan"),
+        "saturation_pct": part(sat) if sat is not None else float("nan"),
     }
-    return kpi
 
-def _coverage(df: pd.DataFrame, last_days: int) -> float:
-    """Approximate global coverage over the last_days window (fraction of present bins).
-    For each station, compute (#observed bins / #expected bins) then average.
-    """
-    if last_days <= 0:
-        return np.nan
-    tmax = df["ts"].max()
-    tmin = tmax - pd.Timedelta(days=last_days)
-    window = df[(df["ts"] > tmin) & (df["ts"] <= tmax)].copy()
-    if window.empty:
-        return np.nan
-
-    # expected bins per station ≈ ceil(window_minutes/15) + 1
-    expected_per_station = math.ceil((tmax - tmin).total_seconds() / 60 / 15) + 1
-    obs = window.groupby("station_id")["ts"].nunique().clip(upper=expected_per_station)
-    cov = (obs / expected_per_station).mean()
-    return float(round(cov * 100, 2))
-
-def _volatility_today(df: pd.DataFrame, tz: str | None) -> float:
-    """Median within-day std of bikes per station for the 'today' bucket (by display tz)."""
-    if df.empty:
-        return np.nan
-    # define 'today' (by tz) using the last timestamp
-    tmax = df["ts"].max()
-    if tz:
-        local_day = tmax.tz_localize("UTC").tz_convert(tz).date()
-    else:
-        local_day = tmax.date()
-    # keep rows that fall on that local day
-    mask = _to_local_date(df["ts"], tz) == local_day
-    today = df[mask]
-    if today.empty:
-        return np.nan
-    vol = today.groupby("station_id")["bikes"].std(ddof=0)
-    if vol.empty:
-        return 0.0
-    return float(round(vol.median(), 3))
-
-def _write_json(path: Path, obj: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
-
-def _save_fig(path: Path) -> None:
-    plt.tight_layout()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(path, dpi=150)
-    plt.close()
-
-# --------------------------- Charts & Map ---------------------------
-
-def build_day_profile_chart(df: pd.DataFrame, tz: str | None, out_png: Path, weeks_back: int = 3) -> None:
-    """Plot 'today' curve vs median day-of-week profile computed over past `weeks_back` weeks.
-    Value shown = share of stations with at least 1 bike (robust & comparable).
-    """
-    if df.empty:
-        # create an empty placeholder figure
-        plt.figure(figsize=(8, 4))
-        plt.title("Day profile (no data)")
-        _save_fig(out_png)
-        return
-
-    # Local time for grouping (display only)
-    local_dt = df["ts"].dt.tz_localize("UTC").dt.tz_convert(tz) if tz else df["ts"]
-    df = df.assign(
-        date_local=local_dt.dt.date,
-        time_local=local_dt.dt.time,
-        dow_local=local_dt.dt.dayofweek,  # Monday=0
-        hhmm=local_dt.dt.strftime("%H:%M"),
-    ).copy()
-
-    # Today bucket by local date (use last timestamp's local date)
-    last_local_date = df["date_local"].iloc[df["ts"].idxmax()]  # pick the last row's local date
-    df_today = df[df["date_local"] == last_local_date].copy()
-    # Reference window: previous `weeks_back` same weekdays
-    target_dow = int(df_today["dow_local"].iloc[0]) if not df_today.empty else None
-    if target_dow is not None:
-        ref = df[(df["dow_local"] == target_dow) & (df["date_local"] < last_local_date)].copy()
-    else:
-        ref = df.iloc[0:0].copy()
-
-    # Compute share of stations with bikes>0 by hh:mm
-    def share_has_bike(dfg: pd.DataFrame) -> pd.Series:
-        # 1) part de stations avec ≥1 vélo à chaque timestamp (index unique)
-        g = dfg.groupby("ts")["bikes"].apply(lambda s: (s > 0).mean())
-
-        # 2) mapping ts -> hh:mm sans doublons (un seul hh:mm par ts)
-        hhmm_map = dfg.drop_duplicates("ts").set_index("ts")["hhmm"]
-        hhmm = hhmm_map.reindex(g.index)  # g.index est unique → OK
-
-        # 3) regrouper par hh:mm et moyenner
-        out = g.groupby(hhmm).mean()
-
-        # 4) tri par ordre temporel
-        order = sorted(out.index, key=lambda s: (int(s[:2]) * 60 + int(s[3:])))
-        return out.reindex(order)
-
-
-    today_curve = share_has_bike(df_today) if not df_today.empty else pd.Series(dtype=float)
-    # For reference: compute median across same weekday in the last `weeks_back` weeks
-    if not ref.empty:
-        # limit to last N weeks worth of days of same weekday
-        unique_days = sorted(ref["date_local"].unique())[-weeks_back:]
-        ref = ref[ref["date_local"].isin(unique_days)]
-        # per day curve, then median across days
-        curves = []
-        for d in sorted(ref["date_local"].unique()):
-            curves.append(share_has_bike(ref[ref["date_local"] == d]))
-        ref_curve = pd.concat(curves, axis=1).median(axis=1) if curves else pd.Series(dtype=float)
-    else:
-        ref_curve = pd.Series(dtype=float)
-
-    # Plot
-    plt.figure(figsize=(10, 4.5))
-    if not ref_curve.empty:
-        plt.plot(ref_curve.index, ref_curve.values, label="Median (past weeks)", linewidth=2)
-    if not today_curve.empty:
-        plt.plot(today_curve.index, today_curve.values, label="Today", linewidth=2)
-    plt.ylim(0, 1)
-    plt.ylabel("Share of stations with ≥1 bike")
-    plt.xlabel("Local time")
-    plt.title("Day profile: Today vs median (same weekday)")
-    plt.legend(loc="best")
-    plt.xticks(rotation=0)
-    _save_fig(out_png)
-
-def build_snapshot_map(df: pd.DataFrame, out_html: Path) -> None:
-    """Folium map at the latest snapshot highlighting penury (bikes==0) and saturation (docks==0)."""
-    if not HAS_FOLIUM:
-        print("[overview] Folium not installed — skipping map.")
-        return
-    if df.empty or df["lat"].isna().all() or df["lon"].isna().all():
-        print("[overview] No lat/lon in events — skipping map.")
-        return
-
-    tmax = df["ts"].max()
-    snap = df[df["ts"] == tmax].copy()
-    # Center map
-    lat0 = snap["lat"].median()
-    lon0 = snap["lon"].median()
-    m = folium.Map(location=[float(lat0), float(lon0)], zoom_start=12, tiles="cartodbpositron")
-
-    for _, r in snap.iterrows():
-        bikes = float(r.get("bikes", np.nan))
-        docks = r.get("docks_avail", np.nan)
-        name = str(r.get("name", r["station_id"]))
-        sid = r["station_id"]
-
-        # Color logic
-        if not np.isnan(bikes) and bikes == 0:
-            color = "red"         # penury
-        elif not pd.isna(docks) and float(docks) == 0.0:
-            color = "black"       # saturation
-        else:
-            color = "blue"        # ok/other
-
-        tooltip = f"{name} • {sid}\nBikes={bikes:.0f} • Docks={'' if pd.isna(docks) else int(docks)}"
-        folium.CircleMarker(
-            location=[float(r["lat"]), float(r["lon"])],
-            radius=4,
-            color=color,
-            fill=True,
-            fill_opacity=0.8,
-            tooltip=tooltip
-        ).add_to(m)
-
-    out_html.parent.mkdir(parents=True, exist_ok=True)
-    m.save(str(out_html))
-    print(f"[overview] Map saved → {out_html.resolve()}")
-
-# --------------------------- Main ---------------------------
-
-def main(events_path: Path, last_days: int, tz: str | None) -> None:
-    _mkdirs()
-    df = _read_events(events_path)
-    if df.empty:
-        raise SystemExit("[overview] events.parquet is empty")
-
-    # --- KPIs snapshot ---
-    kpi = _kpi_snapshot(df, tz=tz)
-    kpi["coverage_last_days_pct"] = _coverage(df, last_days=last_days)
-    kpi["volatility_today_median_bikes_std"] = _volatility_today(df, tz=tz)
-
-    # Write KPI JSON & CSV
-    _write_json(TABLES_DIR / "kpis_today.json", kpi)
-    pd.DataFrame([kpi]).to_csv(TABLES_DIR / "kpis_today.csv", index=False)
-    print("[overview] KPIs written.")
-
-    # --- Day profile chart (Today vs median past weeks on same weekday) ---
-    out_png = FIGS_DIR / "day_profile_today_vs_median.png"
-    build_day_profile_chart(df, tz=tz, out_png=out_png, weeks_back=3)
-    print(f"[overview] Day profile chart → {out_png.resolve()}")
-
-    # --- Optional: Top tension zones table (penury/saturation rates over the last N days) ---
-    if last_days > 0:
-        tmax = df["ts"].max()
-        tmin = tmax - pd.Timedelta(days=last_days)
-        win = df[(df["ts"] > tmin) & (df["ts"] <= tmax)].copy()
-        if not win.empty:
-            # Rates by station
-            by_station = win.groupby("station_id").agg(
-                name=("name", "last"),
-                lat=("lat", "last"),
-                lon=("lon", "last"),
-                n=("ts", "nunique"),
-                penury_rate=("bikes", lambda s: (s == 0).mean()),
-                sat_rate=("docks_avail", lambda s: (s == 0).mean() if s.notna().any() else np.nan),
-                bike_avail_rate=("bikes", lambda s: (s > 0).mean()),
-                dock_avail_rate=("docks_avail", lambda s: (s > 0).mean() if s.notna().any() else np.nan),
-            ).reset_index()
-            by_station = by_station.sort_values(["penury_rate", "sat_rate"], ascending=[False, False])
-            by_station.to_csv(TABLES_DIR / "stations_tension_last_days.csv", index=False)
-            print("[overview] stations_tension_last_days.csv written.")
-
-    # --- Snapshot map (HTML) ---
-    build_snapshot_map(df, out_html=MAPS_DIR / "network_overview.html")
-
-    # --- Small “health” CSVs to assist the markdown page ---
-    # Availability snapshot distribution (counts of penury/saturation/ok)
-    tmax = df["ts"].max()
-    snap = df[df["ts"] == tmax].copy()
-    bikes = (snap["bikes"] > 0)
-    docks = (snap["docks_avail"] > 0) if snap["docks_avail"].notna().any() else pd.Series([np.nan]*len(snap), index=snap.index)
-
+    # Distribution instantanée
     dist = pd.DataFrame({
-        "metric": ["bike_avail", "dock_avail", "penury", "saturation"],
-        "value": [
-            float(bikes.mean() * 100) if len(snap) else np.nan,
-            float(docks.mean() * 100) if docks.notna().any() else np.nan,
-            float((~bikes).mean() * 100) if len(snap) else np.nan,
-            float(((snap["docks_avail"] == 0).mean() * 100) if snap["docks_avail"].notna().any() else np.nan),
-        ]
+        "metric": ["bike_avail","dock_avail","penury","saturation"],
+        "count": [
+            int(has_bike.sum()) if has_bike is not None else 0,
+            int(has_dock.sum()) if has_dock is not None else 0,
+            int(pen.sum()) if pen is not None else 0,
+            int(sat.sum()) if sat is not None else 0,
+        ],
     })
-    dist.to_csv(TABLES_DIR / "snapshot_distribution.csv", index=False)
+    dist["total_active"] = active
+    dist["pct"] = dist.apply(lambda r: safe_ratio(r["count"], r["total_active"]), axis=1)
 
-    print("[overview] Done.")
+    return kpis, dist
+
+def compute_recent_coverage_volatility(df: pd.DataFrame, cols: Cols, tzname: str, last_days: int) -> Tuple[float, float]:
+    if last_days <= 0: return float("nan"), float("nan")
+    df = df.copy()
+    # fenêtre récente
+    ts_local = to_local(df, cols.ts, tzname)
+    tmax = ts_local.max()
+    start = tmax - pd.Timedelta(days=last_days)
+    mask = (ts_local >= start) & (ts_local <= tmax)
+    win = df.loc[mask].copy()
+    if win.empty:
+        return float("nan"), float("nan")
+
+    # couverture = moyenne station de (nb_ts_station / nb_ts_total)
+    total_ts = win[cols.ts].nunique()
+    per_station = (win.groupby(cols.station)[cols.ts].nunique() / max(total_ts,1)).reindex(win[cols.station].unique()).fillna(0.0)
+    coverage_pct = float((per_station.mean() * 100.0).round(2))
+
+    # volatilité intra-journalière (jour local courant)
+    start_day, end_day = today_bounds_local(to_local(df, cols.ts, tzname))
+    today = df[(ts_local >= start_day) & (ts_local < end_day)].copy()
+    vol = (today.groupby(cols.station)[cols.bikes].std(ddof=0)).median()
+    return coverage_pct, float(0.0 if pd.isna(vol) else round(vol, 2))
+
+def compute_today_vs_median_curve(df: pd.DataFrame, cols: Cols, tzname: str, ref_days: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    df = df.copy()
+    ts_loc = to_local(df, cols.ts, tzname)
+    df["_ts_loc"] = ts_loc
+    df["_hhmm"] = df["_ts_loc"].dt.strftime("%H:%M")
+    df["_weekday"] = df["_ts_loc"].dt.weekday
+
+    # ➜ has_bike avant les slices
+    bikes_all = pd.to_numeric(df[cols.bikes], errors="coerce")
+    df["__has_bike"] = bikes_all > 0
+
+    # Aujourd'hui (dernier jour local)
+    start_day, end_day = today_bounds_local(ts_loc)
+    today = df[(ts_loc >= start_day) & (ts_loc < end_day)].copy()
+    if today.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # Fenêtre de référence: ref_days en amont, même weekday que 'today'
+    ref_start = start_day - pd.Timedelta(days=ref_days)
+    ref = df[(ts_loc >= ref_start) & (ts_loc < start_day) & (df["_weekday"] == start_day.weekday())].copy()
+
+    def agg_part_has_bike(d: pd.DataFrame) -> pd.DataFrame:
+        out = (d.groupby(["_ts_loc","_hhmm"])[["__has_bike"]]
+                 .agg(has_bike=("__has_bike", "mean"),
+                      n=("__has_bike", "size"))
+                 .reset_index())
+        out["pct"] = out["has_bike"] * 100.0
+        return out
+
+    today_curve = agg_part_has_bike(today)
+    ref_curve = agg_part_has_bike(ref)
+
+    # Médiane par hh:mm sur la ref (série)
+    ref_med_series = ref_curve.groupby("_hhmm")["pct"].median()
+
+    # Reindexer sur les 96 quarts d'heure pour éviter une ligne vide
+    bins = pd.Index(pd.date_range("00:00", "23:45", freq="15min").strftime("%H:%M"))
+    ref_med_series = ref_med_series.reindex(bins)
+
+    # -> DataFrame propre avec noms robustes
+    ref_median = ref_med_series.reset_index()
+    # les deux colonnes issues de reset_index() : [index, pct] ou similaire
+    c0, c1 = ref_median.columns[0], ref_median.columns[1]
+    ref_median = ref_median.rename(columns={c0: "_hhmm", c1: "pct_median"})
+
+    # Aligner et ordonner
+    today_curve = today_curve.merge(ref_median, on="_hhmm", how="left").sort_values("_hhmm")
+    ref_median = ref_median.sort_values("_hhmm")
+
+    # Debug
+    nunique_days = ref["_ts_loc"].dt.normalize().nunique()
+    non_nan = int(ref_median["pct_median"].notna().sum())
+    print(f"[overview] ref jours distincts (meme weekday) = {nunique_days}, bins mediane non-NaN = {non_nan}/96")
+
+
+    return today_curve, ref_median
+
+
+def save_day_profile_plot(today_curve: pd.DataFrame, ref_median: pd.DataFrame, out_path: Path) -> None:
+    fig = plt.figure(figsize=(9, 4))
+
+    if today_curve.empty:
+        plt.text(0.5, 0.5, "Données insuffisantes pour 'aujourd’hui'", ha="center", va="center")
+        plt.axis("off")
+        fig.tight_layout()
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        return
+
+    x = today_curve["_hhmm"].tolist()
+    y_today = today_curve["pct"].tolist()
+
+    # mapping médiane
+    ref_map = {}
+    if not ref_median.empty and "pct_median" in ref_median.columns:
+        ref_map = dict(zip(ref_median["_hhmm"], ref_median["pct_median"]))
+    y_ref = [ref_map.get(k, np.nan) for k in x]
+    ref_valid = np.isfinite(y_ref).sum()
+
+    plt.plot(x, y_today, label="Aujourd’hui (≥1 vélo)", linewidth=2)
+    if ref_valid > 0:
+        plt.plot(x, y_ref, linestyle="--", label="Médiane (mêmes jours)")
+    else:
+        plt.annotate("Médiane indisponible (historique insuffisant)",
+                     xy=(0.02, 0.92), xycoords="axes fraction", fontsize=9)
+
+    plt.ylim(0, 100)
+    plt.xticks(np.linspace(0, len(x)-1, 9))
+    plt.ylabel("% stations avec ≥1 vélo")
+    plt.xlabel("Heure (locale)")
+    plt.title("Aujourd’hui vs médiane (mêmes jours)")
+    plt.legend()
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def build_map(snapshot: pd.DataFrame, cols: Cols, out_html: Path) -> None:
+    lat_col, lon_col = cols.lat, cols.lon
+    if lat_col is None or lon_col is None or lat_col not in snapshot.columns or lon_col not in snapshot.columns:
+        with open(out_html, "w", encoding="utf-8") as f:
+            f.write("<html><body><p>Carte non disponible (lat/lon manquantes).</p></body></html>")
+        return
+
+    bikes = pd.to_numeric(snapshot[cols.bikes], errors="coerce")
+    docks_col = cols.docks_avail
+    if docks_col is None and cols.capacity:
+        docks = (pd.to_numeric(snapshot[cols.capacity], errors="coerce") - bikes).clip(lower=0)
+        snapshot["__docks_avail"] = docks
+        docks_col = "__docks_avail"
+
+    has_docks = bool(docks_col and docks_col in snapshot.columns)
+
+    pen = (bikes == 0)
+    sat = (snapshot[docks_col] == 0) if has_docks else pd.Series(False, index=snapshot.index)
+
+    lat0 = float(snapshot[lat_col].median())
+    lon0 = float(snapshot[lon_col].median())
+
+    m = folium.Map(location=[lat0, lon0], zoom_start=12, tiles="cartodbpositron")
+
+    for _, row in snapshot.iterrows():
+        lat = float(row[lat_col]); lon = float(row[lon_col])
+        name = str(row[cols.name]) if cols.name and cols.name in snapshot.columns else str(row[cols.station])
+        b = int(pd.to_numeric(row[cols.bikes], errors="coerce"))
+        d = int(pd.to_numeric(row[docks_col], errors="coerce")) if has_docks else None
+        color = "red" if b == 0 else ("black" if (d == 0 if d is not None else False) else "blue")
+        html = f"<b>{name}</b><br/>bikes={b}" + (f" · docks_avail={d}" if d is not None else "")
+        folium.CircleMarker([lat, lon], radius=4, color=color, fill=True, fill_opacity=0.7, weight=0.5,
+                            popup=folium.Popup(html, max_width=250)).add_to(m)
+
+
+    # --- Légende simple (compat large) ---
+    from branca.element import Element
+
+    legend_items = []
+    legend_items.append(("<span style='background:red'></span> Pénurie (0 vélo)"))
+    if has_docks:
+        legend_items.append(("<span style='background:black'></span> Saturation (0 place)"))
+    legend_items.append(("<span style='background:blue'></span> OK / autre"))
+
+    legend_html = f"""
+    <style>
+      .map-legend {{
+        position: fixed; bottom: 24px; left: 24px; z-index: 9999;
+        background: #fff; padding: 8px 10px; border: 1px solid #bbb;
+        border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.1);
+        font: 12px/1.3 -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif;
+      }}
+      .map-legend .row {{ display: flex; align-items: center; margin: 3px 0; }}
+      .map-legend .dot {{
+        display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px;
+      }}
+      .map-legend .dot.red {{ background:red; }}
+      .map-legend .dot.black {{ background:black; }}
+      .map-legend .dot.blue {{ background:blue; }}
+    </style>
+    <div class="map-legend">
+      <div style="font-weight:600; margin-bottom:4px;">Légende</div>
+      <div class="row"><span class="dot red"></span>Pénurie (0 vélo)</div>
+      {('<div class="row"><span class="dot black"></span>Saturation (0 place)</div>' if has_docks else '')}
+      <div class="row"><span class="dot blue"></span>OK / autre</div>
+    </div>
+    """
+    m.get_root().html.add_child(Element(legend_html))
+    # -------------------------------------
+
+    m.save(str(out_html))
+
+
+# -------------------------- Rendu Markdown --------------------------
+
+MD_TEMPLATE = """# Aperçu du réseau
+
+Cette page donne un **coup d’œil instantané** à la santé du réseau (snapshot le plus récent) et situe la **journée en cours** par rapport aux semaines précédentes.
+
+## KPIs (snapshot {ts_local})
+- **Stations actives** : **{stations_active}** / **{stations_universe}** (offline : {stations_offline})
+- **Disponibilité vélo** : **{availability_bike_pct:.2f}%**
+- **Disponibilité place** : **{availability_dock_pct:.2f}%**  
+- **Taux de pénurie** : **{penury_pct:.2f}%** · **Taux de saturation** : **{saturation_pct:.2f}%**
+- **Couverture récente** (sur {last_days} j) : **{coverage_pct:.2f}%**
+- **Volatilité intra-journée** (écart-type vélos / station, médiane) : **{volatility_today:.2f}**
+
+---
+
+## Carte instantanée (pénurie / saturation)
+<div style="margin: 0.5rem 0;">
+  <iframe src="{map_rel}" style="width:100%;height:520px;border:0" loading="lazy" title="Carte instantanée du réseau"></iframe>
+</div>
+
+---
+
+## KPIs du jour vs J-7 / J-14 / J-21
+![KPIs du jour vs lags]({kpi_fig_rel})
+
+> Comparaison des **parts de stations** (sur la **journée locale entière**) :  
+> disponibilité vélo/place, pénurie, saturation. Les barres J-7/J-14/J-21
+> sont calculées sur les journées locales correspondantes.
+
+---
+
+## Courbe « Aujourd’hui vs médiane (mêmes jours) »
+![Courbe jour]({fig_rel})
+
+> La courbe trace la **part de stations** avec ≥1 vélo à chaque **hh:mm locale** pour **aujourd’hui**, et la compare à la **médiane** des mêmes jours sur {ref_days} jours.
+
+---
+
+## Tables d’appui
+- KPIs (CSV/JSON) :  
+  - `{kpis_csv_rel}`  
+  - `{kpis_json_rel}`
+- Distribution instantanée : `{dist_csv_rel}`
+- Stations en tension (sur {last_days} j) : `{tension_csv_rel}`
+
+---
+
+## Méthodologie (résumé)
+- **Source** : `docs/exports/events.parquet` (timestamps **15 min** UTC naïfs).  
+- **Snapshot** : dernier `ts` ; pénurie = `bikes == 0` ; saturation = `docks_avail == 0` (ou `capacity - bikes == 0` si `docks_avail` absent).  
+- **Couverture** : moyenne station de `#ts_observés / #ts_total` sur la fenêtre **{last_days} jours**.  
+- **Volatilité** : écart-type des vélos par station sur la **journée locale courante**, médiane des stations.  
+- **Courbe** : part(≥1 vélo) par hh:mm pour aujourd’hui vs **médiane** des mêmes **weekday** sur **{ref_days} jours**.
+
+> Limites : si `docks_avail` n’est pas disponible, les métriques “place/saturation” sont approximées via `capacity - bikes`.
+
+"""
+
+# -------------------------- Main --------------------------
+
+def compute_daily_kpis_for_day(df: pd.DataFrame, cols: Cols, tzname: str, day_start_local: pd.Timestamp) -> dict:
+    ts_loc = to_local(df, cols.ts, tzname)
+    day_end = day_start_local + pd.Timedelta(days=1)
+    d = df[(ts_loc >= day_start_local) & (ts_loc < day_end)].copy()
+    if d.empty:
+        return {"avail_bike": np.nan, "avail_dock": np.nan, "pen": np.nan, "sat": np.nan}
+
+    b = pd.to_numeric(d[cols.bikes], errors="coerce")
+    has_bike = (b > 0)
+
+    docks = None
+    if cols.docks_avail and cols.docks_avail in d.columns:
+        docks = pd.to_numeric(d[cols.docks_avail], errors="coerce")
+    elif cols.capacity and cols.capacity in d.columns:
+        docks = (pd.to_numeric(d[cols.capacity], errors="coerce") - b).clip(lower=0)
+
+    has_dock = (docks > 0) if docks is not None else None
+    pen = (b == 0)
+    sat = (docks == 0) if docks is not None else None
+
+    return {
+        "avail_bike": float((has_bike.mean() * 100.0).round(2)),
+        "avail_dock": float((has_dock.mean() * 100.0).round(2)) if has_dock is not None else np.nan,
+        "pen":        float((pen.mean() * 100.0).round(2)),
+        "sat":        float((sat.mean() * 100.0).round(2)) if sat is not None else np.nan,
+    }
+
+def save_kpi_bars_today_vs_lags(k_today: dict, k_lags: dict, out_path: Path) -> None:
+    metrics = [("avail_bike","Disponibilité vélo"), ("avail_dock","Disponibilité place"),
+               ("pen","Pénurie"), ("sat","Saturation")]
+    labels = ["Aujourd'hui","J-7","J-14","J-21"]
+
+    data = []
+    for key, _ in metrics:
+        row = [k_today.get(key, np.nan),
+               k_lags.get("J-7", {}).get(key, np.nan),
+               k_lags.get("J-14", {}).get(key, np.nan),
+               k_lags.get("J-21", {}).get(key, np.nan)]
+        data.append(row)
+
+    x = np.arange(len(metrics)); w = 0.2
+    fig = plt.figure(figsize=(9, 3.8))
+    for i, lab in enumerate(labels):
+        vals = [data[m][i] for m in range(len(metrics))]
+        plt.bar(x + (i-1.5)*w, vals, width=w, label=lab)
+
+    plt.xticks(x, [m[1] for m in metrics])
+    plt.ylabel("% (part de stations)")
+    plt.title("KPIs du jour vs J-7 / J-14 / J-21")
+    plt.legend(ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.15))
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_today_sparkline(today_curve: pd.DataFrame, out_path: Path) -> None:
+    fig = plt.figure(figsize=(9, 1.8))
+    if not today_curve.empty:
+        plt.plot(today_curve["_hhmm"], today_curve["pct"])
+        plt.fill_between(np.arange(len(today_curve)), today_curve["pct"], alpha=0.1)
+        plt.ylim(0, 100)
+        plt.xticks([], []); plt.yticks([], [])
+    else:
+        plt.text(0.5, 0.5, "Pas de données pour aujourd'hui", ha="center", va="center")
+        plt.axis("off")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def main(events_path: Path, tzname: str, last_days: int, ref_days: int) -> None:
+    if not events_path.exists():
+        raise FileNotFoundError(f"[overview] Introuvable: {events_path}")
+
+    # Lecture minimale
+    df = pd.read_parquet(events_path)
+    cols = detect_columns(df)
+
+    # Univers de stations = stations vues sur la fenêtre (ref) pour robustesse
+    ts_loc_all = to_local(df, cols.ts, tzname)
+    tmax = ts_loc_all.max()
+    uni_start = tmax - pd.Timedelta(days=max(last_days, ref_days, 7))
+    station_universe = (
+        df.loc[(ts_loc_all >= uni_start) & (ts_loc_all <= tmax), cols.station]
+        .astype(str).dropna().unique().tolist()
+    )
+
+    # KPIs snapshot + distribution
+    kpis, dist = compute_snapshot_kpis(df, cols, tzname, station_universe)
+
+    # Couverture & Volatilité
+    coverage_pct, volatility_today = compute_recent_coverage_volatility(df, cols, tzname, last_days)
+    kpis["coverage_pct"] = coverage_pct
+    kpis["volatility_today"] = volatility_today
+    kpis["last_days"] = last_days
+    kpis["ref_days"] = ref_days
+
+    # Sauvegarde tables KPI
+    kpis_csv = TABLES / "kpis_today.csv"
+    kpis_json = TABLES / "kpis_today.json"
+    pd.DataFrame([kpis]).to_csv(kpis_csv, index=False)
+    with open(kpis_json, "w", encoding="utf-8") as f:
+        json.dump(kpis, f, ensure_ascii=False, indent=2)
+
+    dist_csv = TABLES / "snapshot_distribution.csv"
+    dist.to_csv(dist_csv, index=False)
+
+    # Stations en tension sur last_days
+    ts_loc = to_local(df, cols.ts, tzname)
+    start_ld = tmax - pd.Timedelta(days=last_days)
+    win = df[(ts_loc >= start_ld) & (ts_loc <= tmax)].copy()
+    # pénurie / saturation par station
+    pen_rate = win.groupby(cols.station)[cols.bikes].apply(lambda s: (pd.to_numeric(s, errors="coerce") == 0).mean())
+    if cols.docks_avail and cols.docks_avail in win.columns:
+        sat_rate = win.groupby(cols.station)[cols.docks_avail].apply(lambda s: (pd.to_numeric(s, errors="coerce") == 0).mean())
+    elif cols.capacity and cols.capacity in win.columns:
+        cap = pd.to_numeric(win[cols.capacity], errors="coerce")
+        bks = pd.to_numeric(win[cols.bikes], errors="coerce")
+        sat_rate = ((cap - bks) <= 0).groupby(win[cols.station]).mean()
+    else:
+        sat_rate = pd.Series(np.nan, index=pen_rate.index)
+
+    tension = pd.DataFrame({
+        "station_id": pen_rate.index.astype(str),
+        "penury_rate": pen_rate.values,
+        "saturation_rate": sat_rate.values,
+    }).sort_values(["penury_rate","saturation_rate"], ascending=False)
+    tension_csv = TABLES / "stations_tension_last_days.csv"
+    tension.to_csv(tension_csv, index=False)
+
+    # Courbe Aujourd'hui vs médiane
+    today_curve, ref_med = compute_today_vs_median_curve(df, cols, tzname, ref_days)
+    fig_path = FIGS / "day_profile_today_vs_median.png"
+    save_day_profile_plot(today_curve, ref_med, fig_path)
+
+    # Jour local courant (début de journée)
+    start_day, end_day = today_bounds_local(ts_loc_all)
+
+    # KPIs journaliers (moyenne sur toute la journée locale)
+    k_today = compute_daily_kpis_for_day(df, cols, tzname, start_day)
+    k_lags = {}
+    for dlag, label in [(7,"J-7"), (14,"J-14"), (21,"J-21")]:
+        k_lags[label] = compute_daily_kpis_for_day(df, cols, tzname, start_day - pd.Timedelta(days=dlag))
+
+    fig_kpis = FIGS / "kpis_today_vs_lags.png"
+    save_kpi_bars_today_vs_lags(k_today, k_lags, fig_kpis)
+
+    # Carte snapshot
+    last_ts = df[cols.ts].max()
+    snapshot = df[df[cols.ts] == last_ts].copy()
+    map_html = MAPS / "network_overview.html"
+    build_map(snapshot, cols, map_html)
+
+    # --------------------- Rendu Markdown avec injection ---------------------
+    md = MD_TEMPLATE.format(
+        ts_local=kpis["snapshot_ts_local"],
+        stations_active=kpis["stations_active"],
+        stations_universe=kpis["stations_universe"],
+        stations_offline=kpis["stations_offline"],
+        availability_bike_pct=kpis["availability_bike_pct"] if not pd.isna(kpis["availability_bike_pct"]) else float("nan"),
+        availability_dock_pct=kpis["availability_dock_pct"] if not pd.isna(kpis["availability_dock_pct"]) else float("nan"),
+        penury_pct=kpis["penury_pct"] if not pd.isna(kpis["penury_pct"]) else float("nan"),
+        saturation_pct=kpis["saturation_pct"] if not pd.isna(kpis["saturation_pct"]) else float("nan"),
+        coverage_pct=kpis["coverage_pct"] if not pd.isna(kpis["coverage_pct"]) else float("nan"),
+        volatility_today=kpis["volatility_today"] if not pd.isna(kpis["volatility_today"]) else float("nan"),
+        last_days=last_days,
+        ref_days=ref_days,
+        map_rel=rel_from_md(OUT_MD, map_html),
+        kpi_fig_rel=rel_from_md(OUT_MD, fig_kpis),
+        fig_rel=rel_from_md(OUT_MD, fig_path),
+        kpis_csv_rel=rel_from_md(OUT_MD, kpis_csv),
+        kpis_json_rel=rel_from_md(OUT_MD, kpis_json),
+        dist_csv_rel=rel_from_md(OUT_MD, dist_csv),
+        tension_csv_rel=rel_from_md(OUT_MD, tension_csv),
+    )
+
+    with open(OUT_MD, "w", encoding="utf-8", newline="\n") as f:
+        f.write(md)
+
+    print(f"[overview] OK -> {OUT_MD}")
+    print(f"[overview] figs -> {fig_path}")
+    print(f"[overview] map  -> {map_html}")
+    print(f"[overview] tables -> {TABLES}")
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Build 'Network / Overview' assets from events.parquet")
-    ap.add_argument("--events", type=Path, required=True, help="Path to docs/exports/events.parquet")
-    ap.add_argument("--last-days", type=int, default=7, help="Window for recent KPIs (coverage, tension tables)")
-    ap.add_argument("--tz", type=str, default=None, help="Display timezone (data stays UTC)")
+    ap = argparse.ArgumentParser(description="Build Réseau / Aperçu (KPIs, carte, figures, MD)")
+    ap.add_argument("--events", type=Path, default=DOCS / "exports" / "events.parquet", help="Chemin vers events.parquet")
+    ap.add_argument("--tz", type=str, default="Europe/Paris", help="Timezone locale (ex: Europe/Paris)")
+    ap.add_argument("--last-days", type=int, default=7, help="Fenêtre récente (jours) pour la couverture/volatilité et stations en tension")
+    ap.add_argument("--ref-days", type=int, default=28, help="Fenêtre de référence (jours) pour la médiane (mêmes weekdays)")
     args = ap.parse_args()
-    main(events_path=args.events, last_days=args.last_days, tz=args.tz)
+
+    print(f"[overview] start events={args.events} tz={args.tz} last_days={args.last_days} ref_days={args.ref_days}")
+    try:
+        main(args.events, args.tz, args.last_days, args.ref_days)
+    except Exception as e:
+        import traceback
+        print("[overview] FATAL:", e)
+        traceback.print_exc()
+        raise
