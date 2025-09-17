@@ -59,89 +59,86 @@ Public GBFS snapshots → normalized 15‑min aggregates → **features & model 
 
 ```mermaid
 flowchart LR
-  %% ========== INGESTION & WAREHOUSE ==========
-  A[GBFS ingestion\nsrc/ingest.py\n(chaque 15 min)]
-  B[DuckDB snapshots\nwarehouse.duckdb]
-  C[Agrégation 15 min + météo\nsrc/aggregate.py]
-  D[Export canonique\n→ docs/exports/velib.parquet (+ CSV)]
 
-  %% ========== NORMALISATION & CIBLES ==========
-  E[Normalization\ntools/datasets.py]
-  EV[events.parquet\n(ts, station_id, bikes, capacity, occ, lat, lon, name)]
-  PF[perf.parquet\n(ts, station_id, y_true, y_pred_baseline, y_pred?, horizon_min)]
+  %% ===== Ingestion & Warehouse =====
+  A[GBFS ingestion<br/>src/ingest.py<br/>(every 15 min)]
+  B[DuckDB snapshots<br/>warehouse.duckdb]
+  C[15-min aggregation + weather<br/>src/aggregate.py]
+  D[Canonical export<br/>docs/exports/velib.parquet (+ CSV)]
 
-  %% ========== MODÈLE ==========
-  G[Feature builder\n(src/features, src/cal_features)]
-  H[Entraînement LightGBM\n(h=60 min)]
-  I[models/lgb_nbvelos_T+60min.joblib]
-  J[Baseline persistance\n(implicit dans perf.parquet)]
-  M[Injection prédictions\ntools/apply_model.py\n→ met à jour y_pred dans perf.parquet]
+  %% ===== Normalization & Targets =====
+  E[Normalization<br/>tools/datasets.py]
+  EV[events.parquet<br/>ts, station_id, bikes, capacity, occ, lat, lon, name]
+  PF[perf.parquet<br/>ts, station_id, y_true, y_pred_baseline, y_pred?, horizon_min]
 
-  %% ========== PAGES : RÉSEAU ==========
-  subgraph R[Réseau]
-    RO[build_network_overview.py\nKPIs + carte + courbes]
-    RS[build_network_stations.py\nTable + clustering]
-    RD[build_network_dynamics.py\nHeatmaps h×j, tension]
+  %% ===== Model =====
+  G[Feature builder<br/>(src/features, src/cal_features)]
+  H[Train LightGBM<br/>(h = 60 min)]
+  I[Model bundle<br/>models/lgb_nbvelos_T+60min.joblib]
+  M[Inject predictions<br/>tools/apply_model.py → perf.y_pred]
+
+  %% ===== Pages: Network =====
+  subgraph R[Network]
+    RO[build_network_overview.py<br/>KPIs + map + curves]
+    RS[build_network_stations.py<br/>Table + clustering]
+    RD[build_network_dynamics.py<br/>Heatmaps h×j, tension]
   end
 
-  %% ========== PAGES : MODÈLE ==========
-  subgraph MO[Modèle]
-    MP[build_model_performance.py\nMAE/RMSE, lift, obs vs pred]
-    ML[build_model_pipeline.py\nDonnées, features, validation]
-    MX[build_model_explainability.py\nRésidus, importance, calibration]
+  %% ===== Pages: Model =====
+  subgraph MO[Model]
+    MP[build_model_performance.py<br/>MAE/RMSE, lift, obs vs pred]
+    ML[build_model_pipeline.py<br/>Data, features, validation]
+    MX[build_model_explainability.py<br/>Residuals, importance, calibration]
   end
 
-  %% ========== PAGES : MONITORING ==========
+  %% ===== Pages: Monitoring =====
   subgraph MON[Monitoring]
-    MDH[build_monitoring_data_health.py\nFraîcheur, complétude, schéma]
-    MDR[build_monitoring_drift.py\nPSI/K–S (features & cible)]
-    MMH[build_monitoring_model_health.py\nMAE/lift/calibration/couverture]
+    MDH[build_monitoring_data_health.py<br/>Freshness, completeness, schema]
+    MDR[build_monitoring_drift.py<br/>PSI/K–S (features & target)]
+    MMH[build_monitoring_model_health.py<br/>MAE/lift/calibration/coverage]
   end
 
-  %% ========== PAGES : DONNÉES ==========
-  subgraph DA[Données]
-    DE[build_data_exports.py\nCatalogue exports]
-    DD[build_data_dictionary.py\nDictionnaire & schéma]
-    DM[build_data_methodology.py\nMéthodologie & licences]
+  %% ===== Pages: Data =====
+  subgraph DA[Data]
+    DE[build_data_exports.py<br/>Exports catalog]
+    DD[build_data_dictionary.py<br/>Dictionary & schema]
+    DM[build_data_methodology.py<br/>Methodology & licenses]
   end
 
-  %% ========== ASSETS & SITE ==========
-  X[docs/assets\n(figs, tables, maps)]
-  K[Site MkDocs → gh-pages]
-  L[App Streamlit (option)\napp/streamlit_app.py]
+  %% ===== Assets & Site =====
+  X[docs/assets<br/>(figs, tables, maps)]
+  K[MkDocs → gh-pages]
+  L[Streamlit app (opt)<br/>app/streamlit_app.py]
 
-  %% ========== CI / AUTOMATION ==========
-  CI1[velib-ingest\n(15 min)]
-  CI2[velib-train\n(quotidien)]
-  CI3[monitoring-site\n(4×/j 00·06·12·18 UTC)]
-  T[check_retrain.py\nRègles: PSI↑ or MAE_24h↑ → retrain?]
+  %% ===== CI / Automation =====
+  CI1[velib-ingest<br/>(15 min)]
+  CI2[velib-train<br/>(daily)]
+  CI3[monitoring-site<br/>(4×/day 00·06·12·18 UTC)]
+  T[check_retrain.py<br/>PSI↑ or MAE_24h↑ → retrain?]
 
-  %% Flux
+  %% Flows
   A --> B --> C --> D
   D --> E --> EV
   E --> PF
   EV --> G
   PF --> G
   G --> H --> I
-  H --> J
   I --> M
   EV --> M
   PF --> M
 
-  %% Génération des pages (lecture events/perf)
+  %% Pages read from events/perf
   EV --> RO
   EV --> RS
   EV --> RD
-
   PF --> MP
   D  --> ML
   PF --> MX
-
   EV --> MDH
   EV --> MDR
   PF --> MMH
 
-  %% Assets
+  %% Assets & site
   RO --> X
   RS --> X
   RD --> X
@@ -154,11 +151,9 @@ flowchart LR
   DE --> X
   DD --> X
   DM --> X
-
-  %% Build site
   X --> K
 
-  %% App (option)
+  %% App
   D --> L
   I --> L
 
