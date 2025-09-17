@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#valibatm-paris-a-forecast-batch" class="md-skip">
+        <a href="#velib-paris-forecast-batch" class="md-skip">
           Aller au contenu
         </a>
       
@@ -258,6 +258,19 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Accueil
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="." class="md-nav__link md-nav__link--active">
         
   
@@ -269,6 +282,52 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table des matières">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table des matières
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#acces-rapide" class="md-nav__link">
+    <span class="md-ellipsis">
+      Accès rapide
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-savoir" class="md-nav__link">
+    <span class="md-ellipsis">
+      À savoir
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sources" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sources
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -850,6 +909,41 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table des matières
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#acces-rapide" class="md-nav__link">
+    <span class="md-ellipsis">
+      Accès rapide
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-savoir" class="md-nav__link">
+    <span class="md-ellipsis">
+      À savoir
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sources" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sources
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -867,10 +961,54 @@
   
 
 
-<h1 id="valibatm-paris-a-forecast-batch">VÃ©libâ€™ Paris â€” Forecast (Batch)<a class="headerlink" href="#valibatm-paris-a-forecast-batch" title="Permanent link">&para;</a></h1>
-<p>Ce site documente lâ€™<strong>usage du rÃ©seau</strong>, le <strong>modÃ¨le de prÃ©vision</strong>, le <strong>monitoring</strong> et les <strong>exports</strong>.
-Les figures et tableaux sont rÃ©gÃ©nÃ©rÃ©s rÃ©guliÃ¨rement.</p>
-<p><strong>DerniÃ¨re mise Ã  jour des assets :</strong> 2025-09-17 01:33</p>
+<h1 id="velib-paris-forecast-batch">Vélib’ Paris — Forecast (Batch)<a class="headerlink" href="#velib-paris-forecast-batch" title="Permanent link">&para;</a></h1>
+<p>Petit portail de <strong>suivi du réseau</strong>, <strong>performances du modèle</strong> et <strong>qualité des données</strong>.<br />
+Tout est recalculé à partir des exports locaux (bin <strong>15 min</strong>, <strong>UTC</strong> côté fichiers ; les pages affichent en <strong>heure de Paris</strong>).</p>
+<hr />
+<h2 id="acces-rapide">Accès rapide<a class="headerlink" href="#acces-rapide" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Réseau</strong></li>
+<li>🔎 <a href="network/overview/">Aperçu du réseau</a> — KPIs du jour, carte pénurie/saturation, journée vs médiane</li>
+<li>🧭 <a href="network/stations/">Stations &amp; profils</a> — table filtrable, fiches station, clustering expliqué</li>
+<li>
+<p>🌊 <a href="network/dynamics/">Dynamiques spatio-temporelles</a> — heatmaps h×j, tension, saisonnalités</p>
+</li>
+<li>
+<p><strong>Modèle</strong></p>
+</li>
+<li>📊 <a href="model/performance/">Performance &amp; baseline</a> — MAE/RMSE, lift vs persistance, découpages</li>
+<li>🛠️ <a href="model/pipeline/">Pipeline &amp; features</a> — données d’entrée, lags/rollings, validation temporelle</li>
+<li>
+<p>🔍 <a href="model/explainability/">Explicabilité &amp; calibration</a> — importance, PDP/ICE, calibration, incertitudes</p>
+</li>
+<li>
+<p><strong>Monitoring</strong></p>
+</li>
+<li>🩺 <a href="monitoring/data-health/">Santé des données</a> — fraîcheur, complétude, schéma, anomalies</li>
+<li>🔀 <a href="monitoring/drift/">Drift des données</a> — PSI/K–S, segments, tendances lissées</li>
+<li>
+<p>⚖️ <a href="monitoring/model-health/">Santé du modèle</a> — dérives de performance, couverture, règles d’alerte</p>
+</li>
+<li>
+<p><strong>Données</strong></p>
+</li>
+<li>📦 <a href="data/exports/">Exports</a> — fichiers publiés &amp; contrat minimal</li>
+<li>📚 <a href="data/dictionary/">Dictionnaire &amp; schéma</a> — types, unités, contraintes, validations</li>
+<li>📑 <a href="data/methodology/">Méthodologie &amp; licences</a> — fabrication, versionnage, usages</li>
+</ul>
+<hr />
+<h2 id="a-savoir">À savoir<a class="headerlink" href="#a-savoir" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Horodatage</strong> : les fichiers sont en <strong>UTC</strong> (arrondis :00/:15/:30/:45). Les pages affichent en <strong>Europe/Paris</strong>.  </li>
+<li><strong>Horizon par défaut</strong> : 60 min (persistance comme baseline).  </li>
+<li><strong>Clés</strong> : <code>(ts, station_id)</code> unique dans <code>events.parquet</code> et <code>perf.parquet</code>.</li>
+</ul>
+<hr />
+<h2 id="sources">Sources<a class="headerlink" href="#sources" title="Permanent link">&para;</a></h2>
+<ul>
+<li>💻 Code : <a href="https://github.com/Adrien-1997/bike-forecast-paris-velib">repo GitHub</a>  </li>
+<li>📄 Exports locaux : <code>docs/exports/</code> (non versionnés)</li>
+</ul>
 
 
 
