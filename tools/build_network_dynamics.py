@@ -21,20 +21,6 @@ import os, locale
 # Encodage de sortie : prend PYTHONIOENCODING si présent, sinon encodage Windows (CP-1252)
 ENC = os.environ.get("PYTHONIOENCODING") or locale.getpreferredencoding(False) or "cp1252"
 
-# Remplacements de caractères non sûrs pour CP-1252 / consoles Windows
-_REPL = {
-    "→": "->",
-    "—": "-",  "–": "-",
-    "’": "'",  "“": '"', "”": '"',
-    "≥": ">=", "≤": "<=",
-    "…": "...",
-    "×": "x",   # optionnel
-    " ": " ",   # NBSP -> espace
-}
-def normalize_text(s: str) -> str:
-    for a, b in _REPL.items():
-        s = s.replace(a, b)
-    return s
 
 # --------------------------- Paths & constants ---------------------------
 
@@ -507,7 +493,7 @@ def _by_zone(df: pd.DataFrame, last_days: int) -> pd.DataFrame:
     tmin = tmax - pd.Timedelta(days=last_days)
     win = df[(df["ts"] >= tmin) & (df["ts"] <= tmax)].copy()
 
-    # Capacité estimée → joindre proprement (assure la présence de cap_est)
+    # Capacité estimée joindre proprement (assure la présence de cap_est)
     cap = _estimate_capacity(win)
     win = _attach_cap_est(win, cap)
     if "cap_est" not in win.columns:
@@ -598,9 +584,9 @@ Mettre en évidence les **rythmes** et **déplacements de pression** dans la vil
 ### Analyses proposées
 - **Heatmaps h×j** (par station et agrégées) : intensité des vélos disponibles ou du taux de pénurie, par heure du jour et jour de semaine.  
 - **Saisonnalité courte/longue** :  
-  - **Intra-semaine** (lundi→dimanche) : comparaison des profils typiques.  
+  - **Intra-semaine** (lundi -> dimanche) : comparaison des profils typiques.  
   - **Intra-année** (si historique suffisant) : effet météo/vacances (qualitatif), glissements de pics.  
-- **Cartes temporelles animées** (ou séquences d’instantanés) pour suivre la **vague de saturation → pénurie** sur une journée type.  
+- **Cartes temporelles animées** (ou séquences d’instantanés) pour suivre la **vague de saturation -> pénurie** sur une journée type.  
 - **Flux intra-urbains (qualitatif)** : lecture conjointe des zones qui passent de saturation à pénurie avec un décalage horaire (indication de “courant” de déplacement).
 
 ### Indicateurs & méthodes
@@ -665,7 +651,7 @@ def run(events_path: Path, last_days: int, tz: Optional[str]) -> None:
     df = _read_events(events_path)
     msg = (f"[dynamics] events: {len(df):,} rows, stations={df['station_id'].nunique()}  "
         f"span=({df['ts'].min()} -> {df['ts'].max()})")
-    print(normalize_text(msg))
+    print(msg)
 
 
     # Heatmaps + pivots h×j
@@ -677,23 +663,23 @@ def run(events_path: Path, last_days: int, tz: Optional[str]) -> None:
     # Tables
     ti = _tension_index_by_station(df, last_days=last_days)
     ti.to_csv(TABLES_DIR / "tension_by_station.csv", index=False)
-    print(f"[dynamics] tension_by_station: {len(ti)} rows → {TABLES_DIR/'tension_by_station.csv'}")
+    print(f"[dynamics] tension_by_station: {len(ti)} rows -> {TABLES_DIR/'tension_by_station.csv'}")
 
     reg = _regularity_today(df, tz=tz)
     reg.to_csv(TABLES_DIR / "regularity_today.csv", index=False)
-    print(f"[dynamics] regularity_today: {len(reg)} rows → {TABLES_DIR/'regularity_today.csv'}")
+    print(f"[dynamics] regularity_today: {len(reg)} rows -> {TABLES_DIR/'regularity_today.csv'}")
 
     epi = _episodes(df, last_days=last_days)
     epi.to_csv(TABLES_DIR / "episodes.csv", index=False)
-    print(f"[dynamics] episodes: {len(epi)} rows → {TABLES_DIR/'episodes.csv'}")
+    print(f"[dynamics] episodes: {len(epi)} rows -> {TABLES_DIR/'episodes.csv'}")
 
     _by = _by_zone(df, last_days=last_days)
     _by.to_csv(TABLES_DIR / "by_zone.csv", index=False)
-    print(f"[dynamics] by_zone: {len(_by)} rows → {TABLES_DIR/'by_zone.csv'}")
+    print(f"[dynamics] by_zone: {len(_by)} rows -> {TABLES_DIR/'by_zone.csv'}")
 
     _temporal_map_last_day(df, tz=tz)
     if HAS_FOLIUM:
-        print(normalize_text(f"[dynamics] map -> {MAPS_DIR/'network_lastday.html'}"))
+        print(f"[dynamics] map -> {MAPS_DIR/'network_lastday.html'}")
 
 
     # --- Render Markdown page (page 1) ---
@@ -711,7 +697,6 @@ def run(events_path: Path, last_days: int, tz: Optional[str]) -> None:
         episodes_csv_rel=rel_from_md(OUT_MD, TABLES_DIR / "episodes.csv"),
         byzone_csv_rel=rel_from_md(OUT_MD, TABLES_DIR / "by_zone.csv"),
     )
-    md = normalize_text(md)  # supprime flèches “→”, tirets longs, ≥, etc.
     with open(OUT_MD, "w", encoding=ENC, newline="\n") as f:  # plus de "utf-8" forcé
         f.write(md)
     print(f"[dynamics] md  -> {OUT_MD} (encoding={ENC})")
