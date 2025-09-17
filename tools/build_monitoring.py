@@ -58,7 +58,7 @@ def run(cmd: List[object]) -> None:
     """Run a mandatory step; raise on non-zero exit."""
     cmd = _as_str_list(cmd)
     print("[RUN]", " ".join(cmd))
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding="cp1252", errors="replace")
     if res.stdout:
         print(res.stdout.rstrip())
     if res.returncode != 0:
@@ -71,7 +71,7 @@ def run_optional(cmd: List[object]) -> None:
     """Run a non-blocking step; log failure but continue."""
     cmd = _as_str_list(cmd)
     print("[RUN-OPTIONAL]", " ".join(cmd))
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding="cp1252", errors="replace")
     if res.stdout:
         print(res.stdout.rstrip())
     if res.returncode != 0:
@@ -106,7 +106,7 @@ def _assert_model_written(perf_path: Path) -> None:
                 * 100.0
             )
             print(f"[CHECK] y_pred equals baseline (isclose): {eq_pct:.2f}% "
-                  f"(should be ≪ 100% if model differs).")
+                  f"(should be << 100% if model differs).")
 
 
 def main():
@@ -172,7 +172,7 @@ def main():
         ])
         _assert_model_written(args.out_perf)
     else:
-        print("[SKIP] apply_model requested → perf keeps baseline only.")
+        print("[SKIP] apply_model requested -> perf keeps baseline only.")
 
     # --------- Page registry ----------
     # Each page maps to a callable that returns the subprocess command (list)
