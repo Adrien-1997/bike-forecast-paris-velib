@@ -58,114 +58,92 @@ Public GBFS snapshots → normalized 15‑min aggregates → **features & model 
 ## 🧭 Pipelines — Data → ML → Docs & App
 
 ```mermaid
+# System Architecture
+
+```mermaid
 flowchart LR
 
-  %% ===== Ingestion & Warehouse =====
+  %% Ingestion -> Export
   A[GBFS ingestion<br/>src/ingest.py<br/>(every 15 min)]
   B[DuckDB snapshots<br/>warehouse.duckdb]
   C[15-min aggregation + weather<br/>src/aggregate.py]
-  D[Canonical export<br/>docs/exports/velib.parquet (+ CSV)]
+  D[Canonical export<br/>docs/exports/velib.parquet]
 
-  %% ===== Normalization & Targets =====
+  %% Normalization -> events/perf
   E[Normalization<br/>tools/datasets.py]
   EV[events.parquet<br/>ts, station_id, bikes, capacity, occ, lat, lon, name]
-  PF[perf.parquet<br/>ts, station_id, y_true, y_pred_baseline, y_pred?, horizon_min]
+  PF[perf.parquet<br/>ts, station_id, y_true, y_pred_baseline, y_pred, horizon_min]
 
-  %% ===== Model =====
+  %% Model train + predict
   G[Feature builder<br/>(src/features, src/cal_features)]
   H[Train LightGBM<br/>(h = 60 min)]
-  I[Model bundle<br/>models/lgb_nbvelos_T+60min.joblib]
-  M[Inject predictions<br/>tools/apply_model.py → perf.y_pred]
+  I[Model bundle<br/>models/*.joblib]
+  M[Inject predictions<br/>tools/apply_model.py -> perf.y_pred]
 
-  %% ===== Pages: Network =====
-  subgraph R[Network]
-    RO[build_network_overview.py<br/>KPIs + map + curves]
-    RS[build_network_stations.py<br/>Table + clustering]
-    RD[build_network_dynamics.py<br/>Heatmaps h×j, tension]
+  %% Pages (build_*.py) -> assets -> site
+  subgraph PAGES[Pages]
+    R1[network/overview]
+    R2[network/stations]
+    R3[network/dynamics]
+    M1[model/performance]
+    M2[model/pipeline]
+    M3[model/explainability]
+    Q1[monitoring/data_health]
+    Q2[monitoring/drift]
+    Q3[monitoring/model_health]
+    D1[data/exports]
+    D2[data/dictionary]
+    D3[data/methodology]
   end
 
-  %% ===== Pages: Model =====
-  subgraph MO[Model]
-    MP[build_model_performance.py<br/>MAE/RMSE, lift, obs vs pred]
-    ML[build_model_pipeline.py<br/>Data, features, validation]
-    MX[build_model_explainability.py<br/>Residuals, importance, calibration]
-  end
-
-  %% ===== Pages: Monitoring =====
-  subgraph MON[Monitoring]
-    MDH[build_monitoring_data_health.py<br/>Freshness, completeness, schema]
-    MDR[build_monitoring_drift.py<br/>PSI/K–S (features & target)]
-    MMH[build_monitoring_model_health.py<br/>MAE/lift/calibration/coverage]
-  end
-
-  %% ===== Pages: Data =====
-  subgraph DA[Data]
-    DE[build_data_exports.py<br/>Exports catalog]
-    DD[build_data_dictionary.py<br/>Dictionary & schema]
-    DM[build_data_methodology.py<br/>Methodology & licenses]
-  end
-
-  %% ===== Assets & Site =====
   X[docs/assets<br/>(figs, tables, maps)]
-  K[MkDocs → gh-pages]
-  L[Streamlit app (opt)<br/>app/streamlit_app.py]
+  K[MkDocs -> gh-pages]
 
-  %% ===== CI / Automation =====
-  CI1[velib-ingest<br/>(15 min)]
+  %% CI
+  CI1[velib-ingest<br/>(every 15 min)]
   CI2[velib-train<br/>(daily)]
-  CI3[monitoring-site<br/>(4×/day 00·06·12·18 UTC)]
-  T[check_retrain.py<br/>PSI↑ or MAE_24h↑ → retrain?]
+  CI3[monitoring-site<br/>(4 per day: 00 06 12 18 UTC)]
+  T[check_retrain.py<br/>PSI high or MAE_24h high -> retrain]
 
   %% Flows
   A --> B --> C --> D
-  D --> E --> EV
+  D --> E
+  E --> EV
   E --> PF
+
   EV --> G
   PF --> G
-  G --> H --> I
-  I --> M
+  G  --> H --> I
+  I  --> M
   EV --> M
   PF --> M
 
-  %% Pages read from events/perf
-  EV --> RO
-  EV --> RS
-  EV --> RD
-  PF --> MP
-  D  --> ML
-  PF --> MX
-  EV --> MDH
-  EV --> MDR
-  PF --> MMH
+  %% Pages read data and write assets
+  EV --> R1 --> X
+  EV --> R2 --> X
+  EV --> R3 --> X
+  PF --> M1 --> X
+  D  --> M2 --> X
+  PF --> M3 --> X
+  EV --> Q1 --> X
+  EV --> Q2 --> X
+  PF --> Q3 --> X
+  D  --> D1 --> X
+  D  --> D2 --> X
+  D  --> D3 --> X
 
-  %% Assets & site
-  RO --> X
-  RS --> X
-  RD --> X
-  MP --> X
-  ML --> X
-  MX --> X
-  MDH --> X
-  MDR --> X
-  MMH --> X
-  DE --> X
-  DD --> X
-  DM --> X
   X --> K
 
-  %% App
-  D --> L
-  I --> L
-
-  %% CI
+  %% CI wiring
   CI1 --> B
   CI3 --> K
-  MP --> T
-  MMH --> T
-  MDR --> T
+  M1 --> T
+  Q3 --> T
+  Q2 --> T
   T -->|yes| CI2
   CI2 --> H
   CI2 --> K
+
 ```
 
 ### Core `src/*` chain
