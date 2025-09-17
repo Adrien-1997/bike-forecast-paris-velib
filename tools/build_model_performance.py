@@ -39,9 +39,12 @@ for d in (FIGS_DIR, TABLES_DIR, OUT_MD.parent):
 
 def rel_from_md(md_path: Path, target: Path) -> str:
     """
-    Chemin relatif (POSIX) depuis md_path vers target, compatible MkDocs.
+    Chemin relatif (POSIX) depuis md_path vers target, compatible MkDocs
+    (use_directory_urls: true). Ex. docs/model/performance.md -> ../../assets/...
     """
+    # position du .md dans /docs
     md_rel = Path(md_path).resolve().relative_to(DOCS.resolve())
+    # retirer le suffixe .md, compter la profondeur (sauf si index)
     parts = md_rel.with_suffix("").parts
     depth = len(parts) if parts[-1] != "index" else len(parts) - 1
     prefix = "../" * max(depth, 0)
@@ -77,26 +80,26 @@ def _read_perf(path: Path) -> pd.DataFrame:
     else:
         df["y_true"] = pd.to_numeric(df["y_true"], errors="coerce")
 
+    if "y_pred_baseline" not in df.columns:
+        # fallback neutre si absent
+        df["y_pred_baseline"] = df["y_true"]
+    else:
+        df["y_pred_baseline"] = pd.to_numeric(df["y_pred_baseline"], errors="coerce")
+
     if "y_pred" in df.columns:
         df["y_pred"] = pd.to_numeric(df["y_pred"], errors="coerce")
     else:
         df["y_pred"] = np.nan  # couverture 0%
 
-    if "y_pred_baseline" in df.columns:
-        df["y_pred_baseline"] = pd.to_numeric(df["y_pred_baseline"], errors="coerce")
-    else:
-        # laisser NaN, on va la reconstruire proprement
-        df["y_pred_baseline"] = np.nan
-
     # horizon (info)
     if "horizon_min" not in df.columns:
         df["horizon_min"] = np.nan
 
-    # colonnes temps cibles si déjà présentes
+    # colonnes additionnelles si déjà présentes (depuis datasets.py)
     if "ts_target" in df.columns:
-        df["ts_target"] = pd.to_datetime(df["ts_target"], errors="coerce").dt.floor("15min")
+        df["ts_target"] = pd.to_datetime(df["ts_target"], errors="coerce")
     if "ts_decision" in df.columns:
-        df["ts_decision"] = pd.to_datetime(df["ts_decision"], errors="coerce").dt.floor("15min")
+        df["ts_decision"] = pd.to_datetime(df["ts_decision"], errors="coerce")
 
     return df[["ts", "station_id", "y_true", "y_pred", "y_pred_baseline", "horizon_min",
                *([c for c in ["ts_target", "ts_decision"] if c in df.columns])]].copy()
@@ -126,6 +129,7 @@ def _fmt_dt(ts: pd.Timestamp, tz: Optional[str]) -> str:
         t = t.tz_localize("UTC").tz_convert(tz)
     else:
         t = t.tz_localize("UTC")
+    # ISO local court
     return t.strftime("%Y-%m-%d %H:%M %Z")
 
 def _metrics(y_true: pd.Series, y_hat: pd.Series) -> dict:
@@ -146,38 +150,6 @@ def _save_fig(path: Path) -> None:
     plt.savefig(path, dpi=150)
     plt.close()
 
-# ---------- Baseline: reconstruction alignée sur l'axe cible (T+h) ----------
-
-def ensure_ts_target(df: pd.DataFrame, horizon: Optional[int]) -> tuple[pd.DataFrame, int]:
-    """Garantit la présence de ts_target = ts + horizon (en minutes)."""
-    if horizon is None:
-        if "horizon_min" in df.columns and df["horizon_min"].notna().any():
-            h = int(df["horizon_min"].dropna().iloc[0])
-        else:
-            h = 60
-    else:
-        h = int(horizon)
-    if "ts_target" not in df.columns or df["ts_target"].isna().all():
-        df = df.copy()
-        df["ts_target"] = df["ts"] + pd.to_timedelta(h, unit="m")
-    return df, h
-
-def recompute_persistence_baseline(df: pd.DataFrame, horizon_min: int) -> pd.Series:
-    """
-    Reconstruit baseline(T+h) = y_true(T), alignée sur ts_target :
-      - construit une table (station_id, ts_target_join=ts+h, y_persist)
-      - merge sur (station_id, ts_target)
-    Robuste aux trous de pas de temps.
-    """
-    dec = df[["station_id", "ts", "y_true"]].rename(columns={"y_true": "y_persist"})
-    dec = dec.assign(ts_target_join=dec["ts"] + pd.to_timedelta(horizon_min, unit="m"))
-    key_cols = ["station_id", "ts_target_join", "y_persist"]
-
-    merged = df.merge(dec[key_cols],
-                      left_on=["station_id", "ts_target"],
-                      right_on=["station_id", "ts_target_join"],
-                      how="left")
-    return merged["y_persist"]
 
 # --------------------------- Core computations ---------------------------
 
@@ -319,6 +291,7 @@ def plot_mae_by_hour(by_hour: pd.DataFrame, out_png: Path) -> None:
 
 def plot_obs_vs_pred_examples(df: pd.DataFrame, stations: list[str], hours: int, out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Fenêtre et abscisse sur l'axe cible (T+h) → supprime le décalage visuel
     if "ts_target" not in df.columns:
         raise ValueError("ts_target is missing. Compute it before plotting.")
 
@@ -343,8 +316,8 @@ def plot_obs_vs_pred_examples(df: pd.DataFrame, stations: list[str], hours: int,
         if "y_pred" in sub.columns and sub["y_pred"].notna().any():
             plt.plot(x, sub["y_pred"], linewidth=1.5, label="Modèle")
 
-        # Baseline (persistance alignée sur T+h)
-        if "y_pred_baseline" in sub.columns and sub["y_pred_baseline"].notna().any():
+        # Baseline (persistance à T, réindexée sur l'axe cible pour comparaison visuelle)
+        if "y_pred_baseline" in sub.columns:
             plt.plot(x, sub["y_pred_baseline"], linewidth=1.0, label="Baseline")
 
         plt.title(f"Station {sid} — {hours}h")
@@ -390,9 +363,8 @@ Mesurer la **qualité des prévisions** du modèle et la situer **par rapport à
 - **Lift vs baseline** : **{lift_pct:.2f}%**  
 - **Données** : **{n_rows}** lignes · **{n_stations}** stations · **{ts_min_local} → {ts_max_local}**  
 
-> Les découpages heure/jour utilisent l’axe **décision T (local)**.  
-> Les tracés *observé vs prédit* sont alignés sur **l’axe cible T+h** (colonne `ts_target`).  
-> La baseline est **reconstruite** comme persistance `y(T+h) = y(T)` puis alignée sur `ts_target`.
+> Les séries temporelles sont agrégées sur l’axe **décision T (local)** pour les découpages heure/jour.  
+> Les tracés *observé vs prédit* sont alignés sur **l’axe cible T+h** (colonne `ts_target`) pour éviter tout décalage visuel.
 
 ---
 
@@ -438,17 +410,21 @@ Mesurer la **qualité des prévisions** du modèle et la situer **par rapport à
 def main(perf_path: Path, last_days: int, horizon: Optional[int], tz: Optional[str]) -> None:
     # 1) Charger & préparer
     df = _read_perf(perf_path)
-
-    # 1bis) ts_target garanti + horizon numérique
-    df, h = ensure_ts_target(df, horizon=horizon)
-
-    # 1ter) Recalcul baseline persistance ALIGNÉE SUR ts_target
-    y_base_aligned = recompute_persistence_baseline(df, horizon_min=h)
-    # On privilégie la baseline reconstruite, mais on garde l'existante en secours si des lignes n'ont pas de match
-    df["y_pred_baseline"] = y_base_aligned.where(y_base_aligned.notna(), df["y_pred_baseline"])
-
-    # 1quater) Champs locaux pour découpages
     df = _localize(df, tz=tz)
+
+    # Horodatage cible (si absent) = ts + horizon
+    if "ts_target" not in df.columns:
+        if horizon is None:
+            if "horizon_min" in df.columns and df["horizon_min"].notna().any():
+                h = int(df["horizon_min"].dropna().iloc[0])
+            else:
+                h = 60
+        else:
+            h = int(horizon)
+        df["ts_target"] = df["ts"] + pd.to_timedelta(h, unit="m")
+    else:
+        # tenter d'inférer h si dispo
+        h = int(horizon) if horizon is not None else (int(df["horizon_min"].dropna().iloc[0]) if df["horizon_min"].notna().any() else 60)
 
     # 2) Global + quotidien
     global_df, daily = compute_global_and_daily(df, last_days=last_days)
@@ -511,6 +487,7 @@ def main(perf_path: Path, last_days: int, horizon: Optional[int], tz: Optional[s
     # lignes d'exemple
     examples_md_lines = []
     for p in examples_paths:
+        # nom station depuis le fichier
         name = p.stem.replace("_", " ").replace("station ", "Station ")
         examples_md_lines.append(f"![{name}]({rel_from_md(OUT_MD, p)})")
     examples_md = "\n".join(examples_md_lines) if examples_md_lines else "_Pas d’exemple disponible sur la fenêtre._"
