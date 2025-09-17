@@ -1,2 +1,2 @@
 rows,stations,span,now_utc,ts_global_max,freshness_age_p50_min,freshness_age_p95_min,freshness_slo_min,freshness_p95_ok,coverage_global_pct,latency_p95_min,latency_p50_min,current_days,tz
-516329,1473,"['2025-09-07T23:00:00', '2025-09-16T21:45:00']",2025-09-16T22:45:00,2025-09-16T21:45:00,60.0,75.0,5.0,False,43.23,,,7,Europe/Paris
+568913,1473,"['2025-09-07T23:00:00', '2025-09-17T17:45:00']",2025-09-17T22:30:00,2025-09-17T17:45:00,285.0,300.0,5.0,False,46.31,,,7,Europe/Paris

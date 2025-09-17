@@ -1,35 +1,73 @@
 # Performance & baseline
 
-MAE/RMSE/biais, lift vs persistance, découpages.
+## Objectif
+Mesurer la **qualité des prévisions** du modèle et la situer **par rapport à une baseline** simple (persistance).
 
-## Figures
-![lift_daily](../assets/figs/model/performance/lift_daily.png)
+## Questions auxquelles la page répond
+- Quelle est l’erreur moyenne **globale** (toutes stations, toutes heures) ?
+- Dans quels **segments** (heure, jour, station, cluster, zone) le modèle est-il le plus/moins performant ?
+- Quel est le **gain vs baseline** (lift) et comment évolue-t-il dans le temps ?
 
-![mae_by_hour](../assets/figs/model/performance/mae_by_hour.png)
+## Métriques principales
+- **MAE** (Mean Absolute Error) — robustesse et lisibilité opérationnelle.
+- **RMSE** — pénalise davantage les gros écarts.
+- **ME (biais)** — moyenne des erreurs signée (sous/sur-prédiction).
+- **Coverage prédictif** — part d’horodatages pour lesquels une prédiction existe.
+- **Lift vs baseline** = `(MAE_baseline − MAE_modèle) / MAE_baseline` (positif = mieux que la persistance).
+- **R²** (optionnel, sur séries agrégées) — à manier avec prudence pour des données bornées/peu linéaires.
 
-![obs_vs_pred_station_13054](../assets/figs/model/performance/obs_vs_pred_station_13054.png)
+---
 
-![obs_vs_pred_station_13125](../assets/figs/model/performance/obs_vs_pred_station_13125.png)
+## Résumé chiffré (fenêtre)
+- **Horizon (min)** : **60**  
+- **Couverture prédictive** : **75.45%**  
+- **MAE** — modèle : **2.952** · baseline : **3.282**  
+- **RMSE** — modèle : **4.442** · baseline : **5.514**  
+- **Biais (ME)** — modèle : **-0.019** · baseline : **-0.024**  
+- **Lift vs baseline** : **10.04%**  
+- **Données** : **568913** lignes · **1473** stations · **2025-09-08 01:00 CEST → 2025-09-17 19:45 CEST**  
 
-![obs_vs_pred_station_7009](../assets/figs/model/performance/obs_vs_pred_station_7009.png)
+> Les séries temporelles sont agrégées sur l’axe **décision T (local)** pour les découpages heure/jour.  
+> Les tracés *observé vs prédit* sont alignés sur **l’axe cible T+h** (colonne `ts_target`) pour éviter tout décalage visuel.
 
-![obs_vs_pred_station_8004](../assets/figs/model/performance/obs_vs_pred_station_8004.png)
+---
 
-![residuals_hist](../assets/figs/model/performance/residuals_hist.png)
+## Découpages & comparaisons
+- **Par station** (top/bottom-10, distribution), **par cluster** (archétypes d’usage), **par heure du jour**, **semaine/week-end**, **par arrondissement/quartier**.
+- **Chronologique** : courbe MAE quotidienne/hebdomadaire, détection de dégradations.
+- **Capacité** : erreur normalisée par capacité estimée (si disponible) pour comparer des stations hétérogènes.
 
-![station_13054_obs_pred](../assets/figs/model/performance/station_13054_obs_pred.png)
+---
 
-![station_13125_obs_pred](../assets/figs/model/performance/station_13125_obs_pred.png)
+## Visualisations
+### Lift quotidien
+![Lift quotidien](../../assets/figs/model/performance/lift_daily.png)
 
-![station_7009_obs_pred](../assets/figs/model/performance/station_7009_obs_pred.png)
+### Distribution des résidus
+![Histogramme des résidus](../../assets/figs/model/performance/residuals_hist.png)
 
-![station_8004_obs_pred](../assets/figs/model/performance/station_8004_obs_pred.png)
+### MAE par heure (local)
+![MAE par heure](../../assets/figs/model/performance/mae_by_hour.png)
 
-- `../assets/tables/model/performance/coverage.csv`
-- `../assets/tables/model/performance/daily_error.csv`
-- `../assets/tables/model/performance/error_by_cluster.csv`
-- `../assets/tables/model/performance/error_by_dow.csv`
-- `../assets/tables/model/performance/error_by_hour.csv`
-- `../assets/tables/model/performance/error_by_station.csv`
-- `../assets/tables/model/performance/global_metrics.csv`
+### Observé vs prédit — exemples (4)
+![Station 13054 obs pred](../../assets/figs/model/performance/station_13054_obs_pred.png)
+![Station 13125 obs pred](../../assets/figs/model/performance/station_13125_obs_pred.png)
+![Station 7009 obs pred](../../assets/figs/model/performance/station_7009_obs_pred.png)
+![Station 8004 obs pred](../../assets/figs/model/performance/station_8004_obs_pred.png)
+
+---
+
+## Tables d’appui
+- **Global** : `../../assets/tables/model/performance/global_metrics.csv`  
+- **Quotidien** : `../../assets/tables/model/performance/daily_error.csv`  
+- **Par heure** : `../../assets/tables/model/performance/error_by_hour.csv` · **Par jour de semaine** : `../../assets/tables/model/performance/error_by_dow.csv`  
+- **Par station** : `../../assets/tables/model/performance/error_by_station.csv`
+- **Par cluster** : `../../assets/tables/model/performance/error_by_cluster.csv`
+- **Coverage** : `../../assets/tables/model/performance/coverage.csv`
+
+---
+
+## Lecture & limites
+- La **persistance** (dernier état connu) est une baseline forte à court terme ; le lift est donc une mesure exigeante.
+- Les métriques agrégées peuvent masquer des comportements **station-spécifiques** (d’où l’analyse segmentée).
 

@@ -6,25 +6,14 @@
 # - Rapport de schéma & contraintes (pass/warn/fail)
 # - Tables : data_health.csv (KPIs), station_health.csv (par station),
 #            completeness_by_station_day.csv, coverage_by_hour.csv,
-#            schema_report.csv, anomalies.csv
-# - Figures : gauges simples (barres) fraîcheur/complétude, heatmap complétude (stations × jours),
+#            schema_report.csv, anomalies.csv, alerts.json
+# - Figures : gauges (barres) fraîcheur/complétude, heatmap complétude (stations × jours),
 #             top stations problématiques (barres), distribution de latence (si dispo)
+# - Markdown : docs/monitoring/data-health.md (rendu complet)
 #
 # CLI :
 #   python tools/build_monitoring_data_health.py --events docs/exports/events.parquet \
 #       --current-days 7 --tz Europe/Paris --fresh-slo-min 5 --flat-steps 8
-#
-# Sorties (docs/assets/… et docs/exports/…):
-# - assets/figs/monitoring/data_health/gauges.png
-# - assets/figs/monitoring/data_health/heatmap_completeness.png
-# - assets/figs/monitoring/data_health/top_issues.png
-# - assets/figs/monitoring/data_health/latency_hist.png (si latence dispo)
-# - assets/tables/monitoring/data_health/data_health.csv
-# - assets/tables/monitoring/data_health/station_health.csv
-# - assets/tables/monitoring/data_health/completeness_by_station_day.csv
-# - assets/tables/monitoring/data_health/coverage_by_hour.csv
-# - assets/tables/monitoring/data_health/schema_report.csv
-# - assets/tables/monitoring/data_health/anomalies.csv
 #
 # Hypothèses colonnes (souples) :
 # - ts | tbin_utc | timestamp     → horodatage (sera converti UTC naïf)
@@ -55,11 +44,15 @@ ASSETS = DOCS / "assets"
 FIGS_DIR = ASSETS / "figs" / "monitoring" / "data_health"
 TABLES_DIR = ASSETS / "tables" / "monitoring" / "data_health"
 EXPORTS = DOCS / "exports"
+OUT_MD = DOCS / "monitoring" / "data-health.md"
 
 plt.rcParams["figure.figsize"] = (9, 4)
 plt.rcParams["axes.grid"] = True
 plt.rcParams["axes.titlesize"] = 12
 plt.rcParams["axes.labelsize"] = 10
+
+for d in (FIGS_DIR, TABLES_DIR, OUT_MD.parent):
+    d.mkdir(parents=True, exist_ok=True)
 
 # --------------------------- JSON helper ---------------------------
 
@@ -82,6 +75,15 @@ def _json_default(o):
     return str(o)
 
 # --------------------------- Utils ---------------------------
+
+def rel_from_md(md_path: Path, target: Path) -> str:
+    """Chemin relatif (POSIX) depuis md_path vers target, compatible MkDocs (use_directory_urls: true)."""
+    md_rel = Path(md_path).resolve().relative_to(DOCS.resolve())
+    parts = md_rel.with_suffix("").parts
+    depth = len(parts) if parts[-1] != "index" else len(parts) - 1
+    prefix = "../" * max(depth, 0)
+    rel_from_docs = Path(target).resolve().relative_to(DOCS.resolve()).as_posix()
+    return (prefix + rel_from_docs).replace("//", "/")
 
 def _mkdirs() -> None:
     FIGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -224,7 +226,7 @@ def kpi_completeness(df: pd.DataFrame, current_days: int) -> tuple[dict, pd.Data
     per_sd["coverage_pct"] = per_sd["obs"].clip(upper=per_sd["expected"]) / per_sd["expected"] * 100.0
     heat = per_sd.pivot(index="station_id", columns="date", values="coverage_pct").fillna(0.0)
 
-    return {"coverage_global_pct": round(coverage_global, 2)}, per_station, heat
+    return {"coverage_global_pct": round(coverage_global, 2)}, per_station, heat, cov_by_hour
 
 def kpi_latency(df: pd.DataFrame) -> tuple[dict, Optional[pd.DataFrame]]:
     """Latence d’ingestion: (ingested_at - ts) en minutes. Retourne KPIs + distribution brute."""
@@ -381,6 +383,81 @@ def plot_latency_hist(lat_df: Optional[pd.DataFrame]) -> None:
     ax.set_title("Ingestion latency distribution")
     _save_fig(FIGS_DIR / "latency_hist.png")
 
+# --------------------------- Markdown template ---------------------------
+
+MD_TEMPLATE = """# Santé des données
+
+Cette page vérifie que le **pipeline d’ingestion** fournit des données **fraîches, complètes et conformes** au contrat attendu.
+
+## Objectif
+Vérifier que le **pipeline d’ingestion** fournit des données **fraîches, complètes et conformes** au contrat attendu.
+
+## Questions auxquelles la page répond
+- Les données sont-elles **fraîches** (latence nominale respectée) ?
+- Quel est le **taux de complétude** (stations × timestamps) et où sont les trous ?
+- Le **schéma** (colonnes/types/unités) est-il conforme ? Y a-t-il des champs anormaux (valeurs négatives, hors bornes, constantes) ?
+- Observe-t-on des **ruptures** (station figée, série plate, duplication, horodatages non monotones) ?
+
+## Indicateurs clés (KPIs)
+- **Fraîcheur** : P50={fresh_p50:.2f} min · P95={fresh_p95:.2f} min vs SLO={slo_min:.0f} min → {fresh_status}
+- **Complétude (fenêtre {current_days} j)** : {coverage_global:.2f}% (moyenne stations)
+- **Latence d’ingestion** : médiane={lat_p50} min · P95={lat_p95} min
+- **Schéma & contraintes** : {schema_pass} pass · {schema_warn} warn · {schema_fail} fail
+- **Anomalies** : doublons={dups_pct:.2f}% · séquences plates≥{flat_steps} pas={flat_count} · stations avec trous={missing_stations}
+
+> Snapshot UTC : **{now_utc}** · Fenêtre récente : **{current_days}** jours
+
+---
+
+## Visualisations
+### Jauges fraîcheur & complétude
+![gauges]({gauges_rel})
+
+### Heatmap de complétude par station/jour
+![heatmap]({heatmap_rel})
+
+### Top stations problématiques
+![top issues]({top_issues_rel})
+
+### Distribution de la latence d’ingestion
+{latency_block}
+
+---
+
+## Seuils & Alertes
+- **Fraîcheur P95 ≤ SLO** : {fresh_alert}
+- **Complétude ≥ {compl_alert_pct:.0f}%** : {cov_alert}
+- **Timestamps dupliqués ≤ {dup_alert_pct:.1f}%** : {dup_alert}
+- **Séries plates détectées** : {flat_alert}
+
+Fichier JSON : `{alerts_rel}`
+
+---
+
+## Méthodes & règles
+- **Contrat de schéma** : colonnes minimales, types et bornes souples (warnings) / dures (erreurs).
+- **Détection plateaux** : séquence ≥ **{flat_steps}** pas sans variation (**15 min** le pas) → alerte station.
+- **Contrôle temps** : pas manquants, pas dupliqués, dérive/retard d’horloge.
+- **Cartographie** : heatmap complétude (stations en lignes × jours en colonnes).
+- **Couverture par heure** : moyenne de la couverture (toutes stations) par heure locale sur {current_days} jours.
+
+---
+
+## Tables d’appui
+- KPIs globaux : `{data_health_csv_rel}`
+- Détail par station (complétude, trous) : `{station_health_csv_rel}`
+- Heatmap station×jour (CSV) : `{heatmap_csv_rel}`
+- Couverture moyenne par heure : `{cov_by_hour_csv_rel}`
+- Rapport de schéma : `{schema_report_csv_rel}`
+- Anomalies : `{anomalies_csv_rel}`
+
+---
+
+## Limites
+La qualité “technique” n’implique pas la **représentativité** (couverte par la page *Drift*). Les estimations de latence ne sont disponibles que si `ingested_at` est fourni.
+
+"""
+
 # --------------------------- Main ---------------------------
 
 def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min: int,
@@ -398,7 +475,7 @@ def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min:
 
     # KPIs
     kfresh = kpi_freshness(df, slo_min=fresh_slo_min)
-    kcov, by_station_cov, heat = kpi_completeness(df, current_days=current_days)
+    kcov, by_station_cov, heat, cov_by_hour = kpi_completeness(df, current_days=current_days)
     klat, lat_df = kpi_latency(df)
 
     # Anomalies : séquences plates
@@ -406,9 +483,12 @@ def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min:
 
     # Duplications
     dups = duplication_stats(df)
+    dup_total = int(dups["dups"].sum()) if len(dups) else 0
+    dups_pct = (dup_total / max(1, len(df))) * 100.0 if len(df) else 0.0
 
     # Missing bins (fenêtre récente)
     miss = missing_bins(df, current_days=current_days)
+    missing_stations = int((miss["missing"] > 0).sum()) if len(miss) else 0
 
     # Station health table
     st_health = by_station_cov.merge(miss, on="station_id", how="left")
@@ -430,33 +510,29 @@ def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min:
         "current_days": int(current_days),
         "tz": tz or "UTC",
     }
-    pd.DataFrame([data_health]).to_csv(TABLES_DIR / "data_health.csv", index=False)
-    st_health.to_csv(TABLES_DIR / "station_health.csv", index=False)
-    heat.to_csv(TABLES_DIR / "completeness_by_station_day.csv")
-    # coverage by hour (depuis kpi_completeness)
-    if current_days > 0 and len(df):
-        tmax = df["ts"].max()
-        tmin = tmax - pd.Timedelta(days=current_days)
-        win = df[(df["ts"] > tmin) & (df["ts"] <= tmax)].copy()
-        per_hour = win.copy()
-        per_hour["hour"] = per_hour["ts"].dt.hour
-        per_hour = (per_hour.groupby(["hour", "station_id"])["ts"].nunique()
-                             .rename("obs").reset_index())
-        exp_hour = current_days * 4
-        per_hour["coverage_pct"] = per_hour["obs"].clip(upper=exp_hour) / float(exp_hour) * 100.0
-        cov_by_hour = (per_hour.groupby("hour")["coverage_pct"].mean()
-                              .rename_axis("hour").reset_index())
-        cov_by_hour.to_csv(TABLES_DIR / "coverage_by_hour.csv", index=False)
+    (TABLES_DIR / "dummy").parent.mkdir(parents=True, exist_ok=True)
+    data_health_csv = TABLES_DIR / "data_health.csv"
+    pd.DataFrame([data_health]).to_csv(data_health_csv, index=False)
+
+    station_health_csv = TABLES_DIR / "station_health.csv"
+    st_health.to_csv(station_health_csv, index=False)
+
+    heatmap_csv = TABLES_DIR / "completeness_by_station_day.csv"
+    heat.to_csv(heatmap_csv)
+
+    cov_by_hour_csv = TABLES_DIR / "coverage_by_hour.csv"
+    if not cov_by_hour.empty:
+        cov_by_hour.to_csv(cov_by_hour_csv, index=False)
     else:
-        pd.DataFrame(columns=["hour","coverage_pct"]).to_csv(TABLES_DIR / "coverage_by_hour.csv", index=False)
+        pd.DataFrame(columns=["hour","coverage_pct"]).to_csv(cov_by_hour_csv, index=False)
 
     # Schema report
     sch = schema_report(df)
-    sch.to_csv(TABLES_DIR / "schema_report.csv", index=False)
+    schema_report_csv = TABLES_DIR / "schema_report.csv"
+    sch.to_csv(schema_report_csv, index=False)
 
     # anomalies.csv (combine flats + dups + worst missing)
     anomalies = []
-
     if len(flats):
         for _, r in flats.iterrows():
             anomalies.append({
@@ -490,7 +566,8 @@ def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min:
                     "detail": f"missing={int(r['missing'])}/{int(r['expected'])} bins in window"
                 })
 
-    pd.DataFrame(anomalies).to_csv(TABLES_DIR / "anomalies.csv", index=False)
+    anomalies_csv = TABLES_DIR / "anomalies.csv"
+    pd.DataFrame(anomalies).to_csv(anomalies_csv, index=False)
 
     # seuils d’alerte globaux (cast → types natifs)
     alerts = {
@@ -501,7 +578,8 @@ def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min:
                               if len(dups) else False),
         "flat_sequences_found": bool(len(flats)),
     }
-    with open(TABLES_DIR / "alerts.json", "w", encoding="utf-8") as f:
+    alerts_json = TABLES_DIR / "alerts.json"
+    with open(alerts_json, "w", encoding="utf-8") as f:
         json.dump(alerts, f, ensure_ascii=False, indent=2, default=_json_default)
 
     # Log récap
@@ -511,6 +589,74 @@ def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min:
               "kpis": {"freshness": kfresh, "coverage": kcov, "latency": klat},
               "alerts": alerts
           }, ensure_ascii=False, indent=2, default=_json_default))
+
+    # --------------------- Rendu Markdown ---------------------
+    schema_pass = int((sch["status"] == "pass").sum())
+    schema_warn = int((sch["status"] == "warn").sum())
+    schema_fail = int((sch["status"] == "fail").sum())
+
+    gauges_rel = rel_from_md(OUT_MD, FIGS_DIR / "gauges.png")
+    heatmap_rel = rel_from_md(OUT_MD, FIGS_DIR / "heatmap_completeness.png")
+    top_issues_rel = rel_from_md(OUT_MD, FIGS_DIR / "top_issues.png")
+    lat_fig_path = FIGS_DIR / "latency_hist.png"
+    latency_rel = rel_from_md(OUT_MD, lat_fig_path)
+
+    data_health_csv_rel = rel_from_md(OUT_MD, data_health_csv)
+    station_health_csv_rel = rel_from_md(OUT_MD, station_health_csv)
+    heatmap_csv_rel = rel_from_md(OUT_MD, heatmap_csv)
+    cov_by_hour_csv_rel = rel_from_md(OUT_MD, cov_by_hour_csv)
+    schema_report_csv_rel = rel_from_md(OUT_MD, schema_report_csv)
+    anomalies_csv_rel = rel_from_md(OUT_MD, anomalies_csv)
+    alerts_rel = rel_from_md(OUT_MD, alerts_json)
+
+    fresh_status = "✅ OK" if alerts["freshness_p95_ok"] is True else ("❌ Hors SLO" if alerts["freshness_p95_ok"] is False else "n.d.")
+    fresh_alert = "✅ Conforme" if alerts["freshness_p95_ok"] else ("❌ Non conforme" if alerts["freshness_p95_ok"] is False else "n.d.")
+    cov_alert = "✅ Conforme" if alerts["coverage_ok"] else "❌ Non conforme"
+    dup_alert = "✅ OK" if not alerts["duplication_alert"] else "❌ Trop de doublons"
+    flat_alert = "❌ Oui" if alerts["flat_sequences_found"] else "✅ Non"
+
+    latency_block = (f"![latency]({latency_rel})"
+                     if lat_fig_path.exists()
+                     else "_Latence non disponible (pas de `ingested_at`)._")
+
+    md = MD_TEMPLATE.format(
+        fresh_p50=(kfresh.get("freshness_age_p50_min", float("nan")) or float("nan")),
+        fresh_p95=(kfresh.get("freshness_age_p95_min", float("nan")) or float("nan")),
+        slo_min=(kfresh.get("freshness_slo_min", float("nan")) or float("nan")),
+        fresh_status=fresh_status,
+        coverage_global=(data_health.get("coverage_global_pct", float("nan")) or float("nan")),
+        lat_p50=("n.d." if pd.isna(klat.get("latency_p50_min", np.nan)) else f"{klat['latency_p50_min']:.2f}"),
+        lat_p95=("n.d." if pd.isna(klat.get("latency_p95_min", np.nan)) else f"{klat['latency_p95_min']:.2f}"),
+        schema_pass=schema_pass, schema_warn=schema_warn, schema_fail=schema_fail,
+        dups_pct=dups_pct,
+        flat_steps=flat_steps,
+        flat_count=int(len(flats)) if len(flats) else 0,
+        missing_stations=missing_stations,
+        now_utc=kfresh.get("now_utc", ""),
+        current_days=current_days,
+        gauges_rel=gauges_rel,
+        heatmap_rel=heatmap_rel,
+        top_issues_rel=top_issues_rel,
+        latency_block=latency_block,
+        fresh_alert=fresh_alert,
+        compl_alert_pct=compl_alert_pct,
+        cov_alert=cov_alert,
+        dup_alert_pct=dup_alert_pct,
+        dup_alert=dup_alert,
+        flat_alert=flat_alert,
+        alerts_rel=alerts_rel,
+        data_health_csv_rel=data_health_csv_rel,
+        station_health_csv_rel=station_health_csv_rel,
+        heatmap_csv_rel=heatmap_csv_rel,
+        cov_by_hour_csv_rel=cov_by_hour_csv_rel,
+        schema_report_csv_rel=schema_report_csv_rel,
+        anomalies_csv_rel=anomalies_csv_rel,
+    )
+
+    with open(OUT_MD, "w", encoding="utf-8", newline="\n") as f:
+        f.write(md)
+
+    print(f"[data-health] markdown -> {OUT_MD}")
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()

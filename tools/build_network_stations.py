@@ -1,4 +1,4 @@
-# tools/build_network_stations.py
+﻿# tools/build_network_stations.py
 # Page builder — "Réseau / Stations & profils"
 # - Produit une table exploratoire (pénurie/saturation 7 & 30 j, volatilité, couverture, capacité estimée, distance centre)
 # - Calcule un PROFIL 24 h par station (médiane par quart d'heure, sur ~28 j), normalise, CLUSTERS (K-Means par défaut)
@@ -14,17 +14,19 @@ from pathlib import Path
 import sys
 import json
 import math
-from typing import Tuple, Optional
-
+from typing import Tuple
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Optional dependencies
+import warnings
+
 try:
-    from sklearn.preprocessing import StandardScaler
+    import sklearn
     from sklearn.cluster import KMeans
     from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
     from sklearn.metrics import silhouette_score, davies_bouldin_score
     HAS_SK = True
 except Exception:
@@ -46,10 +48,114 @@ FIGS_DIR = ASSETS / "figs" / "network" / "stations"
 TABLES_DIR = ASSETS / "tables" / "network" / "stations"
 MAPS_DIR = ASSETS / "maps"
 STATIONS_DIR = DOCS / "stations"  # (facultatif) pour d’éventuelles fiches
+OUT_MD = DOCS / "network" / "stations.md"
 
 PARIS_LAT, PARIS_LON = 48.8566, 2.3522  # distance au centre (indicatif)
 PROFILE_WINDOW_DAYS = 28                # fenêtre pour le profil 24 h (médiane)
 
+def rel_from_md(md_path: Path, target: Path) -> str:
+    """Chemin relatif (POSIX) depuis md_path vers target, compatible MkDocs (use_directory_urls: true)."""
+    md_rel = Path(md_path).resolve().relative_to(DOCS.resolve())
+    parts = md_rel.with_suffix("").parts
+    depth = len(parts) if parts and parts[-1] != "index" else max(len(parts) - 1, 0)
+    prefix = "../" * max(depth, 0)
+    rel_from_docs = Path(target).resolve().relative_to(DOCS.resolve()).as_posix()
+    return (prefix + rel_from_docs).replace("//", "/")
+
+MD_TEMPLATE = """# Stations & profils
+
+Cette page permet une **exploration fine station par station** (tables filtrables) et présente des **profils comportementaux** du réseau via clustering.
+
+---
+
+## 1) Table exploratoire (7 j / 30 j)
+
+- **Colonnes** : ID, nom, **capacité estimée**, % pénurie / % saturation (**7 & 30 jours**), **volatilité** (σ vélos), **couverture**, **distance au centre**, **cluster**.  
+- **Tri/filtre** : top pénuries / saturations, variabilité, cluster, zone.
+
+**Téléchargements** :
+- 7 jours : `{stats7_rel}`
+- 30 jours : `{stats30_rel}`
+- Clusters par station : `{clusters_rel}`  
+- Distribution des clusters : `{dist_rel}`  
+- Centroïdes 24 h (CSV) : `{centroids_csv_rel}`  
+- Résumé clustering (JSON) : `{summary_json_rel}`
+
+---
+
+## 2) Fiches station (liens depuis la table)
+
+Chaque station peut avoir une fiche dédiée (optionnel) :  
+**Sparkline 7 j**, **profil 24 h typique** (médiane / 15 min), **heatmap h×j** récente, et **indicateurs** (pénurie/saturation 7 & 30 j, volatilité, couverture, événements).
+
+---
+
+## 3) Carte des clusters
+<div style="margin: .5rem 0;">
+  <iframe src="{map_rel}" style="width:100%;height:520px;border:0" loading="lazy" title="Carte des stations par cluster"></iframe>
+</div>
+
+> Couleur = cluster ; taille ≈ capacité estimée.
+
+---
+
+## 4) Profils 24 h — centroïdes par cluster
+![Centroids]({centroids_png_rel})
+
+## 5) Projection PCA(2) des profils
+![PCA]({pca_png_rel})
+
+> La PCA ne sert **qu'à visualiser** la séparation des groupes ; le clustering se fait sur **l’espace complet (96 points)**.
+
+---
+
+## 6) Sélection d’exemples ({by_label})
+`{selection_rel}`
+
+---
+
+## 7) Clustering — méthodologie détaillée
+
+**Objectif.** Regrouper les stations par **similarité d’usage** pour révéler des archétypes (résidentiel, pôle d’emplois, gares, loisirs…).
+
+**Variables (features).**
+- **Profil 24 h** (96 pas de 15 min) : médiane d’**occupation** `bikes / capacity_est` sur ~{profile_days} jours, **centré-réduit**.
+- **Amplitude/variabilité** : écart-type quotidien, plage min-max normalisée.
+- **Asymétries temporelles** : ratios matin/soir, semaine/week-end.
+- **Contexte léger** (optionnel) : capacité, distance centre, altitude.
+
+**Pré-traitement.**
+- **Standardisation** (moyenne 0, écart-type 1) sur les profils.
+- **PCA (2D)** uniquement pour la figure — pas pour l’algorithme.
+
+**Algorithmes.**
+- **K-Means** par défaut, *k* choisi empiriquement (coude) + **Silhouette** / **Davies-Bouldin**.  
+- **HDBSCAN** en option quand la densité varie beaucoup (gère le **bruit** sans imposer *k*).
+
+**Attribution & stabilité.**
+- Scores internes : **Silhouette = {silhouette:.3f}**, **Davies-Bouldin = {dbi:.3f}** (k={k_eff}, n={n_stations}).  
+- **Bootstrap** par semaines pour vérifier la stabilité (optionnel).  
+- **Centroïdes** publiés (courbes moyennes par cluster) comme *comportements-types*.  
+- Signalement des stations **frontières** (incertitude) possible.
+
+**Étiquettes interprétables (exemples).**
+- **Résidentiel nocturne** : haut la nuit, baisse le matin, remonte le soir.  
+- **Pôle d’emplois** : bas la nuit, pic d’arrivée le matin, vidage fin de journée.  
+- **Transport / gares** : fortes oscillations synchronisées aux pointes.  
+- **Touristique / loisirs** : week-end marqué, milieux de journée élevés.
+
+> **Limites.** Le clustering **décrit** des usages, il ne **prédit** pas. Les groupes évoluent avec la saison, travaux, événements — **recalcul périodique** prévu.
+
+---
+
+## 8) Mémo technique
+- **Source** : `docs/exports/events.parquet`, pas de 15 min.  
+- **Capacité estimée** : priorité à `capacity_src`, sinon quantile 0.98 de `(bikes + docks_avail)` si dispo, sinon 0.98 de `bikes`.  
+- **Pénurie / Saturation** : `bikes == 0` / (`docks_avail == 0` ou `capacity - bikes == 0`).  
+- **Couverture** : `#bins observés / #bins attendus` sur {last_days} j.  
+- **Volatilité** : σ des vélos par station sur la journée locale, médiane des stations.
+
+"""
 
 # --------------------------- Utils ---------------------------
 
@@ -60,70 +166,23 @@ def _mkdirs() -> None:
     STATIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 def _read_events(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        raise FileNotFoundError(f"[stations] Introuvable: {path}")
     df = pd.read_parquet(path)
-
-    # --- ts ---
-    for tc in ("ts", "tbin_utc"):
-        if tc in df.columns:
-            df["ts"] = pd.to_datetime(df[tc], errors="coerce")
-            break
-    if "ts" not in df.columns:
-        raise KeyError("[stations] Colonne temporelle manquante (ts/tbin_utc)")
-    df["ts"] = df["ts"].dt.floor("15min")
-
-    # --- station_id ---
-    sid = None
-    for c in ("station_id", "stationcode", "stationCode", "id"):
-        if c in df.columns:
-            sid = c
-            break
-    if sid is None:
-        raise KeyError("[stations] Identifiant station manquant (station_id/stationcode)")
-    df["station_id"] = df[sid].astype(str)
-
-    # --- bikes ---
-    bikes_col = None
-    for c in ("bikes", "nb_velos_bin", "velos_disponibles", "numBikesAvailable", "n_bikes"):
-        if c in df.columns:
-            bikes_col = c
-            break
-    if bikes_col is None:
-        raise KeyError("[stations] Colonne vélos manquante (bikes/nb_velos_bin/velos_disponibles)")
-    df["bikes"] = pd.to_numeric(df[bikes_col], errors="coerce")
-
-    # --- docks (si dispo) & capacity (si dispo) ---
-    cap_col = None
-    for c in ("capacity", "cap", "dock_count", "n_docks_total"):
-        if c in df.columns:
-            cap_col = c
-            break
-    docks_col = None
-    for c in ("docks", "docks_disponibles", "numDocksAvailable", "places_disponibles"):
-        if c in df.columns:
-            docks_col = c
-            break
-    df["docks_avail"] = pd.to_numeric(df.get(docks_col, np.nan), errors="coerce")
-    df["capacity_src"] = pd.to_numeric(df.get(cap_col, np.nan), errors="coerce")
-
-    # --- meta ---
-    name_col = None
-    for c in ("name", "station_name", "label"):
-        if c in df.columns:
-            name_col = c
-            break
-    df["name"] = df.get(name_col, df["station_id"]).astype(str)
-
-    df["lat"] = pd.to_numeric(df.get("lat", np.nan), errors="coerce")
-    df["lon"] = pd.to_numeric(df.get("lon", np.nan), errors="coerce")
-
-    return df[["ts", "station_id", "name", "lat", "lon", "bikes", "docks_avail", "capacity_src"]].copy()
+    # Harmonisation colonnes attendues
+    for col in ("station_id","ts","bikes","docks_avail","capacity_src","name","lat","lon"):
+        if col not in df.columns:
+            df[col] = pd.NA
+    # Types
+    df["station_id"] = df["station_id"].astype(str)
+    df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    df["bikes"] = pd.to_numeric(df["bikes"], errors="coerce")
+    if "docks_avail" in df:
+        df["docks_avail"] = pd.to_numeric(df["docks_avail"], errors="coerce")
+    df["capacity_src"] = pd.to_numeric(df["capacity_src"], errors="coerce")
+    df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+    df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
+    return df.dropna(subset=["station_id","ts"])
 
 def _haversine_km(lat1, lon1, lat2, lon2) -> float:
-    # robust to NaN
-    if any(pd.isna([lat1, lon1, lat2, lon2])):
-        return np.nan
     r = 6371.0
     p1, p2 = np.radians(lat1), np.radians(lat2)
     dlat = p2 - p1
@@ -136,253 +195,244 @@ def _estimate_capacity(win: pd.DataFrame) -> pd.Series:
        sinon quantile 0.98 de bikes.
     """
     def est(g: pd.DataFrame) -> float:
-        # Récupère la meilleure capacité déclarée (nullable-friendly)
-        cap = g["capacity_src"].dropna().max() if "capacity_src" in g else np.nan
+        cap = g["capacity_src"].dropna().max() if "capacity_src" in g.columns else np.nan
         try:
             cap_f = float(cap)
         except Exception:
             cap_f = np.nan
-
         if np.isfinite(cap_f) and cap_f > 0:
             return cap_f
-
-        # Sinon, estimer via docks + bikes si dispo
-        if g["docks_avail"].notna().any():
+        if "docks_avail" in g.columns and g["docks_avail"].notna().any():
             s = (g["bikes"].clip(lower=0) + g["docks_avail"].clip(lower=0)).dropna()
             if len(s):
                 return float(s.quantile(0.98))
-
-        # Sinon, fallback sur bikes
         b = g["bikes"].clip(lower=0).dropna()
         if len(b):
             return float(b.quantile(0.98))
-
         return np.nan
-
     gb = win.groupby("station_id")
     try:
-        # pandas ≥ 2.2 — évite le FutureWarning
         return gb.apply(est, include_groups=False)
     except TypeError:
-        # pandas plus ancien
         return gb.apply(est)
 
+def _expected_bins(tmin: pd.Timestamp, tmax: pd.Timestamp, freq: str = "15min") -> int:
+    if pd.isna(tmin) or pd.isna(tmax):
+        return 0
+    tmin = pd.to_datetime(tmin, utc=True)
+    tmax = pd.to_datetime(tmax, utc=True)
+    return int(((tmax - tmin) / pd.Timedelta(freq)) + 1)
 
-
-def _expected_bins(tmin: pd.Timestamp, tmax: pd.Timestamp) -> int:
-    return max(1, math.ceil((tmax - tmin).total_seconds() / 60 / 15) + 1)
-
-def _station_stats(df: pd.DataFrame, days: int) -> pd.DataFrame:
-    """KPIs par station sur les X derniers jours."""
-    if days <= 0 or df.empty:
-        return pd.DataFrame()
+def _station_stats(df: pd.DataFrame, days: int = 7) -> pd.DataFrame:
+    # Fenêtre récente
     tmax = df["ts"].max()
     tmin = tmax - pd.Timedelta(days=days)
-    win = df[(df["ts"] > tmin) & (df["ts"] <= tmax)].copy()
-    if win.empty:
-        return pd.DataFrame()
+    sub = df[(df["ts"] >= tmin) & (df["ts"] <= tmax)].copy()
 
-    # couverture = (#bins observés) / (#bins attendus) moyen sur la station
-    exp_bins = _expected_bins(tmin, tmax)
-    g = win.groupby("station_id", as_index=False)
+    # capacité estimée (sur fenêtre récente pour éviter anciens artefacts)
+    cap = _estimate_capacity(sub)
+    cap.name = "capacity_est"
 
-    stats = g.agg(
+    # agrégation
+    g = sub.merge(cap.rename("capacity_est"), left_on="station_id", right_index=True, how="left")
+    g["occ"] = g["bikes"] / g["capacity_est"].replace({0: np.nan})
+
+    grp = g.groupby("station_id")
+    out = grp.agg(
         name=("name", "last"),
         lat=("lat", "last"),
         lon=("lon", "last"),
-        n_bins=("ts", "nunique"),
-        bikes_mean=("bikes", "mean"),
+        capacity_est=("capacity_est", "max"),
         bikes_std=("bikes", "std"),
-        penury_rate=("bikes", lambda s: (s.fillna(0) <= 0).mean()),
-        sat_rate=("docks_avail", lambda s: (s == 0).mean() if s.notna().any() else np.nan),
-        dock_avail_rate=("docks_avail", lambda s: (s > 0).mean() if s.notna().any() else np.nan),
-        bike_avail_rate=("bikes", lambda s: (s.fillna(0) > 0).mean()),
-    )
+        n_bins=("ts", "count"),
+        min_ts=("ts", "min"),
+        max_ts=("ts", "max"),
+        penury=("bikes", lambda s: float(np.mean(s.fillna(0) <= 0))),
+        saturation=("occ", lambda s: float(np.mean((1 - s).fillna(0) <= 0))),
+    ).reset_index()
 
-    stats["coverage"] = stats["n_bins"].clip(0, exp_bins) / float(exp_bins)
-
-    # capacité estimée
-    cap = _estimate_capacity(win)
-    stats = stats.merge(cap.rename("capacity_est"), left_on="station_id", right_index=True, how="left")
-
-    # distance au centre
-    stats["dist_center_km"] = stats.apply(
-        lambda r: _haversine_km(r["lat"], r["lon"], PARIS_LAT, PARIS_LON), axis=1
-    )
-
-    # formatage
-    for c in ("penury_rate", "sat_rate", "dock_avail_rate", "bike_avail_rate", "coverage"):
-        if c in stats.columns:
-            stats[c] = stats[c].astype(float)
-    stats["bikes_std"] = stats["bikes_std"].fillna(0.0).astype(float)
-
-    return stats[[
-        "station_id", "name", "lat", "lon",
-        "capacity_est",
-        "penury_rate", "sat_rate",
-        "bike_avail_rate", "dock_avail_rate",
-        "bikes_std", "coverage",
-        "dist_center_km", "n_bins"
-    ]].copy()
+    out["coverage"] = out.apply(lambda r: r["n_bins"] / max(_expected_bins(r["min_ts"], r["max_ts"]), 1), axis=1)
+    out["dist_centre_km"] = out.apply(lambda r: _haversine_km(PARIS_LAT, PARIS_LON, r["lat"], r["lon"]) if pd.notna(r["lat"]) and pd.notna(r["lon"]) else np.nan, axis=1)
+    return out[["station_id","name","lat","lon","capacity_est","penury","saturation","bikes_std","coverage","dist_centre_km","n_bins"]]
 
 def _save_fig(path: Path) -> None:
-    plt.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(path, dpi=150)
+    plt.tight_layout()
+    plt.savefig(path, dpi=160, bbox_inches="tight")
     plt.close()
 
-def _write_json(path: Path, obj: dict) -> None:
+def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-
-# --------------------------- Profiles (24 h) & Clustering ---------------------------
-
-def _build_24h_profile(df: pd.DataFrame, days: int) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Retourne:
-       - profiles: index station_id, colonnes hh:mm (96), valeurs = médiane d'occupation (bikes/cap) sur la fenêtre
-       - meta: station_id, name, lat, lon, capacity_est
-    """
-    if df.empty:
-        return pd.DataFrame(), pd.DataFrame()
-
+def _build_24h_profile(df: pd.DataFrame, days: int = PROFILE_WINDOW_DAYS) -> Tuple[pd.DataFrame, pd.DataFrame]:
     tmax = df["ts"].max()
     tmin = tmax - pd.Timedelta(days=days)
-    win = df[(df["ts"] > tmin) & (df["ts"] <= tmax)].copy()
-    if win.empty:
+    sub = df[(df["ts"] >= tmin) & (df["ts"] <= tmax)].copy()
+    if sub.empty:
         return pd.DataFrame(), pd.DataFrame()
 
-    # capacité estimée par station
-    cap = _estimate_capacity(win).rename("capacity_est")
-    meta = win.groupby("station_id", as_index=False).agg(
-        name=("name", "last"),
-        lat=("lat", "last"),
-        lon=("lon", "last"),
-    ).merge(cap, left_on="station_id", right_index=True, how="left")
+    # capacité station
+    cap = _estimate_capacity(sub).rename("capacity_est")
+    meta = sub.groupby("station_id").agg(
+        name=("name","last"),
+        lat=("lat","last"),
+        lon=("lon","last"),
+        capacity_est=("capacity_src","max")
+    ).reset_index()
+    meta = meta.merge(cap, on="station_id", how="left")
+    meta["capacity_est"] = meta["capacity_est_y"].fillna(meta["capacity_est_x"])
+    meta = meta.drop(columns=[c for c in ["capacity_est_x","capacity_est_y"] if c in meta.columns])
 
-    # ratio d'occupation (0..1) pour comparabilité
-    win = win.merge(cap.rename("capacity_est"), left_on="station_id", right_index=True, how="left")
-    win["occ"] = (win["bikes"].clip(lower=0) / win["capacity_est"]).clip(upper=1.0)
-    # fallback si cap manquante → normaliser par quantile des bikes au lieu de capacity_est
-    fallback = win["occ"].isna()
-    if fallback.any():
-        q98 = (win.groupby("station_id")["bikes"]
-                 .transform(lambda s: s.clip(lower=0).quantile(0.98) if len(s) else np.nan))
-        win.loc[fallback, "occ"] = (win.loc[fallback, "bikes"].clip(lower=0) / q98).clip(upper=1.0)
-
-    # hh:mm locale (reste UTC si tz non géré ici ; pour la comparabilité ça suffit)
-    win["hhmm"] = win["ts"].dt.strftime("%H:%M")
-    prof = (win.groupby(["station_id", "hhmm"])["occ"]
-                .median()
-                .unstack("hhmm")
-                .sort_index(axis=1))
-
-    # s'assurer d'avoir 96 colonnes triées
-    def _hhmm_key(s: str) -> int:
-        return int(s[:2]) * 60 + int(s[3:])
-    target_cols = sorted(prof.columns, key=_hhmm_key)
-    prof = prof.reindex(columns=target_cols)
-
-    # clamp & fill
-    prof = prof.replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(0.0, 1.0)
+    # occ par quart d'heure (médiane)
+    sub["local"] = pd.to_datetime(sub["ts"], utc=True, errors="coerce").dt.tz_convert("Europe/Paris")
+    sub["hhmm"] = sub["local"].dt.strftime("%H:%M")
+    occ = sub.merge(cap.rename("capacity_est"), left_on="station_id", right_index=True, how="left")
+    occ["occ"] = occ["bikes"] / occ["capacity_est"].replace({0: np.nan})
+    prof = occ.groupby(["station_id","hhmm"])["occ"].median().unstack().reindex(columns=[f"{h:02d}:{m:02d}" for h in range(24) for m in (0,15,30,45)], fill_value=np.nan)
 
     return prof, meta
 
-def _cluster_profiles(prof: pd.DataFrame, k: int) -> Tuple[pd.Series, dict, Optional[pd.DataFrame]]:
-    """Clusterise les profils (lignes=stations, colonnes=96 points). Retourne:
-       - labels: pd.Series[station_id] → cluster int
-       - summary: dict (scores silhouette/DB, k ajusté...)
-       - pca2: DataFrame avec x,y,cluster pour scatter (ou None si SK indispo)
+def _cluster_profiles(prof: pd.DataFrame, k: int = 4, min_profile_cov: float = 0.40, neutral_fill: float = 0.5):
+    """Clusterise les profils 24 h.
+    - min_profile_cov: proportion min de points non-NaN par station (0.40 = >= 40% des 96 quarts d'heure).
+    - neutral_fill: valeur neutre utilisée si une colonne entière est NaN (occupation ~0.5).
     """
-    summary = {"sklearn_available": HAS_SK, "k_requested": k}
-    if not HAS_SK or prof.empty or prof.shape[0] < 2:
-        return pd.Series(dtype="int"), summary, None
+    summary = {"sklearn_available": HAS_SK}
+    if not HAS_SK or prof.empty:
+        return pd.Series(dtype="int64"), summary, pd.DataFrame()
 
-    n_samples = prof.shape[0]
-    k_eff = max(2, min(k, n_samples))
-    if k_eff != k:
-        summary["k_effective"] = k_eff
-    else:
-        summary["k_effective"] = k
+    # 1) Filtrer les profils trop incomplets
+    cov = 1.0 - prof.isna().mean(axis=1)           # couverture par station (sur 96 colonnes)
+    keep_idx = cov >= float(min_profile_cov)
+    summary["profile_row_coverage_min"] = float(min_profile_cov)
+    summary["n_input"] = int(prof.shape[0])
+    summary["n_kept"] = int(keep_idx.sum())
+    if summary["n_kept"] < 2:
+        # Trop peu pour clusteriser proprement
+        return pd.Series(dtype="int64"), summary, pd.DataFrame()
 
-    X = prof.values.astype("float32")
-    scaler = StandardScaler(with_mean=True, with_std=True)
-    Xs = scaler.fit_transform(X)
+    prof2 = prof.loc[keep_idx].copy()
 
-    km = KMeans(n_clusters=k_eff, n_init="auto", random_state=42)
-    labels = km.fit_predict(Xs)
+    # 2) Imputation NaN : médiane colonne, fallback neutre si colonne totalement NaN
+    X = prof2.values.astype(float)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)  # masque "All-NaN slice"
+        col_med = np.nanmedian(X, axis=0)
+    col_med = np.where(np.isnan(col_med), neutral_fill, col_med)
+    X = np.where(np.isnan(X), col_med, X)
+    X = np.where(np.isnan(X), neutral_fill, X)     # ultime filet de sécurité
 
-    sil = float(silhouette_score(Xs, labels)) if n_samples > k_eff else float("nan")
-    dbi = float(davies_bouldin_score(Xs, labels)) if k_eff >= 2 else float("nan")
+    # 3) Standardisation
+    scaler = StandardScaler()
+    Xn = scaler.fit_transform(X)
+
+    # 4) KMeans robuste (k <= nb d'échantillons, k >= 2)
+    k_eff = max(2, min(int(k), Xn.shape[0]))
+    km = KMeans(n_clusters=k_eff, n_init=10, random_state=42)
+    lab_arr = km.fit_predict(Xn)
+    labels = pd.Series(lab_arr, index=prof2.index, name="cluster", dtype="int64")
+
+    # 5) PCA 2D pour la visualisation
+    pca = PCA(n_components=2, random_state=42)
+    pca2 = pd.DataFrame(pca.fit_transform(Xn), index=prof2.index, columns=["PC1","PC2"])
+
+    # 6) Scores internes
+    try:
+        sil = float(silhouette_score(Xn, lab_arr))
+    except Exception:
+        sil = float("nan")
+    try:
+        dbi = float(davies_bouldin_score(Xn, lab_arr))
+    except Exception:
+        dbi = float("nan")
 
     summary.update({
+        "k_effective": k_eff,
         "silhouette": sil,
         "davies_bouldin": dbi,
-        "n_stations": int(n_samples),
-        "n_features": int(prof.shape[1]),
+        "n_stations": int(labels.shape[0]),
     })
+    return labels, summary, pca2
 
-    # PCA 2D pour visualisation
-    try:
-        pca = PCA(n_components=2, random_state=42)
-        emb = pca.fit_transform(Xs)
-        pca2 = pd.DataFrame({"x": emb[:, 0], "y": emb[:, 1],
-                             "cluster": labels}, index=prof.index).reset_index(names="station_id")
-    except Exception:
-        pca2 = None
-
-    return pd.Series(labels, index=prof.index, name="cluster"), summary, pca2
-
-
-# --------------------------- Figures & Map ---------------------------
 
 def _plot_centroids(prof: pd.DataFrame, labels: pd.Series, out_png: Path) -> None:
-    """Trace les centroïdes (occ 0..1) par cluster (courbes sur 96 points)."""
-    if prof.empty or labels.empty:
-        plt.figure(figsize=(8, 4)); plt.title("Centroids (no data)"); _save_fig(out_png); return
+    # Si rien à tracer, produire un placeholder
+    if prof.empty or labels is None or labels.empty:
+        plt.figure(figsize=(6, 2))
+        plt.text(0.5, 0.5, "Centroids indisponibles", ha="center")
+        _save_fig(out_png)
+        return
 
-    df = prof.copy()
-    df["cluster"] = labels
-    groups = sorted(df["cluster"].unique())
-    hhmm = list(prof.columns)
+    # 1) Aligner les index (stations gardées pour le clustering)
+    labels = labels.dropna()
+    prof_kept = prof.loc[labels.index]
 
-    plt.figure(figsize=(11, 5.5))
-    for g in groups:
-        centroid = df[df["cluster"] == g].drop(columns=["cluster"]).mean(axis=0).values
-        plt.plot(hhmm, centroid, label=f"Cluster {g}", linewidth=2)
-    plt.ylim(0, 1)
-    plt.ylabel("Occupation (ratio)")
-    plt.xlabel("Heure (hh:mm)")
-    plt.title("Profils 24 h — Centroïdes par cluster")
-    plt.xticks([hhmm[i] for i in range(0, len(hhmm), 8)])  # une étiquette toutes les 2 h
-    plt.legend(loc="best", ncol=2)
+    # 2) Centroides par cluster (moyenne ligne -> courbe 24h)
+    try:
+        centroids = prof_kept.groupby(labels).mean(numeric_only=True)
+    except TypeError:
+        # pandas anciens sans numeric_only
+        centroids = prof_kept.groupby(labels).mean()
+
+    if centroids.empty:
+        plt.figure(figsize=(6, 2))
+        plt.text(0.5, 0.5, "Centroids indisponibles", ha="center")
+        _save_fig(out_png)
+        return
+
+    # 3) Tracé
+    plt.figure(figsize=(9, 4))
+    for g, row in centroids.sort_index().iterrows():
+        y = row.values
+        plt.plot(range(len(y)), y, label=f"Cluster {g}", alpha=0.9)
+
+    plt.xticks([0, 24, 48, 72, 95], ["00:00", "06:00", "12:00", "18:00", "23:45"])
+    plt.title("Profils 24 h — centroïdes (occupation)")
+    plt.legend(loc="best", fontsize=8, ncol=2)
     _save_fig(out_png)
 
-def _plot_pca_scatter(pca2: Optional[pd.DataFrame], out_png: Path) -> None:
-    if pca2 is None or pca2.empty:
-        plt.figure(figsize=(6, 5)); plt.title("PCA (indisponible)"); _save_fig(out_png); return
-    plt.figure(figsize=(7.5, 6))
-    for g, sub in pca2.groupby("cluster"):
-        plt.scatter(sub["x"], sub["y"], s=12, label=f"Cluster {g}", alpha=0.8)
+
+def _plot_pca_scatter(pca2: pd.DataFrame, labels: pd.Series, out_png: Path) -> None:
+    if pca2.empty or labels.empty:
+        plt.figure(figsize=(6,2)); plt.text(0.5,0.5,"PCA indisponible", ha="center"); _save_fig(out_png); return
+    plt.figure(figsize=(6,5))
+    for g in sorted(labels.unique()):
+        mask = labels == g
+        plt.scatter(pca2.loc[mask,"PC1"], pca2.loc[mask,"PC2"], s=12, label=f"Cluster {g}", alpha=0.8)
     plt.title("Profils 24 h — PCA(2) par cluster")
     plt.xlabel("PC1"); plt.ylabel("PC2")
     plt.legend(loc="best", fontsize=8, ncol=2)
     _save_fig(out_png)
 
 def _map_clusters(meta: pd.DataFrame, labels: pd.Series | pd.DataFrame, out_html: Path) -> None:
-    # Accepte Series (index=station_id, name='cluster') ou DataFrame avec colonne 'cluster'
+    # Besoins: folium + coords valides
+    try:
+        import folium
+        from branca.element import Element
+    except Exception:
+        print("[stations] Folium indisponible — carte ignorée.")
+        return
+    if meta is None or len(meta) == 0:
+        print("[stations] Meta vide — carte ignorée.")
+        return
+
+    # Accepte Series (index=station_id) ou DataFrame avec colonne 'cluster'
     if isinstance(labels, pd.DataFrame):
         lab = labels["cluster"] if "cluster" in labels.columns else labels.iloc[:, 0]
     else:
         lab = labels
-    df = meta.copy()
 
-    # Merge cluster
-    df = df.merge(lab.rename("cluster"), left_on="station_id", right_index=True, how="left")
+    # Merge
+    df = meta.copy()
+    try:
+        df = df.merge(lab.rename("cluster"), left_on="station_id", right_index=True, how="left")
+    except Exception:
+        df["cluster"] = np.nan
 
     # Conversions numériques robustes
-    for col in ("lat", "lon", "capacity_est", "capacity_src"):
+    for col in ("lat", "lon", "capacity_est", "capacity_src", "cluster"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -397,33 +447,62 @@ def _map_clusters(meta: pd.DataFrame, labels: pd.Series | pd.DataFrame, out_html
         print("[map] No stations with valid coordinates; skipping map export.")
         return
 
-    # Carte centrée sur la médiane des coordonnées
+    # Palette catégorielle (tab10) + couleur spéciale pour bruit -1 (HDBSCAN)
+    palette = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd',
+               '#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf']
+    uniq = sorted(pd.unique(df["cluster"].dropna()))
+    color_of = {int(c): palette[i % len(palette)] for i, c in enumerate(uniq)}
+    if -1 in uniq:
+        color_of[-1] = "#9e9e9e"  # bruit/outliers
+
+    # Carte
     m = folium.Map(
         location=[float(df["lat"].median()), float(df["lon"].median())],
         zoom_start=12,
         tiles="cartodbpositron",
     )
 
-    # Points
+    # Points colorés par cluster
     for _, r in df.iterrows():
-        cap = r["capacity_est"] if "capacity_est" in r else np.nan
+        cap = r.get("capacity_est", np.nan)
+        try:
+            c_int = int(r.get("cluster"))
+        except Exception:
+            c_int = None
+        color = color_of.get(c_int, "#4c78a8")  # défaut bleu
         name = r["name"] if "name" in r and pd.notna(r["name"]) else str(r["station_id"])
-        # Rayon borné pour rester lisible
-        rad = 5.0 if pd.isna(cap) else float(np.clip(cap / 2.0, 3.0, 12.0))
+        rad = 5.0 if pd.isna(cap) else float(np.clip(float(cap) / 2.0, 3.0, 12.0))
 
         folium.CircleMarker(
             location=[float(r["lat"]), float(r["lon"])],
             radius=rad,
-            weight=1,
+            color=color,
             fill=True,
-            fill_opacity=0.7,
-            tooltip=f"{name} • cap≈{'' if pd.isna(cap) else int(cap)} • cluster={r['cluster']}",
+            fill_color=color,
+            fill_opacity=0.75,
+            weight=0.8,
+            tooltip=f"{name} • cap≈{'' if pd.isna(cap) else int(cap)} • cluster={r.get('cluster')}",
         ).add_to(m)
+
+    # Légende simple (HTML)
+    if len(color_of):
+        items = "".join(
+            f'<li style="margin:2px 0;"><span style="display:inline-block;width:10px;height:10px;'
+            f'background:{col};margin-right:6px;border:1px solid #999;"></span>'
+            f'Cluster {lab}</li>'
+            for lab, col in sorted(color_of.items())
+        )
+        legend_html = f"""
+        <div style="position: fixed; bottom: 12px; left: 12px; z-index: 9999;
+                    background: white; padding: 8px 10px; border-radius: 6px;
+                    box-shadow: 0 1px 4px rgba(0,0,0,.25); font-size:12px;">
+          <b>Clusters</b>
+          <ul style="list-style:none; margin:6px 0 0; padding:0;">{items}</ul>
+        </div>"""
+        m.get_root().html.add_child(Element(legend_html))
 
     m.save(out_html)
     print(f"[map] Saved {out_html}")
-
-
 
 # --------------------------- Main ---------------------------
 
@@ -446,14 +525,26 @@ def main(events_path: Path, last_days: int, k: int, hours: int, select: int, by:
     labels, summary, pca2 = _cluster_profiles(prof, k=k)
 
     # Sauvegarde résultats clustering
-    if not prof.empty:
+    if not prof.empty and not labels.empty:
         # centroids table (pour docs)
         centroids = []
-        for g in sorted(labels.dropna().unique()) if not labels.empty else []:
-            centroid = prof[labels == g].mean(axis=0)
-            tmp = pd.DataFrame({"hhmm": centroid.index, "cluster": int(g), "occ": centroid.values})
-            centroids.append(tmp)
-        centroids_df = pd.concat(centroids, axis=0) if centroids else pd.DataFrame(columns=["hhmm","cluster","occ"])
+        if not labels.empty:
+            # Aligner le profil sur l'index filtré (labels.index)
+            prof_kept = prof.loc[labels.index]
+
+            for g in sorted(labels.dropna().unique()):
+                mask = (labels == g)           # index = stations filtrées
+                if mask.any():
+                    centroid = prof_kept.loc[mask].mean(axis=0)
+                    tmp = pd.DataFrame(
+                        {"hhmm": centroid.index, "cluster": int(g), "occ": centroid.values}
+                    )
+                    centroids.append(tmp)
+
+        centroids_df = (
+            pd.concat(centroids, axis=0)
+            if centroids else pd.DataFrame(columns=["hhmm", "cluster", "occ"])
+        )
         centroids_df.to_csv(TABLES_DIR / "cluster_centroids_24h.csv", index=False)
 
         # station_clusters table
@@ -472,14 +563,14 @@ def main(events_path: Path, last_days: int, k: int, hours: int, select: int, by:
 
         # Figures
         _plot_centroids(prof, labels, FIGS_DIR / "centroids_24h.png")
-        _plot_pca_scatter(pca2, FIGS_DIR / "clusters_pca.png")
+        _plot_pca_scatter(pca2, labels, FIGS_DIR / "clusters_pca.png")
 
         # Carte
         _map_clusters(meta, labels, MAPS_DIR / "network_stations_clusters.html")
     else:
         # profils indisponibles → écrire placeholders
         pd.DataFrame(columns=["hhmm","cluster","occ"]).to_csv(TABLES_DIR / "cluster_centroids_24h.csv", index=False)
-        pd.DataFrame(columns=["station_id","name","lat","lon","capacity_est","cluster"]).to_csv(TABLES_DIR / "station_clusters.csv", index=False)
+        pd.DataFrame(columns=["station_id","name","lat","lon","cluster"]).to_csv(TABLES_DIR / "station_clusters.csv", index=False)
         _write_json(TABLES_DIR / "clustering_summary.json", {"sklearn_available": HAS_SK, "note": "profils indisponibles"})
 
     # ---------- 3) Sélection d’exemples (sparklines, optionnel) ----------
@@ -490,6 +581,51 @@ def main(events_path: Path, last_days: int, k: int, hours: int, select: int, by:
         ascending = (by == "coverage")  # par défaut on veut top volatilité (desc), mais min couverture (asc) peut être pertinent
         sel = sel_df.sort_values(key, ascending=ascending).head(select)[["station_id","name"]]
         sel.to_csv(TABLES_DIR / f"selection_{by}.csv", index=False)
+
+    # --- Génération de la page Markdown ---
+    try:
+        OUT_MD.parent.mkdir(parents=True, exist_ok=True)
+        centroids_png = FIGS_DIR / "centroids_24h.png"
+        pca_png = FIGS_DIR / "clusters_pca.png"
+        map_html = MAPS_DIR / "network_stations_clusters.html"
+        stats7 = TABLES_DIR / "station_stats_7d.csv"
+        stats30 = TABLES_DIR / "station_stats_30d.csv"
+        clusters_csv = TABLES_DIR / "station_clusters.csv"
+        dist_csv = TABLES_DIR / "cluster_distribution.csv"
+        centroids_csv = TABLES_DIR / "cluster_centroids_24h.csv"
+        summary_json = TABLES_DIR / "clustering_summary.json"
+        selection_csv = TABLES_DIR / f"selection_{by}.csv"
+
+        k_eff = int(summary.get("k_effective", k)) if isinstance(summary, dict) else k
+        silhouette = float(summary.get("silhouette", float("nan"))) if isinstance(summary, dict) else float("nan")
+        dbi = float(summary.get("davies_bouldin", float("nan"))) if isinstance(summary, dict) else float("nan")
+        n_stations = int(summary.get("n_stations", prof.shape[0] if isinstance(prof, pd.DataFrame) else 0)) if isinstance(summary, dict) else 0
+
+        md = MD_TEMPLATE.format(
+            map_rel=rel_from_md(OUT_MD, map_html),
+            centroids_png_rel=rel_from_md(OUT_MD, centroids_png),
+            pca_png_rel=rel_from_md(OUT_MD, pca_png),
+            stats7_rel=rel_from_md(OUT_MD, stats7),
+            stats30_rel=rel_from_md(OUT_MD, stats30),
+            clusters_rel=rel_from_md(OUT_MD, clusters_csv),
+            dist_rel=rel_from_md(OUT_MD, dist_csv),
+            centroids_csv_rel=rel_from_md(OUT_MD, centroids_csv),
+            summary_json_rel=rel_from_md(OUT_MD, summary_json),
+            selection_rel=rel_from_md(OUT_MD, selection_csv),
+            by_label=by,
+            profile_days=PROFILE_WINDOW_DAYS,
+            last_days=last_days,
+            silhouette=(silhouette if not pd.isna(silhouette) else float("nan")),
+            dbi=(dbi if not pd.isna(dbi) else float("nan")),
+            k_eff=k_eff,
+            n_stations=n_stations,
+        )
+
+        with open(OUT_MD, "w", encoding="utf-8", newline="\n") as f:
+            f.write(md)
+        print(f"[stations] MD -> {OUT_MD}")
+    except Exception as _e:
+        print("[stations] MD generation skipped:", _e)
 
     print("[stations] Done.")
 

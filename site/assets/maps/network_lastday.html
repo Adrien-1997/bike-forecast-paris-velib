@@ -17,7 +17,7 @@
             <meta name="viewport" content="width=device-width,
                 initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
             <style>
-                #map_fbda5346448a3b32907f3441d8573f4e {
+                #map_ad045b9070127f44a57c71afe6ccb238 {
                     position: relative;
                     width: 100.0%;
                     height: 100.0%;
@@ -61,16 +61,16 @@
 <body>
     
     
-            <div class="folium-map" id="map_fbda5346448a3b32907f3441d8573f4e" ></div>
+            <div class="folium-map" id="map_ad045b9070127f44a57c71afe6ccb238" ></div>
         
 </body>
 <script>
     
     
-            var map_fbda5346448a3b32907f3441d8573f4e = L.map(
-                "map_fbda5346448a3b32907f3441d8573f4e",
+            var map_ad045b9070127f44a57c71afe6ccb238 = L.map(
+                "map_ad045b9070127f44a57c71afe6ccb238",
                 {
-                    center: [48.86789596055931, 2.352007795125246],
+                    center: [48.866978397714306, 2.351670507341603],
                     crs: L.CRS.EPSG3857,
                     ...{
   "zoom": 12,
@@ -85,7 +85,7 @@
 
         
     
-            var tile_layer_dc0b722c5993b8a293ff2f1b77a10a19 = L.tileLayer(
+            var tile_layer_670e3c9b4be266ba2cac46cbed14511b = L.tileLayer(
                 "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
                 {
   "minZoom": 0,
@@ -102,7 +102,7 @@
             );
         
     
-            tile_layer_dc0b722c5993b8a293ff2f1b77a10a19.addTo(map_fbda5346448a3b32907f3441d8573f4e);
+            tile_layer_670e3c9b4be266ba2cac46cbed14511b.addTo(map_ad045b9070127f44a57c71afe6ccb238);
         
     
             L.Control.TimeDimensionCustom = L.Control.TimeDimension.extend({
@@ -112,7 +112,7 @@
                     return newdate.format("YYYY-MM-DD HH:mm:ss");
                 }
             });
-            map_fbda5346448a3b32907f3441d8573f4e.timeDimension = L.timeDimension(
+            map_ad045b9070127f44a57c71afe6ccb238.timeDimension = L.timeDimension(
                 {
                     period: "PT1H",
                 }
@@ -133,9 +133,9 @@
 },
 }
             );
-            map_fbda5346448a3b32907f3441d8573f4e.addControl(this.timeDimensionControl);
+            map_ad045b9070127f44a57c71afe6ccb238.addControl(this.timeDimensionControl);
 
-            var geoJsonLayer = L.geoJson({"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.4003649, 48.8679385]}, "properties": {"time": "2025-09-16T01:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Dupont de l'Eure - Gambetta \u2014 bikes=27"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.2608396783471107, 48.8479394142243]}, "properties": {"time": "2025-09-16T03:00:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Porte d'Auteuil \u2014 bikes=7"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.379864752692811, 48.91118557052621]}, "properties": {"time": "2025-09-16T04:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Edouard Poisson - Victor Hugo \u2014 bikes=21"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.354651279747486, 48.8437035476636]}, "properties": {"time": "2025-09-16T05:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Lac\u00e9p\u00e8de - Linn\u00e9 \u2014 bikes=8"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.249415814876557, 48.87525984132485]}, "properties": {"time": "2025-09-16T06:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Route de S\u00e8vres - Porte de Bagatelle \u2014 bikes=57"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.4451419711113, 48.847803063647]}, "properties": {"time": "2025-09-16T07:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Fontenay - Lib\u00e9ration \u2014 bikes=15"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.316423766314984, 48.885325169402904]}, "properties": {"time": "2025-09-16T08:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Legendre - Dulong \u2014 bikes=2"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3727085813879967, 48.91844993053703]}, "properties": {"time": "2025-09-16T09:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Parc Eli Lotar \u2014 bikes=2"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3601756244898, 48.89021003702]}, "properties": {"time": "2025-09-16T10:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Riquet - Marx Dormoy \u2014 bikes=4"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3963020229163, 48.778192750803]}, "properties": {"time": "2025-09-16T11:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Rouget de L'isle - Watteau \u2014 bikes=4"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.349364310503006, 48.86785342111862]}, "properties": {"time": "2025-09-16T12:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Caire - Dussoubs \u2014 bikes=38"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.340014585442034, 48.89104123261663]}, "properties": {"time": "2025-09-16T13:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Francoeur - Marcadet \u2014 bikes=4"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3622643, 48.8578329]}, "properties": {"time": "2025-09-16T14:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Payenne - Square George Ca\u00efn \u2014 bikes=22"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.343570403754711, 48.829522989420596]}, "properties": {"time": "2025-09-16T15:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Glaci\u00e8re - Soeur Catherine Marie \u2014 bikes=17"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3316044208059, 48.905741911394]}, "properties": {"time": "2025-09-16T16:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Garibaldi - Gabriel P\u00e9ri \u2014 bikes=12"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.4451419711113, 48.847803063647]}, "properties": {"time": "2025-09-16T17:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Fontenay - Lib\u00e9ration \u2014 bikes=6"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.35570102930069, 48.86860172112996]}, "properties": {"time": "2025-09-16T18:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Porte Saint-Martin \u2014 bikes=2"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.256898172199726, 48.947022436806705]}, "properties": {"time": "2025-09-16T19:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Gare d'Argenteuil \u2014 bikes=1"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.329955510795116, 48.78599652305309]}, "properties": {"time": "2025-09-16T20:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Marc Sangnier - Division Leclerc \u2014 bikes=18"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3329411447048, 48.833056477316]}, "properties": {"time": "2025-09-16T21:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Ren\u00e9 Coty - Place Denfert-Rochereau \u2014 bikes=1"}}]}, {
+            var geoJsonLayer = L.geoJson({"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.256898172199726, 48.947022436806705]}, "properties": {"time": "2025-09-16T22:30:00", "style": {"color": "red", "fillColor": "red", "opacity": 0.8}, "icon": "circle", "popup": "Gare d'Argenteuil \u2014 bikes=0"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.4965062363218, 48.823450589614]}, "properties": {"time": "2025-09-16T23:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Stalingrad - G\u00e9n\u00e9ral de Gaulle \u2014 bikes=24"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3340544619393, 48.870508937204]}, "properties": {"time": "2025-09-17T01:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Louis le Grand - Italiens \u2014 bikes=2"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3412207886577, 48.846102400979]}, "properties": {"time": "2025-09-17T03:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Le Goff - Gay-Lussac \u2014 bikes=3"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3445510864257812, 48.892939296937605]}, "properties": {"time": "2025-09-17T04:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Mairie du 18\u00e8me \u2014 bikes=23"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.363983690738678, 48.805342480621576]}, "properties": {"time": "2025-09-17T05:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "LCL Campus - Place Oscar Niemeyer \u2014 bikes=17"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3036286234855656, 48.89035817610495]}, "properties": {"time": "2025-09-17T06:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Porte d'Asni\u00e8res \u2014 bikes=11"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3539767041802, 48.857346707443]}, "properties": {"time": "2025-09-17T07:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Archives - Rivoli \u2014 bikes=11"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.304111124531457, 48.887070607581215]}, "properties": {"time": "2025-09-17T08:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Pereire - Place de Wagram \u2014 bikes=4"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.365212, 48.829268]}, "properties": {"time": "2025-09-17T09:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Place Nationale - Ch\u00e2teau-des-Rentiers \u2014 bikes=8"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.4152836203575, 48.874515389637]}, "properties": {"time": "2025-09-17T10:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Noisy le Sec - Jean-Baptiste Cl\u00e9ment \u2014 bikes=1"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3734183609485626, 48.794902381218904]}, "properties": {"time": "2025-09-17T11:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "G\u00e9nie - Mozart \u2014 bikes=1"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.349364310503006, 48.86785342111862]}, "properties": {"time": "2025-09-17T12:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Caire - Dussoubs \u2014 bikes=26"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3596492409706, 48.86610337431]}, "properties": {"time": "2025-09-17T13:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Sainte-Elisabeth - Turbigo \u2014 bikes=16"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.40079153681279, 48.897307310356055]}, "properties": {"time": "2025-09-17T14:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Place du Pr\u00e9sident Salvador Allende \u2014 bikes=22"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.375934, 48.82941]}, "properties": {"time": "2025-09-17T15:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Chevaleret - Tolbiac \u2014 bikes=16"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3381787144261, 48.889677905028]}, "properties": {"time": "2025-09-17T16:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Caulaincourt - Place Constantin Pecqueur \u2014 bikes=6"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3434996604919, 48.849686566191]}, "properties": {"time": "2025-09-17T17:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Sorbonne - Ecoles \u2014 bikes=7"}}]}, {
                     pointToLayer: function (feature, latLng) {
                         if (feature.properties.icon == 'marker') {
                             if(feature.properties.iconstyle){
@@ -169,14 +169,14 @@
                     }
                 })
 
-            var timestamped_geo_json_ddb278baa0cf58198730eaa595182d5c = L.timeDimension.layer.geoJson(
+            var timestamped_geo_json_ac407a21d3407a2981ba78ed5490fb8c = L.timeDimension.layer.geoJson(
                 geoJsonLayer,
                 {
                     updateTimeDimension: true,
                     addlastPoint: true,
                     duration: "PT10M",
                 }
-            ).addTo(map_fbda5346448a3b32907f3441d8573f4e);
+            ).addTo(map_ad045b9070127f44a57c71afe6ccb238);
         
 </script>
 </html>

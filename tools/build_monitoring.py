@@ -234,15 +234,16 @@ def main():
             "--events", args.out_events,
             "--current-days", str(args.current_days),
             "--reference-days", str(args.reference_days),
+            "--perf", args.out_perf,                 # ← ajouter
             *(["--tz", args.tz] if args.tz else []),
         ],
         "monitoring.model_health": lambda: [
             sys.executable, TOOLS / "build_monitoring_model_health.py",
             "--perf", args.out_perf,
             "--last-days", str(args.last_days),
+            "--horizon", str(args.horizon),          # ← ajouter
             *(["--tz", args.tz] if args.tz else []),
         ],
-
         # --- Data ---
         "data.exports": lambda: [
             sys.executable, TOOLS / "build_data_exports.py",
@@ -257,7 +258,7 @@ def main():
             sys.executable, TOOLS / "build_data_methodology.py",
             "--events", args.out_events,
             "--perf", args.out_perf,
-            "--horizon", str(args.horizon),
+            # "--horizon", str(args.horizon),      # ← retirer si non utilisé
         ],
     }
 

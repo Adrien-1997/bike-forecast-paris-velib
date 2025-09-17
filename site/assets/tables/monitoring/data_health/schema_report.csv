@@ -9,4 +9,4 @@ bikes>=0,pass,negatives=0
 docks_avail>=0,pass,negatives=0
 capacity>0,pass,nonpositive=0
 "no_duplicates(ts,station)",pass,dups=0
-temporal_coverage,warn,bins=387/860 (45.00%)
+temporal_coverage,warn,bins=430/940 (45.74%)

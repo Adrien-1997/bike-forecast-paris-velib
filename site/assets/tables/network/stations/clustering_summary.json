@@ -1,9 +1,10 @@
 {
   "sklearn_available": true,
-  "k_requested": 6,
+  "profile_row_coverage_min": 0.4,
+  "n_input": 1473,
+  "n_kept": 1458,
   "k_effective": 6,
-  "silhouette": 0.22055304050445557,
-  "davies_bouldin": 1.544275809522149,
-  "n_stations": 1473,
-  "n_features": 91
+  "silhouette": 0.17784246035176426,
+  "davies_bouldin": 1.569870418312935,
+  "n_stations": 1458
 }
