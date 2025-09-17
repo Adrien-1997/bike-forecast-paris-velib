@@ -16,8 +16,6 @@ jobs:
     env:
       MPLBACKEND: Agg
       TZ: Europe/Paris
-      PYTHONUTF8: "0"
-      PYTHONIOENCODING: "cp1252"
     concurrency:
       group: pages-build
       cancel-in-progress: false
@@ -84,8 +82,6 @@ jobs:
     env:
       MPLBACKEND: Agg
       TZ: Europe/Paris
-      PYTHONUTF8: "0"
-      PYTHONIOENCODING: "cp1252"
     concurrency:
       group: pages-build
       cancel-in-progress: false
@@ -116,10 +112,10 @@ jobs:
           print(res)
           import json, pathlib
           p = pathlib.Path("docs/exports"); p.mkdir(parents=True, exist_ok=True)
-          with open(p/"baseline.json", "w", encoding="cp1252", newline="") as f:
+          with open(p/"baseline.json", "w", encoding="utf-8", newline="") as f:
               json.dump(
                   {"mae_valid": res["mae"], "rmse_valid": res["rmse"], "n_valid": res["n_valid"]},
-                  f, indent=2, ensure_ascii=True
+                  f, indent=2, ensure_ascii=False
               )
           PY
 
