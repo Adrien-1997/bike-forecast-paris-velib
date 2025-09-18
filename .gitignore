@@ -1,59 +1,18 @@
-# -------------------------
-# Python / build / venv
-# -------------------------
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.so
-*.egg-info/
-.eggs/
-*.log
-
+﻿.cache_data/
 .venv/
-.env
-.env.*
+site/
+docs/assets/maps/
+docs/assets/tables/
 
-# -------------------------
-# OS / Editors
-# -------------------------
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-
-# -------------------------
-# MkDocs
-# -------------------------
-site/                 # dossier de build mkdocs
-
-# -------------------------
-# Données & artefacts lourds (re-générables)
-# -------------------------
-# Données locales
-data/
-!data/README.md
-
-# DuckDB / entrepôts
-warehouse.duckdb
-
-# Exports de travail (racine)
-# on ignore tout docs/exports sauf quelques fichiers utiles
+# keep only the 2 needed assets; ignore the rest
 docs/exports/*
-!docs/exports/baseline.json
-!docs/exports/auto/
-!docs/exports/auto/*.md
+!docs/exports/velib.parquet
 
-# -------------------------
-# Assets du site
-# -------------------------
-# ⚠️ On CONSERVE docs/assets/** dans Git pour que le site
-# s’affiche sans re-lancer les scripts.
-# (Si tu veux ignorer les grosses cartes HTML, décommente:)
-# docs/assets/maps/*.html
+docs/assets/figs/*
+!docs/assets/figs/network/overview/kpis_today_vs_lags.png
 
-# -------------------------
-# Notebooks / caches divers
-# -------------------------
-.ipynb_checkpoints/
-.cache/
+*.pkl
+*.joblib
+*.feather
+*.csv.gz
+*.ipynb_checkpoints/
