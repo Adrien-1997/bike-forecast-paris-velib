@@ -1,0 +1,25 @@
+# Cache local
+.cache_data/
+
+# Build & env
+.venv/
+site/
+
+# Données et images lourdes sauf les indispensables
+docs/exports/*
+!docs/exports/velib.parquet
+
+docs/assets/figs/*
+!docs/assets/figs/network/overview/kpis_today_vs_lags.png
+
+docs/assets/maps/
+docs/assets/tables/
+
+# Formats lourds génériques
+*.pkl
+*.joblib
+*.feather
+*.csv.gz
+
+# Notebooks
+*.ipynb_checkpoints/
