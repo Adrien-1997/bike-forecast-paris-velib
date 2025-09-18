@@ -12,13 +12,13 @@ Vérifier que le **pipeline d’ingestion** fournit des données **fraîches, co
 - Observe-t-on des **ruptures** (station figée, série plate, duplication, horodatages non monotones) ?
 
 ## Indicateurs clés (KPIs)
-- **Fraîcheur** : P50=285.00 min · P95=300.00 min vs SLO=5 min → ❌ Hors SLO
-- **Complétude (fenêtre 7 j)** : 46.31% (moyenne stations)
+- **Fraîcheur** : P50=60.00 min · P95=75.00 min vs SLO=5 min → ❌ Hors SLO
+- **Complétude (fenêtre 7 j)** : 45.56% (moyenne stations)
 - **Latence d’ingestion** : médiane=n.d. min · P95=n.d. min
 - **Schéma & contraintes** : 10 pass · 1 warn · 0 fail
-- **Anomalies** : doublons=0.00% · séquences plates≥8 pas=1766 · stations avec trous=1472
+- **Anomalies** : doublons=0.00% · séquences plates≥8 pas=1636 · stations avec trous=1472
 
-> Snapshot UTC : **2025-09-17T22:30:00** · Fenêtre récente : **7** jours
+> Snapshot UTC : **2025-09-17T23:45:00** · Fenêtre récente : **7** jours
 
 ---
 

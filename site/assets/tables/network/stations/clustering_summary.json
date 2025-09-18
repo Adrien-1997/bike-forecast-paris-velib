@@ -4,7 +4,7 @@
   "n_input": 1473,
   "n_kept": 1458,
   "k_effective": 6,
-  "silhouette": 0.17784246035176426,
-  "davies_bouldin": 1.569870418312935,
+  "silhouette": 0.1788137518285949,
+  "davies_bouldin": 1.563737441520647,
   "n_stations": 1458
 }

@@ -17,7 +17,7 @@
             <meta name="viewport" content="width=device-width,
                 initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
             <style>
-                #map_ad045b9070127f44a57c71afe6ccb238 {
+                #map_26b00ac0be0b7febf839a05f5a9f49cc {
                     position: relative;
                     width: 100.0%;
                     height: 100.0%;
@@ -61,16 +61,16 @@
 <body>
     
     
-            <div class="folium-map" id="map_ad045b9070127f44a57c71afe6ccb238" ></div>
+            <div class="folium-map" id="map_26b00ac0be0b7febf839a05f5a9f49cc" ></div>
         
 </body>
 <script>
     
     
-            var map_ad045b9070127f44a57c71afe6ccb238 = L.map(
-                "map_ad045b9070127f44a57c71afe6ccb238",
+            var map_26b00ac0be0b7febf839a05f5a9f49cc = L.map(
+                "map_26b00ac0be0b7febf839a05f5a9f49cc",
                 {
-                    center: [48.866978397714306, 2.351670507341603],
+                    center: [48.837668272811, 2.3448138346607],
                     crs: L.CRS.EPSG3857,
                     ...{
   "zoom": 12,
@@ -85,7 +85,7 @@
 
         
     
-            var tile_layer_670e3c9b4be266ba2cac46cbed14511b = L.tileLayer(
+            var tile_layer_e17a506e244f6ec4f56f79e3d73415b3 = L.tileLayer(
                 "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
                 {
   "minZoom": 0,
@@ -102,7 +102,7 @@
             );
         
     
-            tile_layer_670e3c9b4be266ba2cac46cbed14511b.addTo(map_ad045b9070127f44a57c71afe6ccb238);
+            tile_layer_e17a506e244f6ec4f56f79e3d73415b3.addTo(map_26b00ac0be0b7febf839a05f5a9f49cc);
         
     
             L.Control.TimeDimensionCustom = L.Control.TimeDimension.extend({
@@ -112,7 +112,7 @@
                     return newdate.format("YYYY-MM-DD HH:mm:ss");
                 }
             });
-            map_ad045b9070127f44a57c71afe6ccb238.timeDimension = L.timeDimension(
+            map_26b00ac0be0b7febf839a05f5a9f49cc.timeDimension = L.timeDimension(
                 {
                     period: "PT1H",
                 }
@@ -133,9 +133,9 @@
 },
 }
             );
-            map_ad045b9070127f44a57c71afe6ccb238.addControl(this.timeDimensionControl);
+            map_26b00ac0be0b7febf839a05f5a9f49cc.addControl(this.timeDimensionControl);
 
-            var geoJsonLayer = L.geoJson({"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.256898172199726, 48.947022436806705]}, "properties": {"time": "2025-09-16T22:30:00", "style": {"color": "red", "fillColor": "red", "opacity": 0.8}, "icon": "circle", "popup": "Gare d'Argenteuil \u2014 bikes=0"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.4965062363218, 48.823450589614]}, "properties": {"time": "2025-09-16T23:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Stalingrad - G\u00e9n\u00e9ral de Gaulle \u2014 bikes=24"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3340544619393, 48.870508937204]}, "properties": {"time": "2025-09-17T01:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Louis le Grand - Italiens \u2014 bikes=2"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3412207886577, 48.846102400979]}, "properties": {"time": "2025-09-17T03:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Le Goff - Gay-Lussac \u2014 bikes=3"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3445510864257812, 48.892939296937605]}, "properties": {"time": "2025-09-17T04:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Mairie du 18\u00e8me \u2014 bikes=23"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.363983690738678, 48.805342480621576]}, "properties": {"time": "2025-09-17T05:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "LCL Campus - Place Oscar Niemeyer \u2014 bikes=17"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3036286234855656, 48.89035817610495]}, "properties": {"time": "2025-09-17T06:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Porte d'Asni\u00e8res \u2014 bikes=11"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3539767041802, 48.857346707443]}, "properties": {"time": "2025-09-17T07:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Archives - Rivoli \u2014 bikes=11"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.304111124531457, 48.887070607581215]}, "properties": {"time": "2025-09-17T08:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Pereire - Place de Wagram \u2014 bikes=4"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.365212, 48.829268]}, "properties": {"time": "2025-09-17T09:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Place Nationale - Ch\u00e2teau-des-Rentiers \u2014 bikes=8"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.4152836203575, 48.874515389637]}, "properties": {"time": "2025-09-17T10:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Noisy le Sec - Jean-Baptiste Cl\u00e9ment \u2014 bikes=1"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3734183609485626, 48.794902381218904]}, "properties": {"time": "2025-09-17T11:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "G\u00e9nie - Mozart \u2014 bikes=1"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.349364310503006, 48.86785342111862]}, "properties": {"time": "2025-09-17T12:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Caire - Dussoubs \u2014 bikes=26"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3596492409706, 48.86610337431]}, "properties": {"time": "2025-09-17T13:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Sainte-Elisabeth - Turbigo \u2014 bikes=16"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.40079153681279, 48.897307310356055]}, "properties": {"time": "2025-09-17T14:45:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Place du Pr\u00e9sident Salvador Allende \u2014 bikes=22"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.375934, 48.82941]}, "properties": {"time": "2025-09-17T15:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Chevaleret - Tolbiac \u2014 bikes=16"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3381787144261, 48.889677905028]}, "properties": {"time": "2025-09-17T16:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Caulaincourt - Place Constantin Pecqueur \u2014 bikes=6"}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3434996604919, 48.849686566191]}, "properties": {"time": "2025-09-17T17:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Sorbonne - Ecoles \u2014 bikes=7"}}]}, {
+            var geoJsonLayer = L.geoJson({"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.3448138346607, 48.837668272811]}, "properties": {"time": "2025-09-17T22:30:00", "style": {"color": "green", "fillColor": "green", "opacity": 0.8}, "icon": "circle", "popup": "Port-Royal - H\u00f4pital du Val-de-Gr\u00e2ce \u2014 bikes=3"}}]}, {
                     pointToLayer: function (feature, latLng) {
                         if (feature.properties.icon == 'marker') {
                             if(feature.properties.iconstyle){
@@ -169,14 +169,14 @@
                     }
                 })
 
-            var timestamped_geo_json_ac407a21d3407a2981ba78ed5490fb8c = L.timeDimension.layer.geoJson(
+            var timestamped_geo_json_8ec198707deabf1ebd56855a3983a906 = L.timeDimension.layer.geoJson(
                 geoJsonLayer,
                 {
                     updateTimeDimension: true,
                     addlastPoint: true,
                     duration: "PT10M",
                 }
-            ).addTo(map_ad045b9070127f44a57c71afe6ccb238);
+            ).addTo(map_26b00ac0be0b7febf839a05f5a9f49cc);
         
 </script>
 </html>

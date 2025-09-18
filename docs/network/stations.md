@@ -69,7 +69,7 @@ Chaque station peut avoir une fiche dédiée (optionnel) :
 - **HDBSCAN** en option quand la densité varie beaucoup (gère le **bruit** sans imposer *k*).
 
 **Attribution & stabilité.**
-- Scores internes : **Silhouette = 0.178**, **Davies-Bouldin = 1.570** (k=6, n=1458).  
+- Scores internes : **Silhouette = 0.179**, **Davies-Bouldin = 1.564** (k=6, n=1458).  
 - **Bootstrap** par semaines pour vérifier la stabilité (optionnel).  
 - **Centroïdes** publiés (courbes moyennes par cluster) comme *comportements-types*.  
 - Signalement des stations **frontières** (incertitude) possible.

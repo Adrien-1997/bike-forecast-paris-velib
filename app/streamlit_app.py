@@ -6,6 +6,7 @@ from typing import Tuple, List
 import os, glob, sys
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 import requests
 import folium
 from folium.plugins import MarkerCluster
@@ -209,25 +210,70 @@ def _load_recent_bins() -> pd.DataFrame:
     return df[pd.to_datetime(df["tbin_utc"]) >= cutoff.tz_localize(None)].copy()
 
 def _add_lags_rollings(df: pd.DataFrame) -> pd.DataFrame:
-    """Recalcule lags/rollings/trend comme à l'entraînement, par station."""
+    """
+    Recalcule lags/rollings/trend par station.
+    Compatible pandas >=2.2 (include_groups=False) et <2.2 (fallback).
+    """
+    if df is None or df.empty:
+        return df
+
+    req_cols = ["tbin_utc", "nb_velos_bin", "occ_ratio_bin"]
+    for c in req_cols:
+        if c not in df.columns:
+            df[c] = np.nan
+
+    gdf = df.copy()
+    gdf["tbin_utc"] = pd.to_datetime(gdf["tbin_utc"], utc=True, errors="coerce").dt.tz_localize(None)
+    gdf["nb_velos_bin"] = pd.to_numeric(gdf["nb_velos_bin"], errors="coerce")
+    gdf["occ_ratio_bin"] = pd.to_numeric(gdf["occ_ratio_bin"], errors="coerce")
+
     def _per_station(g: pd.DataFrame) -> pd.DataFrame:
         g = g.sort_values("tbin_utc").copy()
         lag_bins = (1, 2, 3, 4, 8, 16)
         for b in lag_bins:
             g[f"lag_nb_{b}b"]  = g["nb_velos_bin"].shift(b)
             g[f"lag_occ_{b}b"] = g["occ_ratio_bin"].shift(b)
-        g["roll_nb_4b"]  = g["nb_velos_bin"].rolling(4, min_periods=1).mean()
-        g["roll_nb_8b"]  = g["nb_velos_bin"].rolling(8, min_periods=1).mean()
-        g["roll_occ_4b"] = g["occ_ratio_bin"].rolling(4, min_periods=1).mean()
-        g["roll_occ_8b"] = g["occ_ratio_bin"].rolling(8, min_periods=1).mean()
+        g["roll_nb_4b"]  = g["nb_velos_bin"].rolling(window=4, min_periods=1).mean()
+        g["roll_nb_8b"]  = g["nb_velos_bin"].rolling(window=8, min_periods=1).mean()
+        g["roll_occ_4b"] = g["occ_ratio_bin"].rolling(window=4, min_periods=1).mean()
+        g["roll_occ_8b"] = g["occ_ratio_bin"].rolling(window=8, min_periods=1).mean()
         g["trend_nb_4b"]  = (g["nb_velos_bin"] - g["nb_velos_bin"].shift(4)) / 4.0
         g["trend_occ_4b"] = (g["occ_ratio_bin"] - g["occ_ratio_bin"].shift(4)) / 4.0
         return g
+
     try:
-        return df.groupby("stationcode", group_keys=False).apply(_per_station)
+        out = gdf.groupby("stationcode", group_keys=False).apply(_per_station, include_groups=False)
     except TypeError:
-        # compat pandas < 2.2 (pas de include_groups)
-        return df.groupby("stationcode", group_keys=False).apply(_per_station)
+        out = gdf.groupby("stationcode", group_keys=False).apply(_per_station)
+
+    if "stationcode" not in out.columns and "stationcode" in gdf.columns:
+        out = out.join(gdf[["stationcode"]])
+
+    # Ne convertir que les float64 en float32 (on laisse les int tranquilles)
+    float_cols = out.select_dtypes(include=["float64"]).columns
+    if len(float_cols):
+        out[float_cols] = out[float_cols].astype("float32", copy=False)
+
+    return out
+
+    # apply groupby avec compatibilité versions pandas
+    try:
+        out = gdf.groupby("stationcode", group_keys=False).apply(_per_station, include_groups=False)
+    except TypeError:
+        # pandas < 2.2 ne connaît pas include_groups
+        out = gdf.groupby("stationcode", group_keys=False).apply(_per_station)
+
+    # Assure la présence de stationcode (utile pour les merges ultérieurs)
+    if "stationcode" not in out.columns and "stationcode" in gdf.columns:
+        out = out.join(gdf[["stationcode"]])
+
+    # Types compacts (optionnel)
+    num_cols = out.select_dtypes(include=["float64", "int64"]).columns
+    out[num_cols] = out[num_cols].astype("float32", copy=False)
+
+    return out
+
+
 
 def build_live_feature_frame(feat_cols: List[str]) -> pd.DataFrame:
     """
@@ -271,27 +317,42 @@ def load_model_cached_minutes(h_minutes: int):
 
 # --- REPLACE existing predict_nbvelos_t1h with this version ---
 def predict_nbvelos_t1h(df_now: pd.DataFrame) -> pd.DataFrame:
-    """
-    Retourne un DataFrame avec colonnes:
-      stationcode, y_nb_pred
-    Fallback: persistance (numbikesavailable) si modèle indisponible.
-    """
     try:
         model, feat_cols = load_model_cached_minutes(60)
         X = build_live_feature_frame(feat_cols)
         if X.empty:
-            raise RuntimeError("No live features available")
+            raise RuntimeError("No live features available (empty X)")
 
         stationcode = X["stationcode"].astype(str).values
-        Xmat = X.drop(columns=["stationcode"])
+        Xmat = X.drop(columns=["stationcode"], errors="ignore")
         best_it = getattr(model, "best_iteration", None)
-        y = model.predict(Xmat, num_iteration=best_it)
+        y = model.predict(Xmat, num_iteration=best_it) if best_it else model.predict(Xmat)
         y = np.maximum(y, 0.0)
         return pd.DataFrame({"stationcode": stationcode, "y_nb_pred": y})
-    except Exception:
-        # fallback persistance
+    except Exception as e:
+        st.warning(f"⚠️ Fallback baseline activé : {type(e).__name__}: {e}")
+        # Optionnel : afficher les colonnes attendues vs présentes
+        try:
+            st.caption("Debug features live")
+            base = _load_recent_bins()
+            if base is None or base.empty:
+                st.code("velib.parquet vide ou trop ancien (<-2 jours).", language="text")
+            else:
+                st.code(
+                    "Manque colonnes ? " +
+                    f"has_tbin={ 'tbin_utc' in base.columns }, " +
+                    f"has_hour={ 'hour_utc' in base.columns }, " +
+                    f"has_nb={ 'nb_velos_bin' in base.columns }, " +
+                    f"has_occ={ 'occ_ratio_bin' in base.columns }, " +
+                    f"rows={len(base)}",
+                    language="text"
+                )
+        except Exception:
+            pass
+        # Persistance
         y = pd.to_numeric(df_now.get("numbikesavailable"), errors="coerce").fillna(0).astype(int)
         return pd.DataFrame({"stationcode": df_now["stationcode"].astype(str), "y_nb_pred": y})
+
 
 
 
@@ -304,12 +365,6 @@ def _ring_color(ratio: float) -> str:
     if ratio >= 0.50:  return "#a6d96a"
     if ratio >= 0.25:  return "#fdae61"
     return "#d7191c"
-
-
-import folium
-from folium.plugins import MarkerCluster
-import pandas as pd
-import numpy as np
 
 def build_map(
     df: pd.DataFrame,
@@ -473,6 +528,37 @@ try:
 except Exception:
     fetched_local = pd.Timestamp.utcnow().tz_localize("UTC").tz_convert("Europe/Paris")
 
+
+
+def _sanity_checks():
+    problems = []
+    if not DATA_PARQUET.exists():
+        problems.append("❌ docs/exports/velib.parquet absent")
+    else:
+        dfp = pd.read_parquet(DATA_PARQUET)
+        if dfp.empty:
+            problems.append("❌ velib.parquet vide")
+        else:
+            last = pd.to_datetime(dfp["tbin_utc"], utc=True, errors="coerce").max()
+            if pd.isna(last) or (pd.Timestamp.utcnow() - last) > pd.Timedelta(days=2):
+                problems.append("❌ velib.parquet trop ancien (filtré par cutoff 2 jours)")
+            need = {"tbin_utc","hour_utc","stationcode","nb_velos_bin","occ_ratio_bin"}
+            miss = need - set(dfp.columns)
+            if miss: problems.append(f"❌ colonnes manquantes: {sorted(miss)}")
+    model_path = MODELS_DIR
+    if not model_path.exists():
+        problems.append("❌ models/ introuvable")
+    if problems:
+        st.error(" • ".join(problems))
+_sanity_checks()
+
+
+
+
+
+
+
+
 # prédiction T+1h
 pred_df = predict_nbvelos_t1h(df_now)
 df_with_pred = df_now.merge(pred_df, on="stationcode", how="left")
@@ -619,52 +705,82 @@ else:
     with c3: st.markdown(f"<div class='kpi-row kpi-card'><div class='kpi-title'>Bornes libres (actuel)</div><div class='kpi-value'>{kpis['docks_total']}</div></div>", unsafe_allow_html=True)
     with c4: st.markdown(f"<div class='kpi-row kpi-card'><div class='kpi-title'>Occupation réseau</div><div class='kpi-value'>{kpis['occ_pct']} %</div></div>", unsafe_allow_html=True)
 
-    # Graphs 72h (si disponibles)
-    st.markdown("### Historique (72h)")
-    patterns = ["*72*.png", "*72*.jpg", "*72*.jpeg", "*72*.svg"]
-    imgs: List[str] = []
-    try:
-        for patt in patterns:
-            imgs.extend(sorted(glob.glob(str(FIGS_DIR / patt)), key=os.path.getmtime, reverse=True))
-    except Exception:
-        imgs = []
-    if not imgs:
-        st.info(f"Aucun graphe 72h trouvé dans `{FIGS_DIR}`.")
-    else:
-        for p in imgs:
-            st.markdown("<div class='monitoring-fig'>", unsafe_allow_html=True)
-            st.image(p, use_container_width=True, caption=Path(p).name)
-            st.markdown("</div>", unsafe_allow_html=True)
 
-    # Top 10 stations à risque (T+1h)
-    st.markdown("### 🔴 Stations à risque à T+1h")
+    # -------------------------------------------------------------------------
+    # PAGE — MONITORING — Historique global
+    # -------------------------------------------------------------------------
+    st.markdown("### Historique réseau (indicateurs clés)")
+
+    # Image locale (présente dans le dépôt)
+    fallback_img = ROOT / "docs" / "assets" / "figs" / "network" / "overview" / "kpis_today_vs_lags.png"
+
+    if fallback_img.exists():
+        st.markdown("<div class='monitoring-fig'>", unsafe_allow_html=True)
+        st.image(
+            str(fallback_img),
+            use_container_width=True,
+            caption="KPIs réseau : comparaison aujourd’hui vs historiques (lags)"
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.info("Aucune figure réseau disponible dans docs/assets/figs/network/overview/")
+
+    # -------------------------------------------------------------------------
+    # PAGE — MONITORING — Top 10 stations critiques (T+1h)
+    # -------------------------------------------------------------------------
+    st.markdown("### 🔴 Stations critiques à T+1h")
+
     dfm = df_with_pred.copy()
     for c in ["capacity","numbikesavailable","numdocksavailable","y_nb_pred"]:
         dfm[c] = pd.to_numeric(dfm.get(c), errors="coerce").fillna(0).astype(int)
-    dfm["cap_eff"]    = dfm[["capacity","numbikesavailable"]].max(axis=1)
-    dfm["pred_bikes"] = np.minimum(dfm["y_nb_pred"], dfm["cap_eff"])
-    dfm["pred_docks"] = (dfm["cap_eff"] - dfm["pred_bikes"]).clip(lower=0).astype(int)
 
-    top_sat  = dfm.sort_values(["pred_docks","cap_eff"], ascending=[True, False]).head(10).copy()
-    top_lack = dfm.sort_values(["pred_bikes","cap_eff"], ascending=[True, False]).head(10).copy()
+    dfm["cap_eff"] = dfm[["capacity","numbikesavailable"]].max(axis=1)
+    dfm = dfm[dfm["cap_eff"] > 0].copy()
 
-    rename_map = {
-        "stationcode": "Code", "name":"Station", "cap_eff":"Capacité",
-        "numbikesavailable": "Vélos actuels", "numdocksavailable": "Bornes actuelles",
-        "pred_bikes": "Vélos T+1h", "pred_docks": "Bornes T+1h",
-    }
-    for dfX in (top_sat, top_lack):
-        dfX.rename(columns=rename_map, inplace=True)
+    # Pourcentages actuel et prévision
+    dfm["pct_now"] = 100 * dfm["numbikesavailable"] / dfm["cap_eff"]
+    dfm["pct_pred"] = 100 * dfm["y_nb_pred"] / dfm["cap_eff"]
 
-    sat_cols  = ["Station","Code","Capacité","Bornes T+1h","Vélos T+1h","Bornes actuelles","Vélos actuels"]
-    lack_cols = ["Station","Code","Capacité","Vélos T+1h","Bornes T+1h","Vélos actuels","Bornes actuelles"]
+    # Sélection critique
+    top_sat  = dfm.sort_values("pct_pred", ascending=False).head(10).copy()  # proches de 100%
+    top_lack = dfm.sort_values("pct_pred", ascending=True).head(10).copy()   # proches de 0%
 
     c1, c2 = st.columns(2, gap="large")
+
+    # Nombre max de lignes entre les deux tops
+    n_max = max(len(top_sat), len(top_lack), 10)  # min 10 pour garder lisible
+    figsize = (7, n_max * 0.5)  # largeur 7, hauteur dynamique commune
+
+    def plot_comparison(df, title, figsize):
+        fig, ax = plt.subplots(figsize=figsize)
+
+        y = np.arange(len(df))
+        ax.barh(y - 0.2, df["pct_now"], height=0.4, color="#999999", label="Actuel")
+        ax.barh(y + 0.2, df["pct_pred"], height=0.4, color="#1f78b4", label="Prévu")
+        ax.set_yticks(y)
+        ax.set_yticklabels(df["name"])
+        ax.set_xlabel("% remplissage (vélos / capacité)")
+        ax.set_xlim(0, 100)
+        ax.axvline(100, color="red", linestyle="--", linewidth=1, label="Seuil critique")
+        ax.axvline(0, color="red", linestyle="--", linewidth=1)
+        ax.invert_yaxis()
+        ax.legend(loc="lower right")
+        ax.set_title(title)
+
+        # annotation delta
+        for i, (now, pred) in enumerate(zip(df["pct_now"], df["pct_pred"])):
+            delta = pred - now
+            ax.text(pred + 1, i + 0.2, f"{pred:.0f}% ({delta:+.0f} pts)", va="center", fontsize=8)
+
+        return fig
+
     with c1:
-        st.markdown("**Top 10 — Risque de saturation (T+1h)**")
-        st.dataframe(top_sat.reindex(columns=[c for c in sat_cols if c in top_sat.columns]),
-                     use_container_width=True, hide_index=True)
+        st.markdown("**Top 10 — Risque de saturation**")
+        fig = plot_comparison(top_sat, "Stations proches de 100% (pleines)", figsize)
+        st.pyplot(fig)
+
     with c2:
-        st.markdown("**Top 10 — Risque de manque (T+1h)**")
-        st.dataframe(top_lack.reindex(columns=[c for c in lack_cols if c in top_lack.columns]),
-                     use_container_width=True, hide_index=True)
+        st.markdown("**Top 10 — Risque de manque**")
+        fig = plot_comparison(top_lack, "Stations proches de 0% (vides)", figsize)
+        st.pyplot(fig)
+

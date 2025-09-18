@@ -18,8 +18,7 @@ except Exception:
 
 import os, locale
 
-# Encodage de sortie : prend PYTHONIOENCODING si présent, sinon encodage Windows (CP-1252)
-ENC = os.environ.get("PYTHONIOENCODING") or locale.getpreferredencoding(False) or "cp1252"
+ENC = "utf-8"
 
 
 # --------------------------- Paths & constants ---------------------------

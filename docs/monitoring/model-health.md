@@ -18,12 +18,12 @@
 ---
 
 ## Résumé rapide (fenêtres récentes)
-- **Fenêtre 7j** — MAE: **2.892**, Lift: **0.091**, Couverture: **75.40%**  
-- **Fenêtre 28j** — MAE: **2.952**, Lift: **0.100**, Couverture: **75.45%**  
-- **Dernier jour** — Couverture prédictive: **75.79%**  
+- **Fenêtre 7j** — MAE: **2.972**, Lift: **0.094**, Couverture: **75.40%**  
+- **Fenêtre 28j** — MAE: **2.983**, Lift: **0.099**, Couverture: **75.46%**  
+- **Dernier jour** — Couverture prédictive: **75.59%**  
 - **Alertes** : Dégradation — · Couverture — · Calibration ⚠️ · Fallback — · Gating retrain —
 
-> **Plage temporelle analysée** : 2025-09-07T23:00:00 → 2025-09-17T17:45:00 (timezone: **Europe/Paris**) · Horizon: **60 min** · Série quotidienne exportée: **14 jours**
+> **Plage temporelle analysée** : 2025-09-07T23:00:00 → 2025-09-17T22:45:00 (timezone: **Europe/Paris**) · Horizon: **60 min** · Série quotidienne exportée: **14 jours**
 
 ---
 

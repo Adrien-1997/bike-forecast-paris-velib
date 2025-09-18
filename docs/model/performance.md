@@ -20,16 +20,15 @@ Mesurer la **qualité des prévisions** du modèle et la situer **par rapport à
 
 ## Résumé chiffré (fenêtre)
 - **Horizon (min)** : **60**  
-- **Couverture prédictive** : **75.45%**  
-- **MAE** — modèle : **2.952** · baseline : **0.000**  
-- **RMSE** — modèle : **4.442** · baseline : **0.000**  
-- **Biais (ME)** — modèle : **-0.019** · baseline : **0.000**  
-- **Lift vs baseline** : **nan%**  
-- **Données** : **568913** lignes · **1473** stations · **2025-09-08 01:00 CEST → 2025-09-17 19:45 CEST**  
+- **Couverture prédictive** : **75.46%**  
+- **MAE** — modèle : **2.983** · baseline : **3.309**  
+- **RMSE** — modèle : **4.487** · baseline : **5.544**  
+- **Biais (ME)** — modèle : **-0.009** · baseline : **0.001**  
+- **Lift vs baseline** : **9.85%**  
+- **Données** : **584989** lignes · **1473** stations · **2025-09-08 01:00 CEST → 2025-09-18 00:45 CEST**  
 
-> Les découpages heure/jour utilisent l’axe **décision T (local)**.  
-> Les tracés *observé vs prédit* sont alignés sur **l’axe cible T+h** (colonne `ts_target`).  
-> La baseline est **reconstruite** comme persistance `y(T+h) = y(T)` puis alignée sur `ts_target`.
+> Les séries temporelles sont agrégées sur l’axe **décision T (local)** pour les découpages heure/jour.  
+> Les tracés *observé vs prédit* sont alignés sur **l’axe cible T+h** (colonne `ts_target`) pour éviter tout décalage visuel.
 
 ---
 

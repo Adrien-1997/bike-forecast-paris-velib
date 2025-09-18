@@ -8,8 +8,8 @@
 </p>
 
 ## 2) Quick stats
-- **Période events** : 2025-09-07T23:00:00 → 2025-09-17T17:45:00
-- **Période perf**   : 2025-09-07T23:00:00 → 2025-09-17T17:45:00
+- **Période events** : 2025-09-07T23:00:00 → 2025-09-17T22:45:00
+- **Période perf**   : 2025-09-07T23:00:00 → 2025-09-17T22:45:00
 - **Stations**       : events=1473 · perf=1473
 - **Horizon (min)**  : 60
 - **Features**       : 33 (source: src.forecast.load_model_bundle)

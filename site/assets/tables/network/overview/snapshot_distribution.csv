@@ -1,5 +1,5 @@
 metric,count,total_active,pct
-bike_avail,1084,1119,96.87
-dock_avail,1116,1119,99.73
-penury,35,1119,3.13
-saturation,3,1119,0.27
+bike_avail,1314,1335,98.43
+dock_avail,1311,1335,98.2
+penury,21,1335,1.57
+saturation,24,1335,1.8

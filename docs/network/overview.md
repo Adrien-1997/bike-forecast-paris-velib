@@ -2,13 +2,13 @@
 
 Cette page donne un **coup d’œil instantané** à la santé du réseau (snapshot le plus récent) et situe la **journée en cours** par rapport aux semaines précédentes.
 
-## KPIs (snapshot 2025-09-17 19:45:00+02:00)
-- **Stations actives** : **1119** / **1473** (offline : 354)
-- **Disponibilité vélo** : **96.87%**
-- **Disponibilité place** : **99.73%**  
-- **Taux de pénurie** : **3.13%** · **Taux de saturation** : **0.27%**
-- **Couverture récente** (sur 14 j) : **89.82%**
-- **Volatilité intra-journée** (écart-type vélos / station, médiane) : **5.21**
+## KPIs (snapshot 2025-09-18 00:45:00+02:00)
+- **Stations actives** : **1335** / **1473** (offline : 138)
+- **Disponibilité vélo** : **98.43%**
+- **Disponibilité place** : **98.20%**  
+- **Taux de pénurie** : **1.57%** · **Taux de saturation** : **1.80%**
+- **Couverture récente** (sur 14 j) : **89.65%**
+- **Volatilité intra-journée** (écart-type vélos / station, médiane) : **0.82**
 
 ---
 

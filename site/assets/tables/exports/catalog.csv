@@ -1,3 +1,3 @@
 path,exists,size_bytes,rows,cols,ts_min,ts_max,stations,dup_pct
-H:\Documents\2. Perso\github\bike-forecast-paris-velib\docs\exports\events.parquet,True,4506809,568913,12,2025-09-07T23:00:00+00:00,2025-09-17T17:45:00+00:00,1473,0.0
-H:\Documents\2. Perso\github\bike-forecast-paris-velib\docs\exports\perf.parquet,True,5447963,568913,8,2025-09-07T23:00:00+00:00,2025-09-17T17:45:00+00:00,1473,0.0
+H:\Documents\2. Perso\github\bike-forecast-paris-velib\docs\exports\events.parquet,True,4661268,584989,12,2025-09-07T23:00:00+00:00,2025-09-17T22:45:00+00:00,1473,0.0
+H:\Documents\2. Perso\github\bike-forecast-paris-velib\docs\exports\perf.parquet,True,5598370,584989,8,2025-09-07T23:00:00+00:00,2025-09-17T22:45:00+00:00,1473,0.0

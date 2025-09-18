@@ -1,2 +1,2 @@
 snapshot_ts_utc,snapshot_ts_local,stations_universe,stations_active,stations_offline,availability_bike_pct,availability_dock_pct,penury_pct,saturation_pct,coverage_pct,volatility_today,last_days,ref_days
-2025-09-17 17:45:00,2025-09-17 19:45:00+02:00,1473,1119,354,96.87,99.73,3.13,0.27,89.82,5.21,14,28
+2025-09-17 22:45:00,2025-09-18 00:45:00+02:00,1473,1335,138,98.43,98.2,1.57,1.8,89.65,0.82,14,28

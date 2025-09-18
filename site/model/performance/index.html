@@ -1159,17 +1159,16 @@
 <h2 id="resume-chiffre-fenetre">Résumé chiffré (fenêtre)<a class="headerlink" href="#resume-chiffre-fenetre" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Horizon (min)</strong> : <strong>60</strong>  </li>
-<li><strong>Couverture prédictive</strong> : <strong>75.45%</strong>  </li>
-<li><strong>MAE</strong> — modèle : <strong>2.952</strong> · baseline : <strong>0.000</strong>  </li>
-<li><strong>RMSE</strong> — modèle : <strong>4.442</strong> · baseline : <strong>0.000</strong>  </li>
-<li><strong>Biais (ME)</strong> — modèle : <strong>-0.019</strong> · baseline : <strong>0.000</strong>  </li>
-<li><strong>Lift vs baseline</strong> : <strong>nan%</strong>  </li>
-<li><strong>Données</strong> : <strong>568913</strong> lignes · <strong>1473</strong> stations · <strong>2025-09-08 01:00 CEST → 2025-09-17 19:45 CEST</strong>  </li>
+<li><strong>Couverture prédictive</strong> : <strong>75.46%</strong>  </li>
+<li><strong>MAE</strong> — modèle : <strong>2.983</strong> · baseline : <strong>3.309</strong>  </li>
+<li><strong>RMSE</strong> — modèle : <strong>4.487</strong> · baseline : <strong>5.544</strong>  </li>
+<li><strong>Biais (ME)</strong> — modèle : <strong>-0.009</strong> · baseline : <strong>0.001</strong>  </li>
+<li><strong>Lift vs baseline</strong> : <strong>9.85%</strong>  </li>
+<li><strong>Données</strong> : <strong>584989</strong> lignes · <strong>1473</strong> stations · <strong>2025-09-08 01:00 CEST → 2025-09-18 00:45 CEST</strong>  </li>
 </ul>
 <blockquote>
-<p>Les découpages heure/jour utilisent l’axe <strong>décision T (local)</strong>.<br />
-Les tracés <em>observé vs prédit</em> sont alignés sur <strong>l’axe cible T+h</strong> (colonne <code>ts_target</code>).<br />
-La baseline est <strong>reconstruite</strong> comme persistance <code>y(T+h) = y(T)</code> puis alignée sur <code>ts_target</code>.</p>
+<p>Les séries temporelles sont agrégées sur l’axe <strong>décision T (local)</strong> pour les découpages heure/jour.<br />
+Les tracés <em>observé vs prédit</em> sont alignés sur <strong>l’axe cible T+h</strong> (colonne <code>ts_target</code>) pour éviter tout décalage visuel.</p>
 </blockquote>
 <hr />
 <h2 id="decoupages-comparaisons">Découpages &amp; comparaisons<a class="headerlink" href="#decoupages-comparaisons" title="Permanent link">&para;</a></h2>

@@ -3,8 +3,8 @@
 > **Objectif** — Détecter la **dérive des distributions** entre une fenêtre **courante** et une fenêtre de **référence**, afin d’anticiper un **risque de dégradation** du modèle.
 
 **Fenêtres analysées (UTC)**  
-- Référence : **2025-08-13 17:45 → 2025-09-10 17:45**  
-- Courante : **2025-09-10 17:45 → 2025-09-17 17:45**
+- Référence : **2025-08-13 22:45 → 2025-09-10 22:45**  
+- Courante : **2025-09-10 22:45 → 2025-09-17 22:45**
 
 ---
 
@@ -24,7 +24,7 @@
 - **Drift conditionnel** : par **cluster de stations**, par **heure du jour**, par **arrondissement/zone** (*si disponibles*).
 
 > **Résumé courant**  
-> PSI global (occ_ratio) : **0.026** · Feature la plus dérivée : **occ_ratio** (PSI=0.026)
+> PSI global (occ_ratio) : **0.017** · Feature la plus dérivée : **occ_ratio** (PSI=0.017)
 
 ---
 

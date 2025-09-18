@@ -24,4 +24,3 @@ streamlit-js-eval>=0.1.0
 
 # Images
 Pillow>=10.0
-
