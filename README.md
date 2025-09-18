@@ -62,26 +62,22 @@ Public GBFS snapshots → normalized 15‑min aggregates → **features & model 
 
 ```mermaid
 flowchart LR
+  A[GBFS ingest] --> B[DuckDB]
+  B --> C[Aggregate + weather]
+  C --> D[Export velib.parquet]
+  D --> E[Normalize datasets]
+  E --> EV[events.parquet]
+  E --> PF[perf.parquet]
 
-  %% Ingestion -> Export
-  A[GBFS ingestion<br/>src/ingest.py<br/>(every 15 min)]
-  B[DuckDB snapshots<br/>warehouse.duckdb]
-  C[15-min aggregation + weather<br/>src/aggregate.py]
-  D[Canonical export<br/>docs/exports/velib.parquet]
+  EV --> G[Build features]
+  PF --> G
+  G --> H[Train LGBM h60]
+  H --> I[Model bundle]
+  I --> M[Apply model -> y_pred]
+  EV --> M
+  PF --> M
 
-  %% Normalization -> events/perf
-  E[Normalization<br/>tools/datasets.py]
-  EV[events.parquet<br/>ts, station_id, bikes, capacity, occ, lat, lon, name]
-  PF[perf.parquet<br/>ts, station_id, y_true, y_pred_baseline, y_pred, horizon_min]
-
-  %% Model train + predict
-  G[Feature builder<br/>(src/features, src/cal_features)]
-  H[Train LightGBM<br/>(h = 60 min)]
-  I[Model bundle<br/>models/*.joblib]
-  M[Inject predictions<br/>tools/apply_model.py -> perf.y_pred]
-
-  %% Pages (build_*.py) -> assets -> site
-  subgraph PAGES[Pages]
+  subgraph Pages
     R1[network/overview]
     R2[network/stations]
     R3[network/dynamics]
@@ -96,30 +92,7 @@ flowchart LR
     D3[data/methodology]
   end
 
-  X[docs/assets<br/>(figs, tables, maps)]
-  K[MkDocs -> gh-pages]
-
-  %% CI
-  CI1[velib-ingest<br/>(every 15 min)]
-  CI2[velib-train<br/>(daily)]
-  CI3[monitoring-site<br/>(4 per day: 00 06 12 18 UTC)]
-  T[check_retrain.py<br/>PSI high or MAE_24h high -> retrain]
-
-  %% Flows
-  A --> B --> C --> D
-  D --> E
-  E --> EV
-  E --> PF
-
-  EV --> G
-  PF --> G
-  G  --> H --> I
-  I  --> M
-  EV --> M
-  PF --> M
-
-  %% Pages read data and write assets
-  EV --> R1 --> X
+  EV --> R1 --> X[assets]
   EV --> R2 --> X
   EV --> R3 --> X
   PF --> M1 --> X
@@ -131,19 +104,16 @@ flowchart LR
   D  --> D1 --> X
   D  --> D2 --> X
   D  --> D3 --> X
+  X --> K[gh-pages]
 
-  X --> K
-
-  %% CI wiring
-  CI1 --> B
-  CI3 --> K
-  M1 --> T
+  CI1[ingest 15m] --> B
+  CI3[site 4/day] --> K
+  M1 --> T[check retrain]
   Q3 --> T
   Q2 --> T
-  T -->|yes| CI2
+  T -->|yes| CI2[train daily]
   CI2 --> H
   CI2 --> K
-
 ```
 
 ### Core `src/*` chain
