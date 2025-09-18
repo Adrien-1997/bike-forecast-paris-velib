@@ -14,10 +14,11 @@ import numpy as np
 import pandas as pd
 import sys
 try:
-    sys.stdout.reconfigure(encoding="cp1252", errors="replace")
-    sys.stderr.reconfigure(encoding="cp1252", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt

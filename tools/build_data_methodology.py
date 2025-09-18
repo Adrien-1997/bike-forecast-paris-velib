@@ -32,10 +32,11 @@ from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 
 # Console (évite les erreurs d'encodage Windows)
 try:
-    sys.stdout.reconfigure(encoding="cp1252", errors="replace")
-    sys.stderr.reconfigure(encoding="cp1252", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
+
 
 # --------------------------- Chemins ---------------------------
 

@@ -58,7 +58,13 @@ def run(cmd: List[object]) -> None:
     """Run a mandatory step; raise on non-zero exit."""
     cmd = _as_str_list(cmd)
     print("[RUN]", " ".join(cmd))
-    res = subprocess.run(cmd, capture_output=True, text=True, encoding="cp1252", errors="replace")
+    res = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",     # ← au lieu de cp1252
+        errors="replace"
+    )
     if res.stdout:
         print(res.stdout.rstrip())
     if res.returncode != 0:
@@ -71,7 +77,13 @@ def run_optional(cmd: List[object]) -> None:
     """Run a non-blocking step; log failure but continue."""
     cmd = _as_str_list(cmd)
     print("[RUN-OPTIONAL]", " ".join(cmd))
-    res = subprocess.run(cmd, capture_output=True, text=True, encoding="cp1252", errors="replace")
+    res = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",     # ← idem ici
+        errors="replace"
+    )
     if res.stdout:
         print(res.stdout.rstrip())
     if res.returncode != 0:
