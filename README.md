@@ -3,18 +3,18 @@
 [![CI — training](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/train.yml/badge.svg)](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/train.yml)
 [![Docs](https://github.com/Adrien-1997/bike-forecast-paris-velib/actions/workflows/site.yml/badge.svg?branch=main)](https://adrien-1997.github.io/bike-forecast-paris-velib/)
 [![App Streamlit](https://img.shields.io/badge/app-streamlit-green)](https://adrien-1997-bike-forecast-paris-velib-appstreamlit-app-vq1xma.streamlit.app/)
-![Version](https://img.shields.io/badge/version-v2.1.0-blue.svg)
+![Version](https://img.shields.io/badge/version-v2.2.0-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-black)
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB)
 
 ![Carte réseau](docs/map.png)
 
-**Short-term forecasting (+60 min) and professional monitoring of the Vélib’ bike network in Paris.**  
-Public GBFS snapshots → normalized 15‑min aggregates → **features & model training** → monitoring with **auto‑retrain**.
+Short-term forecasting (+60 min) and professional monitoring of the Vélib’ bike network in Paris.
+Public GBFS snapshots -> normalized 15-min aggregates -> features & model training -> monitoring with auto-retrain.
 
 > Quick links:
-> **Docs** → https://adrien-1997.github.io/bike-forecast-paris-velib/
-> **App** → https://adrien-1997-bike-forecast-paris-velib-appstreamlit-app-vq1xma.streamlit.app/
+> Docs -> https://adrien-1997.github.io/bike-forecast-paris-velib/
+> App  -> https://adrien-1997-bike-forecast-paris-velib-appstreamlit-app-vq1xma.streamlit.app/
 
 ---
 
@@ -34,22 +34,20 @@ Public GBFS snapshots → normalized 15‑min aggregates → **features & model 
 
 ## 🔎 Key Features
 
-- **Ingestion every 15 min**: full network snapshot stored in DuckDB.
-- **15‑min aggregation**: standardized exports (`docs/exports/velib.parquet`, `.csv`) enriched with weather.
-- **Real‑time monitoring**: interactive map with occupancy, available bikes, and free docks.
-- **KPIs & history**: track occupancy, total bikes, and overall network availability.
-- **Forecasts (ML)**: **LightGBM** predicts the number of available bikes at **+1h (T+60 min)**.
-- **CI/CD (GitHub Actions)**:
-  1) `velib-ingest` (**every 15 min**) → API snapshots → DuckDB → 15‑min aggregation → export to `docs/exports/velib.parquet`.
-  2) `velib-train` (**daily**, fallback) → forced LightGBM retraining (MAE/RMSE validated), updates `models/*.joblib` and `docs/exports/baseline.json`.
-  3) `monitoring-site` (**4×/day**) → generates metrics & MkDocs pages, detects drift/perf (**PSI ≥ 0.20** or **MAE_24h ≥ 1.20× baseline**) and **triggers immediate retrain if thresholds are exceeded**, rebuilds pages (updated importances), then builds & deploys to `gh-pages`.
-- **ML artifacts**: model saved at `models/lgb_nbvelos_T+60min.joblib` (also downloadable as a CI artifact).
-- **Streamlit app (live)**: interactive web app with map + **T+60 min forecasts**, geolocation, address search, and per‑station details. Runs with `streamlit run app/streamlit_app.py`, reading `models/*.joblib` and `docs/exports/velib.parquet`. Deployed on Streamlit Community Cloud (auto‑build on `main`).
-- **Usage analytics (7 days)**: daily time series, hourly profiles, peak‑risk heatmaps, station variability, **station clustering**.
-- **Forecast performance**: MAE/RMSE by horizon, **Observed vs Predicted**, residuals, **bias over time**, **calibration**.
-- **Monitoring (data + model)**: data health, **PSI drift**, feature‑importance proxy, **MAE trend**.
-- **Interactive map (Folium)**: station markers with occupancy & availability, saved to `docs/assets/maps/usage_map.html` and embedded in the app.
-- **Auto‑retrain**: if **PSI ≥ 0.20** or **MAE_24h ≥ 1.20 × baseline**, a LightGBM model retrains and the site is rebuilt.
+- Ingestion every 15 min -> DuckDB snapshots.
+- 15-min aggregation -> canonical exports (`docs/exports/velib.parquet`, CSV) + weather.
+- Real-time monitoring: map + availability/saturation.
+- KPIs & history: occupancy, availability, daily/hourly profiles.
+- Forecasts: LightGBM predicts bikes at T+60 (1h).
+- CI/CD:
+  1) velib-ingest (15 min) -> export parquet
+  2) velib-train (daily or triggered) -> models + baseline.json
+  3) monitoring-site (4x/day) -> build pages, drift/perf checks, deploy gh-pages
+- ML artifacts: `models/lgb_nbvelos_T+60min.joblib`.
+- Streamlit app: interactive map + forecasts; reads models + parquet.
+- Usage analytics: station clustering, heatmaps, variability.
+- Forecast performance: MAE/RMSE, lift, obs vs pred, residuals, calibration.
+- Monitoring: data health, PSI drift, MAE trend.
 
 > All figures/tables come from `docs/exports/velib.parquet` via `tools/*` scripts.
 
@@ -114,21 +112,19 @@ flowchart LR
 
 ```
 
-### Core `src/*` chain
+### Core src/* chain
 
-**1) Ingestion — `src/ingest.py` (every 15 min)**  
-Pull GBFS `station_status` + `station_information`, normalize, upsert station meta, append one row/station to `snapshots(ts, station_id, bikes, capacity, docks_free, flags, lat, lon, name)`. Idempotent per `(ts, station_id)`.
+1) Ingestion — `src/ingest.py` (every 15 min)  
+   Pull GBFS, normalize, upsert station meta, append one row/station in snapshots.
 
-**2) Aggregation — `src/aggregate.py` (15‑min + weather)**  
-Right‑closed 15‑min grid; `occ = bikes / capacity` with safe division & clamping; join weather (nearest/binned). Emit canonical `docs/exports/velib.parquet` (+ CSV mirror for small slices).
+2) Aggregation — `src/aggregate.py` (15-min + weather)  
+   Right-closed 15-min grid; `occ = bikes/capacity` (safe clamp); join weather; write `docs/exports/velib.parquet`.
 
-**3) Feature builder — `src/features.py`**  
-Temporal (hour, DOW; cyclic sin/cos), lags (`t‑15/‑30/‑45/‑60`), rolling (`mean/std 1h`), station static (capacity, lat/lon or cluster), weather (temp, rain, wind). Returns `(X, y)` aligned for **horizon=60**.
+3) Feature builder — `src/features.py`  
+   Hour/DOW cyclics, lags (t-15/30/45/60), rolling mean/std, static station, weather. (horizon=60)
 
-**4) Forecast — `src/forecast.py`**  
-LightGBM (sklearn API) with early‑stopping. Baselines: persistence / rolling. Saves:
-- `models/lgb_nbvelos_T+60min.joblib` (bundle with features/spec)  
-- `docs/exports/baseline.json` (MAE/RMSE/N, horizon, params, git SHA)
+4) Forecast — `src/forecast.py`  
+   LightGBM with early-stopping; saves `models/*.joblib` and `docs/exports/baseline.json`.
 
 ---
 
@@ -142,14 +138,12 @@ This pipeline keeps data and docs fresh while guarding model quality:
 
 ```mermaid
 flowchart LR
-  subgraph CI[CI/CD — GitHub Actions]
-    I[velib-ingest.yml\nEvery 15 min] -->|updates| B[(warehouse.duckdb)]
-    I -->|exports| D[docs/exports/velib.parquet]
-
-    S[site.yml\n4×/day: 00/06/12/18 UTC] -->|builds| M[Docs → gh-pages]
-    S -->|checks| T[check_retrain.py\nPSI ≥ 0.20 or MAE_24h ≥ 1.20× baseline?]
-    T -->|yes| R[train.yml — daily fallback OR immediate retrain]
-    R -->|saves| J[models/*.joblib + baseline.json]
+  subgraph CI[CI/CD]
+    I[velib-ingest.yml\nEvery 15 min] -->|exports| D[docs/exports/velib.parquet]
+    S[site.yml\n4x/day] -->|builds| M[Docs -> gh-pages]
+    S -->|checks| T[check_retrain\nPSI or MAE_24h]
+    T -->|yes| R[train.yml]
+    R -->|models + baseline| J[models/*.joblib + baseline.json]
     R -->|rebuild| M
   end
 ```
@@ -215,25 +209,21 @@ Index hint: clustered by `(ts, station_id)`.
 
 ```
 bike-forecast-paris-velib/
-├─ app/                  # Streamlit app
-├─ src/                  # ingestion, aggregation, features, forecast
-│  ├─ ingest.py
-│  ├─ aggregate.py
-│  ├─ features.py        # (recommended separation)
-│  └─ forecast.py
+├─ app/ # Streamlit app
+├─ src/ # ingestion, aggregation, features, forecast
+│ ├─ ingest.py
+│ ├─ aggregate.py
+│ ├─ features.py
+│ └─ forecast.py
 ├─ tools/
-│  ├─ datasets.py
-│  ├─ build_usage.py
-│  ├─ build_performance.py
-│  ├─ build_monitoring.py
-│  ├─ orchestrate_reports.py
-│  └─ generate_monitoring.py
+│ ├─ datasets.py
+│ ├─ apply_model.py
+│ ├─ build_*.py
+│ └─ check_retrain.py
 ├─ docs/
-│  ├─ assets/{figs,tables,maps}
-│  ├─ exports/{auto,...}
-│  ├─ usage/
-│  ├─ monitoring/
-│  └─ stations/
+│ ├─ assets/{figs,tables,maps}
+│ ├─ exports/
+│ └─ {network,model,monitoring,data}/
 ├─ models/
 ├─ .github/workflows/{ingest.yml,train.yml,site.yml}
 └─ mkdocs.yml
@@ -241,12 +231,18 @@ bike-forecast-paris-velib/
 ---
 
 
-## 🆕 Release Notes — v2.1.0
+## Release Notes — v2.2.0
 
-- **README makeover:** coherent structure, TOC, clarified sections, and polished copy.
-- **Source deep-dive:** aligned with `src/` modules and canonical data contracts.
-- **Schedules affirmed:** ingestion **every 15 min**, monitoring **4×/day**, training **daily**.
-- **CI/CD schedules:** ingestion **every 15 min**, monitoring **4×/day**, training **daily**.
+**MkDocs revamp (site overhaul)**
+- Clear 4×3 structure: **Network**, **Model**, **Monitoring**, **Data**.
+- *One script = one page*: dedicated `tools/build_*` generators with KPI injection into Markdown.
+- Maps & charts: Folium map **with legend**, “Today vs Median” curve, daily KPIs vs **D-7/D-14/D-21**.
+- Robust relative paths (`use_directory_urls: true`) and auto-created `docs/assets/{figs,tables,maps}`.
+- Windows-friendly: ASCII logs, UTF-8 (no BOM).
+
+**Model & data**
+- `apply_model.py`: correct **T+h → T** alignment, stable station mapping.
+- `datasets.py`: cleaner output; safer types/encoding.
 
 ---
 
