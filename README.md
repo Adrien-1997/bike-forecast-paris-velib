@@ -27,7 +27,7 @@ Public GBFS snapshots -> normalized 15-min aggregates -> features & model traini
 - [Streamlit App](#-app-streamlit)
 - [Data Contracts (canonical schemas)](#-data-contracts-canonical-schemas)
 - [Project Layout](#-project-layout)
-- [Release Notes — v2.1.0](#-release-notes--v210)
+- [Release Notes — v2.2.0](#-release-notes--v210)
 - [Author & License](#-author--license)
 
 ---

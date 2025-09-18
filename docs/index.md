@@ -1,43 +1,43 @@
-ï»¿# VÃ©libâ€™ Paris â€” Forecast (Batch)
+# Vélib’ Paris — Forecast (Batch)
 
-Petit portail de **suivi du rÃ©seau**, **performances du modÃ¨le** et **qualitÃ© des donnÃ©es**.  
-Tout est recalculÃ© Ã  partir des exports locaux (bin **15 min**, **UTC** cÃ´tÃ© fichiers ; les pages affichent en **heure de Paris**).
+Petit portail de **suivi du réseau**, **performances du modèle** et **qualité des données**.  
+Tout est recalculé à partir des exports locaux (bin **15 min**, **UTC** côté fichiers ; les pages affichent en **heure de Paris**).
 
 ---
 
-## AccÃ¨s rapide
+## Accès rapide
 
-- **RÃ©seau**
-  - ğŸ” [AperÃ§u du rÃ©seau](network/overview.md) â€” KPIs du jour, carte pÃ©nurie/saturation, journÃ©e vs mÃ©diane
-  - ğŸ§­ [Stations & profils](network/stations.md) â€” table filtrable, fiches station, clustering expliquÃ©
-  - ğŸŒŠ [Dynamiques spatio-temporelles](network/dynamics.md) â€” heatmaps hÃ—j, tension, saisonnalitÃ©s
+- **Réseau**
+  - ?? [Aperçu du réseau](network/overview.md) — KPIs du jour, carte pénurie/saturation, journée vs médiane
+  - ?? [Stations & profils](network/stations.md) — table filtrable, fiches station, clustering expliqué
+  - ?? [Dynamiques spatio-temporelles](network/dynamics.md) — heatmaps h×j, tension, saisonnalités
 
-- **ModÃ¨le**
-  - ğŸ“Š [Performance & baseline](model/performance.md) â€” MAE/RMSE, lift vs persistance, dÃ©coupages
-  - ğŸ› ï¸ [Pipeline & features](model/pipeline.md) â€” donnÃ©es dâ€™entrÃ©e, lags/rollings, validation temporelle
-  - ğŸ” [ExplicabilitÃ© & calibration](model/explainability.md) â€” importance, PDP/ICE, calibration, incertitudes
+- **Modèle**
+  - ?? [Performance & baseline](model/performance.md) — MAE/RMSE, lift vs persistance, découpages
+  - ??? [Pipeline & features](model/pipeline.md) — données d’entrée, lags/rollings, validation temporelle
+  - ?? [Explicabilité & calibration](model/explainability.md) — importance, PDP/ICE, calibration, incertitudes
 
 - **Monitoring**
-  - ğŸ©º [SantÃ© des donnÃ©es](monitoring/data-health.md) â€” fraÃ®cheur, complÃ©tude, schÃ©ma, anomalies
-  - ğŸ”€ [Drift des donnÃ©es](monitoring/drift.md) â€” PSI/Kâ€“S, segments, tendances lissÃ©es
-  - âš–ï¸ [SantÃ© du modÃ¨le](monitoring/model-health.md) â€” dÃ©rives de performance, couverture, rÃ¨gles dâ€™alerte
+  - ?? [Santé des données](monitoring/data-health.md) — fraîcheur, complétude, schéma, anomalies
+  - ?? [Drift des données](monitoring/drift.md) — PSI/K–S, segments, tendances lissées
+  - ?? [Santé du modèle](monitoring/model-health.md) — dérives de performance, couverture, règles d’alerte
 
-- **DonnÃ©es**
-  - ğŸ“¦ [Exports](data/exports.md) â€” fichiers publiÃ©s & contrat minimal
-  - ğŸ“š [Dictionnaire & schÃ©ma](data/dictionary.md) â€” types, unitÃ©s, contraintes, validations
-  - ğŸ“‘ [MÃ©thodologie & licences](data/methodology.md) â€” fabrication, versionnage, usages
+- **Données**
+  - ?? [Exports](data/exports.md) — fichiers publiés & contrat minimal
+  - ?? [Dictionnaire & schéma](data/dictionary.md) — types, unités, contraintes, validations
+  - ?? [Méthodologie & licences](data/methodology.md) — fabrication, versionnage, usages
 
 ---
 
-## Ã€ savoir
+## À savoir
 
 - **Horodatage** : les fichiers sont en **UTC** (arrondis :00/:15/:30/:45). Les pages affichent en **Europe/Paris**.  
-- **Horizon par dÃ©faut** : 60 min (persistance comme baseline).  
-- **ClÃ©s** : `(ts, station_id)` unique dans `events.parquet` et `perf.parquet`.
+- **Horizon par défaut** : 60 min (persistance comme baseline).  
+- **Clés** : `(ts, station_id)` unique dans `events.parquet` et `perf.parquet`.
 
 ---
 
 ## Sources
 
-- ğŸ’» Code : [repo GitHub](https://github.com/Adrien-1997/bike-forecast-paris-velib)  
-- ğŸ“„ Exports locaux : `docs/exports/` (non versionnÃ©s)
+- ?? Code : [repo GitHub](https://github.com/Adrien-1997/bike-forecast-paris-velib)  
+- ?? Exports locaux : `docs/exports/` (non versionnés)
