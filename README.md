@@ -58,9 +58,6 @@ Public GBFS snapshots → normalized 15‑min aggregates → **features & model 
 ## 🧭 Pipelines — Data → ML → Docs & App
 
 ```mermaid
-# System Architecture
-
-```mermaid
 flowchart LR
   A[GBFS ingest] --> B[DuckDB]
   B --> C[Aggregate + weather]
@@ -96,14 +93,14 @@ flowchart LR
   EV --> R2 --> X
   EV --> R3 --> X
   PF --> M1 --> X
-  D  --> M2 --> X
+  D --> M2 --> X
   PF --> M3 --> X
   EV --> Q1 --> X
   EV --> Q2 --> X
   PF --> Q3 --> X
-  D  --> D1 --> X
-  D  --> D2 --> X
-  D  --> D3 --> X
+  D --> D1 --> X
+  D --> D2 --> X
+  D --> D3 --> X
   X --> K[gh-pages]
 
   CI1[ingest 15m] --> B
@@ -114,6 +111,7 @@ flowchart LR
   T -->|yes| CI2[train daily]
   CI2 --> H
   CI2 --> K
+
 ```
 
 ### Core `src/*` chain
