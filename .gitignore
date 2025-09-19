@@ -1,18 +1,16 @@
-﻿.cache_data/
+﻿# --- Environnements & caches ---
 .venv/
+.cache_data/
 site/
-docs/assets/maps/
-docs/assets/tables/
-
-# keep only the 2 needed assets; ignore the rest
-docs/exports/*
-!docs/exports/velib.parquet
-
-docs/assets/figs/*
-!docs/assets/figs/network/overview/kpis_today_vs_lags.png
-
-*.pkl
-*.joblib
-*.feather
-*.csv.gz
 *.ipynb_checkpoints/
+
+# --- Exports data (lourds, envoyés sur Hugging Face) ---
+docs/exports/*
+*.parquet
+*.csv
+*.csv.gz
+
+# --- tables CSV pour la doc ---
+!docs/assets/tables/*.csv
+
+

@@ -32,6 +32,8 @@ jobs:
         run: |
           python -m pip install -U pip
           pip install -r requirements-pipeline.txt
+          # si huggingface_hub n'est pas dans requirements-pipeline.txt, décommente:
+          # pip install huggingface_hub
 
       - name: Ingest snapshot (OpenData → DuckDB)
         env:
@@ -43,34 +45,49 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: python -m src.aggregate
 
-      - name: Commit data if changed
+      - name: Inspect exports
         shell: bash
         run: |
-          set -euxo pipefail
-
           echo "=== Exports present? ==="
-          ls -la docs || true
-          ls -la docs/exports || true
+          ls -lh docs/exports || true
+          python - <<'PY'
+          import pandas as pd, pathlib
+          p = pathlib.Path("docs/exports/velib.parquet")
+          if p.exists():
+              df = pd.read_parquet(p)
+              print("[ingest] rows:", len(df), "stations:", df['stationcode'].nunique())
+              print("[ingest] span:", df['tbin_utc'].min(), "->", df['tbin_utc'].max())
+          else:
+              print("[ingest] docs/exports/velib.parquet NOT FOUND")
+          PY
 
-          echo "=== check-ignore ==="
-          git check-ignore -v docs/exports/velib.parquet || true
-          git check-ignore -v docs/exports/velib.csv || true
-          git check-ignore -v warehouse.duckdb || true
+      # --- NEW: push exports to Hugging Face dataset ---
+      - name: Install Hugging Face CLI
+        run: pip install -q huggingface_hub && git lfs install
 
-          git config user.name  "github-actions"
-          git config user.email "actions@users.noreply.github.com"
+      - name: Login to Hugging Face
+        run: huggingface-cli login --token $HF_TOKEN
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
-          # FORCER l'ajout même si .gitignore les ignore
-          git add -f docs/exports
-          # Si tu veux aussi versionner la DB:
-          # git add -f warehouse.duckdb
+      - name: Push velib exports (parquet/csv) to HF dataset
+        shell: bash
+        env:
+          HF_DATASET: ${{ vars.HF_DATASET }}
+        run: |
+          set -e
+          rm -rf hf-ds
+          git clone https://huggingface.co/datasets/${HF_DATASET} hf-ds
 
-          echo "=== staged files ==="
-          git diff --cached --name-status || true
+          mkdir -p hf-ds/exports
+          [ -f docs/exports/velib.parquet ] && cp -v docs/exports/velib.parquet hf-ds/exports/velib.parquet || true
+          [ -f docs/exports/velib.csv ] && cp -v docs/exports/velib.csv hf-ds/exports/velib.csv || true
 
-          if git diff --cached --quiet; then
-            echo "Nothing to commit."
-          else
-            git commit -m "ci(ingest): update 15min data"
-            git push
-          fi
+          cd hf-ds
+          git add .
+          git commit -m "Update velib exports from ingest (15min)" || echo "Nothing to commit"
+          git push
+
+      # (SUPPRIMÉ) plus de commit des data dans GitHub
+      # - name: Commit data if changed
+      #   run: ...

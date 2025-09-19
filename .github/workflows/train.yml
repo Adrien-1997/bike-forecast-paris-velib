@@ -5,10 +5,6 @@ on:
     # Entraînement quotidien à 02:17 UTC
     - cron: "17 2 * * *"
   workflow_dispatch:
-  # (Optionnel) déclencher après l’ingest si tu veux enchaîner automatiquement
-  # workflow_run:
-  #   workflows: ["velib-ingest"]
-  #   types: [completed]
 
 permissions:
   contents: write
@@ -30,22 +26,32 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install training deps
+      - name: Install training deps (+ HF)
         run: |
           python -m pip install -U pip
-          pip install -r requirements-train.txt
+          pip install -r requirements-train.txt huggingface_hub
 
-      - name: Check dataset presence (docs/exports/velib.parquet)
+      # --- NEW: récupérer le parquet depuis Hugging Face ---
+      - name: Download velib.parquet from HF
+        shell: bash
+        env:
+          HF_DATASET: ${{ vars.HF_DATASET }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, shutil
+          from huggingface_hub import hf_hub_download
+          dst_dir = pathlib.Path("docs/exports"); dst_dir.mkdir(parents=True, exist_ok=True)
+          hf_path = hf_hub_download(repo_id=os.environ["HF_DATASET"], filename="exports/velib.parquet")
+          shutil.copy(hf_path, dst_dir / "velib.parquet")
+          print("[train] Downloaded velib.parquet from HF to", dst_dir)
+          PY
+
+      - name: Inspect dataset
         shell: bash
         run: |
-          if [ ! -f docs/exports/velib.parquet ]; then
-            echo "Dataset manquant: docs/exports/velib.parquet (lance d'abord velib-ingest)"; exit 1;
-          fi
-          echo "=== Dataset info ==="
-          ls -lh docs/exports | sed 's/^/ - /'
           python - <<'PY'
           import pandas as pd
-          df = pd.read_parquet('docs/exports/velib.parquet')
+          df = pd.read_parquet("docs/exports/velib.parquet")
           print("[train] rows:", len(df), "stations:", df['stationcode'].nunique())
           print("[train] timespan:", df['tbin_utc'].min(), "->", df['tbin_utc'].max())
           PY
@@ -56,12 +62,8 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           set -euxo pipefail
-          echo "PWD: $(pwd)"; ls -la
-
-          # Entraîner (aucun skip)
           python - <<'PY'
-          from src.forecast import train, _print_dataset_span
-          _print_dataset_span()  # log min/max
+          from src.forecast import train
           out = train(horizon_minutes=60, lookback_days=30)
           print("[train] OUT:", out)
           PY
@@ -78,14 +80,13 @@ jobs:
           name: model-lgbm-T+60min
           path: models/lgb_nbvelos_T+60min.joblib
           retention-days: 14
-          
+
       - name: Commit model into repo
         shell: bash
         run: |
           set -euxo pipefail
           git config user.name  "github-actions"
           git config user.email "actions@users.noreply.github.com"
-          # Forcer l'ajout même si .gitignore ignore models/
           git add -f models/lgb_nbvelos_T+60min.joblib
           if git diff --cached --quiet; then
             echo "No model change to commit."

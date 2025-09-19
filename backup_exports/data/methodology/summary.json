@@ -1,0 +1,22 @@
+{
+  "build_utc": "2025-09-17T23:49:46+00:00Z",
+  "inputs": {
+    "events": {
+      "path": "H:\\Documents\\2. Perso\\github\\bike-forecast-paris-velib\\docs\\exports\\events.parquet",
+      "rows": 584989,
+      "ts_min": "2025-09-07T23:00:00+00:00",
+      "ts_max": "2025-09-17T22:45:00+00:00"
+    },
+    "perf": {
+      "path": "H:\\Documents\\2. Perso\\github\\bike-forecast-paris-velib\\docs\\exports\\perf.parquet",
+      "rows": 584989,
+      "ts_min": "2025-09-07T23:00:00+00:00",
+      "ts_max": "2025-09-17T22:45:00+00:00"
+    }
+  },
+  "timezone_display": "Europe/Paris",
+  "artifacts": {
+    "tables_dir": "H:\\Documents\\2. Perso\\github\\bike-forecast-paris-velib\\docs\\assets\\tables\\data\\methodology",
+    "figs_dir": "H:\\Documents\\2. Perso\\github\\bike-forecast-paris-velib\\docs\\assets\\figs\\data\\methodology"
+  }
+}

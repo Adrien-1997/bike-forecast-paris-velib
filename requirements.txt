@@ -1,26 +1,21 @@
-﻿# Core data / ML
-duckdb
+﻿# --- Core app ---
+streamlit>=1.36
 pandas>=2.2
 numpy>=1.26
-scikit-learn>=1.3
-lightgbm>=4.3
-pyarrow
-holidays>=0.41
 
-# Viz & reporting
-matplotlib
-tabulate
+# lire parquet
+pyarrow>=16.0
+
+# cartes/bulles
 folium>=0.16
-streamlit-folium>=0.17
 
+# graphiques (top 10)
+matplotlib>=3.8
 
-# Web / docs
-requests>=2.31
+# HTTP (GBFS + géocodage)
+requests>=2.32
 
-
-# App
-streamlit>=1.36
-streamlit-js-eval>=0.1.0
-
-# Images
-Pillow>=10.0
+# charger le modèle et prédire
+lightgbm>=4.2
+scikit-learn>=1.4
+joblib>=1.4

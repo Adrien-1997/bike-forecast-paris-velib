@@ -1,23 +1,21 @@
 # src/features.py
 from __future__ import annotations
 
-from pathlib import Path
 import pandas as pd
 import numpy as np
 
 from src.cal_features import add_calendar_features, feature_cols as calfeat_cols
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DATA_PARQUET = REPO_ROOT / "docs" / "exports" / "velib.parquet"
-
+from src.utils_io import get_export_path
 
 def _load_base_15min() -> pd.DataFrame:
-    if not DATA_PARQUET.exists():
+    try:
+        path = get_export_path("velib.parquet")
+        df = pd.read_parquet(path)
+    except FileNotFoundError:
         raise FileNotFoundError(
-            f"[features] Dataset introuvable: {DATA_PARQUET}. "
-            "Lance d'abord le workflow 'velib-ingest'."
+            "[features] Dataset introuvable (velib.parquet). "
+            "Lance d'abord le workflow 'velib-ingest' ou assure-toi que le fichier est dispo sur HF."
         )
-    df = pd.read_parquet(DATA_PARQUET)
     if df.empty:
         raise ValueError("[features] Parquet vide.")
     df["tbin_utc"] = pd.to_datetime(df["tbin_utc"], utc=True).dt.tz_localize(None)

@@ -3,7 +3,9 @@ import os
 import time
 import duckdb
 import pandas as pd
+from pathlib import Path
 from src.weather import fetch_history, fetch_forecast
+from src.utils_io import resolve_path, get_export_path
 
 CON = duckdb.connect("warehouse.duckdb")
 
@@ -127,66 +129,40 @@ def occupancy_15min(with_weather: bool = True) -> pd.DataFrame:
     df["occ_ratio_bin"] = pd.to_numeric(df["occ_ratio_bin"], errors="coerce").clip(0, 1)
     return df
 
-
-def _safe_write_csv(df: pd.DataFrame, path: str, attempts: int = 6, delay: float = 1.0):
-    """
-    Écriture CSV Windows-friendly : fichier temporaire + os.replace + retries.
-    """
-    tmp = f"{path}.tmp"
-    for i in range(attempts):
-        try:
-            df.to_csv(tmp, index=False)
-            os.replace(tmp, path)  # remplace de manière atomique quand possible
-            print(f"[aggregate] CSV écrit → {path}")
-            return
-        except PermissionError:
-            # Nettoyage du tmp si besoin puis retry
-            try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-            except Exception:
-                pass
-            print(f"[aggregate] CSV verrouillé (tentative {i+1}/{attempts}). Retry dans {delay}s…")
-            time.sleep(delay)
-        except Exception as e:
-            print(f"[aggregate] CSV erreur inattendue: {e}")
-            break
-    print("[aggregate] CSV encore verrouillé → saut de l’écriture pour cette fois.")
-
 if __name__ == "__main__":
+    # --- dossier des exports (on écrit localement ; la CI poussera vers HF) ---
     DOCS_EXPORTS = os.path.join("docs", "exports")
     os.makedirs(DOCS_EXPORTS, exist_ok=True)
+    parquet_path = os.path.join(DOCS_EXPORTS, "velib.parquet")
 
+    # --- agrégat 15 min + météo ---
     new = occupancy_15min(with_weather=True)
     if new.empty:
         print("[aggregate] Aucun nouveau point à agréger.")
         raise SystemExit(0)
 
-    parquet_path = os.path.join(DOCS_EXPORTS, "velib.parquet")
-    csv_path     = os.path.join(DOCS_EXPORTS, "velib.csv")
-
-    # --- charger l'existant puis concat/ dédupli ---
+    # --- charger l'existant (local OU Hugging Face) puis concat / dédupli ---
     try:
-        if os.path.exists(parquet_path):
-            old = pd.read_parquet(parquet_path)
-            # normaliser les timestamps
-            for c in ("tbin_utc","hour_utc"):
-                if c in old.columns:
-                    old[c] = pd.to_datetime(old[c], utc=True).dt.tz_localize(None)
-            df = pd.concat([old, new], ignore_index=True)
-        else:
-            df = new.copy()
+        old_path = get_export_path("velib.parquet")  # local si présent, sinon HF
+        old = pd.read_parquet(old_path)
+        # normaliser les timestamps (naïfs UTC)
+        for c in ("tbin_utc", "hour_utc"):
+            if c in old.columns:
+                old[c] = pd.to_datetime(old[c], utc=True).dt.tz_localize(None)
+        df = pd.concat([old, new], ignore_index=True)
+        print(f"[aggregate] ancien parquet chargé depuis: {old_path}")
     except Exception as e:
-        print(f"[aggregate] Lecture de l'existant échouée: {e} -> on repart du nouveau")
+        print(f"[aggregate] Pas d'existant ou lecture échouée ({e}) → on repart du nouveau")
         df = new.copy()
 
-    # dédupl sur (tbin_utc, stationcode)
+    # --- déduplication clé (tbin_utc, stationcode) ---
     df["tbin_utc"] = pd.to_datetime(df["tbin_utc"], utc=True).dt.tz_localize(None)
-    df = df.sort_values(["tbin_utc", "stationcode"]).drop_duplicates(
-        subset=["tbin_utc", "stationcode"], keep="last"
+    df = (
+        df.sort_values(["tbin_utc", "stationcode"])
+          .drop_duplicates(subset=["tbin_utc", "stationcode"], keep="last")
     )
 
-    # fenêtre glissante (90 jours)
+    # --- fenêtre glissante (90 jours) pour contenir la taille ---
     try:
         tmax = df["tbin_utc"].max()
         cutoff = (tmax - pd.Timedelta(days=90)).floor("15min")
@@ -194,16 +170,13 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    # --- écrire parquet/csv ---
+    # --- écrire parquet uniquement ---
     try:
         df.to_parquet(parquet_path, index=False)
     except Exception:
+        # fallback robuste via DuckDB si pyarrow/fastparquet indisponible
         duckdb.register("out_tbl", df)
         duckdb.sql(f"COPY out_tbl TO '{parquet_path}' (FORMAT PARQUET);")
 
-    try:
-        df.to_csv(csv_path, index=False)
-    except Exception:
-        pass
-
     print(f"[aggregate] OK → {parquet_path} (rows={len(df)})")
+
