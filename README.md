@@ -64,7 +64,7 @@ flowchart TD
   E --> EV[events.parquet]
   E --> PF[perf.parquet]
 
-  %% Build features now branches from Normalize (not EV/PF)
+  %% Build features now branches from Normalize
   E --> G[Build features (from velib.parquet schema)]
   G --> H[Train LGBM h60]
   H --> I[Model bundle]
