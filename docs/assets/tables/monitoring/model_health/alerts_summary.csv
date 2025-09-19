@@ -1,2 +1,0 @@
-degradation_window_alert,coverage_alert_j1,calibration_alert,retrain_gate,fallback_to_baseline,mae7,mae28,lift7,lift28,coverage_last_pct,calibration_alpha,calibration_beta
-False,True,True,False,True,2.971782389047838,2.982529298914681,0.09350031888939558,0.09854340808412373,75.59217301750772,,
