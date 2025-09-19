@@ -56,60 +56,86 @@ Public GBFS snapshots -> normalized 15-min aggregates -> features & model traini
 ## 🧭 Pipelines — Data → ML → Docs & App
 
 ```mermaid
-flowchart LR
-  A[GBFS ingest] --> B[DuckDB]
-  B --> C[Aggregate + weather]
-  C --> D[Export velib.parquet]
-  D --> E[Normalize datasets]
-  E --> EV[events.parquet]
-  E --> PF[perf.parquet]
+flowchart TD
+  %% Ingestion parallèle
+  GBFS[GBFS snapshots] --> AGG[Aggregate + weather join]
+  METEO[Weather hourly] --> AGG
 
-  EV --> G[Build features]
-  PF --> G
-  G --> H[Train LGBM h60]
-  H --> I[Model bundle]
-  I --> M[Apply model -> y_pred]
-  EV --> M
-  PF --> M
+  %% Sortie agrégat
+  AGG --> VELIB[velib.parquet]
 
+  %% Normalisation
+  VELIB --> NORM[Normalize datasets]
+  NORM --> EV[events.parquet]
+  NORM --> PF[perf.parquet]
+
+  %% Features et train (pipeline d'entraînement)
+  VELIB --> FEAT[Build features]
+  FEAT --> TRAIN[Train LGBM h60]
+  TRAIN --> MODEL[Model bundle]
+
+  %% Application du modèle sur perf
+  MODEL --> APPLY[Apply model -> y_pred]
+  EV --> APPLY
+  PF --> APPLY
+
+  %% Pages (rapports)
   subgraph Pages
-    R1[network/overview]
-    R2[network/stations]
-    R3[network/dynamics]
-    M1[model/performance]
-    M2[model/pipeline]
-    M3[model/explainability]
-    Q1[monitoring/data_health]
-    Q2[monitoring/drift]
-    Q3[monitoring/model_health]
-    D1[data/exports]
-    D2[data/dictionary]
-    D3[data/methodology]
+    R1[network overview]
+    R2[network stations]
+    R3[network dynamics]
+    M1[model performance]
+    M2[model pipeline]
+    M3[model explainability]
+    Q1[monitoring data_health]
+    Q2[monitoring drift]
+    Q3[monitoring model_health]
+    D1[data exports]
+    D2[data dictionary]
+    D3[data methodology]
   end
 
-  EV --> R1 --> X[assets]
-  EV --> R2 --> X
-  EV --> R3 --> X
-  PF --> M1 --> X
-  D --> M2 --> X
-  PF --> M3 --> X
-  EV --> Q1 --> X
-  EV --> Q2 --> X
-  PF --> Q3 --> X
-  D --> D1 --> X
-  D --> D2 --> X
-  D --> D3 --> X
-  X --> K[gh-pages]
+  EV --> R1 --> ASSETS[assets]
+  EV --> R2 --> ASSETS
+  EV --> R3 --> ASSETS
+  PF --> M1 --> ASSETS
+  VELIB --> M2 --> ASSETS
+  PF --> M3 --> ASSETS
+  EV --> Q1 --> ASSETS
+  EV --> Q2 --> ASSETS
+  PF --> Q3 --> ASSETS
+  VELIB --> D1 --> ASSETS
+  VELIB --> D2 --> ASSETS
+  VELIB --> D3 --> ASSETS
+  ASSETS --> PAGES[gh-pages]
 
-  CI1[ingest 15m] --> B
-  CI3[site 4/day] --> K
-  M1 --> T[check retrain]
-  Q3 --> T
-  Q2 --> T
-  T -->|yes| CI2[train daily]
-  CI2 --> H
-  CI2 --> K
+  %% Orchestrations CI
+  CI1[ingest every 15m] --> GBFS
+  CI1 --> METEO
+  CI3[site 4 per day] --> NORM
+  CI3 --> APPLY
+  CI3 --> R1
+  CI3 --> R2
+  CI3 --> R3
+  CI3 --> M1
+  CI3 --> M2
+  CI3 --> M3
+  CI3 --> Q1
+  CI3 --> Q2
+  CI3 --> Q3
+  CI3 --> D1
+  CI3 --> D2
+  CI3 --> D3
 
+  M1 --> CHECK[check retrain]
+  Q2 --> CHECK
+  Q3 --> CHECK
+  CHECK --> CI2[train daily]
+  CI2 --> TRAIN
+  CI2 --> PAGES
+
+  %% App Streamlit déclenche l'agrégat
+  APP[Streamlit app] --> AGG
 ```
 
 ### Core src/* chain
