@@ -43,9 +43,7 @@ FIGS_DIR = ASSETS / "figs" / "model" / "explainability"
 TABLES_DIR = ASSETS / "tables" / "model" / "explainability"
 MAPS_DIR = ASSETS / "maps"
 OUT_MD = DOCS / "model" / "explainability.md"
-
 STATION_CLUSTERS = ASSETS / "tables" / "network" / "stations" / "station_clusters.csv"
-
 
 # --------------------------- Utils ---------------------------
 

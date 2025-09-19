@@ -160,7 +160,7 @@ Chaque station peut avoir une fiche dédiée (optionnel) :
 ---
 
 ## 8) Mémo technique
-- **Source** : `docs/exports/events.parquet`, pas de 15 min.  
+- **Source** : `events.parquet` (timestamps 15 min UTC naïfs, généré durant le build).  
 - **Capacité estimée** : priorité à `capacity_src`, sinon quantile 0.98 de `(bikes + docks_avail)` si dispo, sinon 0.98 de `bikes`.  
 - **Pénurie / Saturation** : `bikes == 0` / (`docks_avail == 0` ou `capacity - bikes == 0`).  
 - **Couverture** : `#bins observés / #bins attendus` sur {last_days} j.  
@@ -783,7 +783,8 @@ def main(events_path: Path, last_days: int, k: int, hours: int, select: int, by:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Build 'Network / Stations & profils' assets from events.parquet")
-    ap.add_argument("--events", type=Path, required=True, help="Path to docs/exports/events.parquet")
+    ap.add_argument("--events", type=Path, required=True,
+                    help="Chemin local vers events.parquet (généré par tools/datasets.py dans ce run).")
     ap.add_argument("--last-days", type=int, default=7, help="Fenêtre récente pour la table (7 j par défaut)")
     ap.add_argument("--clusters", type=int, default=4, help="Nombre de clusters (K-Means)")
     ap.add_argument("--hours", type=int, default=48, help="(Réservé) fenêtre d'illustration station (heures)")

@@ -11,3 +11,4 @@ holidays>=0.57
 mkdocs>=1.6
 mkdocs-material>=9.5
 lightgbm>=4.2
+huggingface-hub>=0.23

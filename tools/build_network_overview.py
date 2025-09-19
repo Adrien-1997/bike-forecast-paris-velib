@@ -404,8 +404,9 @@ Cette page donne un **coup d’œil instantané** à la santé du réseau (snaps
 
 ---
 
+
 ## Méthodologie (résumé)
-- **Source** : `docs/exports/events.parquet` (timestamps **15 min** UTC naïfs).  
+- **Source** : `events.parquet` (timestamps **15 min** UTC naïfs, généré durant le build).  
 - **Snapshot** : dernier `ts` ; pénurie = `bikes == 0` ; saturation = `docks_avail == 0` (ou `capacity - bikes == 0` si `docks_avail` absent).  
 - **Couverture** : moyenne station de `#ts_observés / #ts_total` sur la fenêtre **{last_days} jours**.  
 - **Volatilité** : écart-type des vélos par station sur la **journée locale courante**, médiane des stations.  
@@ -604,7 +605,8 @@ def main(events_path: Path, tzname: str, last_days: int, ref_days: int) -> None:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Build Réseau / Aperçu (KPIs, carte, figures, MD)")
-    ap.add_argument("--events", type=Path, default=DOCS / "exports" / "events.parquet", help="Chemin vers events.parquet")
+    ap.add_argument("--events", type=Path, required=True,
+                    help="Chemin local vers events.parquet (généré par tools/datasets.py dans ce run).")
     ap.add_argument("--tz", type=str, default="Europe/Paris", help="Timezone locale (ex: Europe/Paris)")
     ap.add_argument("--last-days", type=int, default=7, help="Fenêtre récente (jours) pour la couverture/volatilité et stations en tension")
     ap.add_argument("--ref-days", type=int, default=28, help="Fenêtre de référence (jours) pour la médiane (mêmes weekdays)")

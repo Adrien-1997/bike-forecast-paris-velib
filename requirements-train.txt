@@ -8,3 +8,4 @@ joblib>=1.4
 holidays>=0.50
 requests>=2.32
 matplotlib>=3.8
+huggingface-hub>=0.23   

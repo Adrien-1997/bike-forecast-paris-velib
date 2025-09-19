@@ -39,9 +39,6 @@ CALFEAT_COLS = _load_calfeat_cols()
 
 DOCS = ROOT / "docs"
 EXPORTS = DOCS / "exports"
-DEFAULT_EVENTS_PATH = EXPORTS / "events.parquet"
-DEFAULT_PERF_PATH = EXPORTS / "perf.parquet"
-
 
 # --------------------------- Features d'inférence ---------------------------
 
@@ -252,11 +249,14 @@ def main(horizon: int, lookback_days: int, events_path: Path, perf_path: Path) -
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Appliquer le modèle et injecter y_pred (aligne T) dans perf.parquet")
+    ap = argparse.ArgumentParser(
+        description="Injecte y_pred dans perf.parquet (aligne T). "
+                    "⚠️ events/perf doivent avoir été générés localement par datasets.py dans ce même run."
+    )
     ap.add_argument("--horizon", type=int, default=60, help="Horizon minutes (doit matcher le modèle)")
     ap.add_argument("--lookback-days", type=int, default=30, help="Fenetre de reconstruction des features")
-    ap.add_argument("--events", type=Path, default=DEFAULT_EVENTS_PATH, help="Chemin vers events.parquet")
-    ap.add_argument("--perf", type=Path, default=DEFAULT_PERF_PATH, help="Chemin vers perf.parquet")
-    ap.add_argument("--tz", type=str, default=None, help="(Ignore) TZ non utilisee par apply_model")
+    ap.add_argument("--events", type=Path, required=True, help="Chemin local vers events.parquet")
+    ap.add_argument("--perf", type=Path, required=True, help="Chemin local vers perf.parquet")
+    ap.add_argument("--tz", type=str, default=None, help="(Ignore) TZ non utilisée par apply_model")
     args = ap.parse_args()
     main(horizon=args.horizon, lookback_days=args.lookback_days, events_path=args.events, perf_path=args.perf)

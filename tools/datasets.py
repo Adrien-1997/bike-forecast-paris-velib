@@ -33,6 +33,7 @@ try:
 except Exception:
     pass
 
+from src.utils_io import resolve_path
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
@@ -208,7 +209,8 @@ def load_normalized(input_path: Path,
 
 def main():
     ap = argparse.ArgumentParser(description="Normalise la source Vélib' en events/perf (UTC, 15min).")
-    ap.add_argument("--input", type=Path, required=True, help="Fichier source (parquet/csv).")
+    ap.add_argument("--input", type=str, required=False, default=None,
+                    help="Chemin source parquet/csv. Si omis, lecture via local→HF de 'velib.parquet'.")
     ap.add_argument("--horizon", type=int, default=60, help="Horizon en minutes (ex. 60).")
     ap.add_argument("--last-days", type=int, default=None, help="Filtrer sur N derniers jours (optionnel).")
     ap.add_argument("--out-events", type=Path, default=EXPORTS / "events.parquet")
@@ -217,8 +219,12 @@ def main():
     ap.add_argument("--as-csv", action="store_true", help="Écrit en CSV au lieu de parquet.")
     args = ap.parse_args()
 
+    # Résout la source : si --input absent ou introuvable → docs/exports/velib.parquet local
+    # sinon téléchargement depuis HF (grâce à resolve_path)
+    input_path = resolve_path(args.input, "velib.parquet")
+
     events, perf, steps, dtypes_raw, mapping = load_normalized(
-        input_path=args.input,
+        input_path=input_path,
         horizon_minutes=args.horizon,
         last_days=args.last_days
     )

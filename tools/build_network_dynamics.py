@@ -707,7 +707,8 @@ def main(events_path: str, last_days: int, tz: Optional[str]) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--events", type=str, required=True, help="Parquet des évènements (docs/exports/events.parquet)")
+    parser.add_argument("--events", type=str, required=True,
+                        help="Chemin local vers events.parquet (généré par tools/datasets.py dans ce run)")
     parser.add_argument("--last-days", type=int, default=7, help="Fenêtre récente pour certains indicateurs")
     parser.add_argument("--tz", type=str, default=None, help="Timezone ex: Europe/Paris")
     args = parser.parse_args()

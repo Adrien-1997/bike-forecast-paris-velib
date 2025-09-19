@@ -125,7 +125,8 @@ def main():
     ap = argparse.ArgumentParser(description="Build all site pages (1 Python file per page).")
     # Inputs / Outputs
     ap.add_argument("--input", type=Path, default=EXPORTS / "velib.parquet",
-                    help="Normalized source to convert into events/perf (parquet/csv).")
+                    help="Chemin local vers velib.parquet (source agrégée). "
+                         "Si absent, datasets.py lira via fallback local→Hugging Face (velib.parquet).")
     ap.add_argument("--out-events", type=Path, default=EVENTS)
     ap.add_argument("--out-perf", type=Path, default=PERF)
 

@@ -227,10 +227,17 @@ def main(perf_path: Path, last_days: int, mae_lift_th: float, psi_th: float):
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Decide whether to retrain the model based on drift & error.")
-    ap.add_argument("--perf", type=Path, default=EXPORTS / "perf.parquet")
-    ap.add_argument("--last-days", type=int, default=14, help="Window length for recent vs reference comparison")
-    ap.add_argument("--mae-lift-th", type=float, default=0.15, help="Relative MAE increase threshold (e.g., 0.15 = +15%)")
-    ap.add_argument("--psi-th", type=float, default=0.2, help="PSI threshold (0.1: slight, 0.2: medium, 0.3+: large)")
+    ap = argparse.ArgumentParser(description="Décide s'il faut réentraîner le modèle (drift & error).")
+    ap.add_argument("--perf", type=Path, required=True,
+                    help="Chemin local vers perf.parquet (généré par datasets.py dans ce run).")
+    ap.add_argument("--last-days", type=int, default=14,
+                    help="Fenêtre pour comparer erreur récente vs référence.")
+    ap.add_argument("--mae-lift-th", type=float, default=0.15,
+                    help="Seuil de dégradation relative du MAE (ex. 0.15 = +15%).")
+    ap.add_argument("--psi-th", type=float, default=0.2,
+                    help="Seuil de Population Stability Index (0.1: faible, 0.2: moyen, 0.3+: fort).")
     args = ap.parse_args()
-    main(perf_path=args.perf, last_days=args.last_days, mae_lift_th=args.mae_lift_th, psi_th=args.psi_th)
+    main(perf_path=args.perf,
+         last_days=args.last_days,
+         mae_lift_th=args.mae_lift_th,
+         psi_th=args.psi_th)
