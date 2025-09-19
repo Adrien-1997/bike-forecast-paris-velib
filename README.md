@@ -56,7 +56,6 @@ Public GBFS snapshots -> normalized 15-min aggregates -> features & model traini
 ## 🧭 Pipelines — Data → ML → Docs & App
 
 ```mermaid
-```mermaid
 flowchart TD
   %% Ingestion parallèle
   GBFS[GBFS snapshots] --> AGG[Aggregate + weather join]
@@ -137,7 +136,6 @@ flowchart TD
 
   %% App Streamlit déclenche l'agrégat
   APP[Streamlit app] --> AGG
-
 ```
 
 ### Core src/* chain
