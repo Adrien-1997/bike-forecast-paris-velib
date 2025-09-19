@@ -32,8 +32,6 @@ jobs:
         run: |
           python -m pip install -U pip
           pip install -r requirements-pipeline.txt
-          # si huggingface_hub n'est pas dans requirements-pipeline.txt, décommente:
-          # pip install huggingface_hub
 
       - name: Ingest snapshot (OpenData → DuckDB)
         env:
@@ -61,33 +59,45 @@ jobs:
               print("[ingest] docs/exports/velib.parquet NOT FOUND")
           PY
 
-      # --- NEW: push exports to Hugging Face dataset ---
+      # ------------ Hugging Face ------------
       - name: Install Hugging Face CLI
-        run: pip install -q huggingface_hub && git lfs install
+        run: |
+          python -m pip install -U huggingface_hub
+          git lfs install
 
       - name: Login to Hugging Face
-        run: huggingface-cli login --token $HF_TOKEN
+        shell: bash
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${HF_TOKEN:-}" ]]; then
+            echo "HF_TOKEN is empty or not set. Define repository secret HF_TOKEN."
+            exit 1
+          fi
+          huggingface-cli login --token "${HF_TOKEN}" --add-to-git-credential
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
 
       - name: Push velib exports (parquet/csv) to HF dataset
         shell: bash
         env:
-          HF_DATASET: ${{ vars.HF_DATASET }}
+          HF_DATASET: ${{ vars.HF_DATASET }}   # ex: "adrien/velib-paris-exports"
         run: |
-          set -e
+          set -euo pipefail
+          if [[ -z "${HF_DATASET:-}" ]]; then
+            echo "HF_DATASET not set (Actions → Variables). Expected 'user/repo'."
+            exit 1
+          fi
+
           rm -rf hf-ds
-          git clone https://huggingface.co/datasets/${HF_DATASET} hf-ds
+          git clone "https://huggingface.co/datasets/${HF_DATASET}" hf-ds
 
           mkdir -p hf-ds/exports
-          [ -f docs/exports/velib.parquet ] && cp -v docs/exports/velib.parquet hf-ds/exports/velib.parquet || true
-          [ -f docs/exports/velib.csv ] && cp -v docs/exports/velib.csv hf-ds/exports/velib.csv || true
+          [[ -f docs/exports/velib.parquet ]] && cp -v docs/exports/velib.parquet hf-ds/exports/velib.parquet || true
+          [[ -f docs/exports/velib.csv     ]] && cp -v docs/exports/velib.csv     hf-ds/exports/velib.csv     || true
 
           cd hf-ds
-          git add .
+          git add -A
           git commit -m "Update velib exports from ingest (15min)" || echo "Nothing to commit"
           git push
-
-      # (SUPPRIMÉ) plus de commit des data dans GitHub
-      # - name: Commit data if changed
-      #   run: ...
