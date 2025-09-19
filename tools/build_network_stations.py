@@ -394,17 +394,49 @@ def _plot_centroids(prof: pd.DataFrame, labels: pd.Series, out_png: Path) -> Non
     _save_fig(out_png)
 
 
-def _plot_pca_scatter(pca2: pd.DataFrame, labels: pd.Series, out_png: Path) -> None:
-    if pca2.empty or labels.empty:
-        plt.figure(figsize=(6,2)); plt.text(0.5,0.5,"PCA indisponible", ha="center"); _save_fig(out_png); return
-    plt.figure(figsize=(6,5))
-    for g in sorted(labels.unique()):
-        mask = labels == g
-        plt.scatter(pca2.loc[mask,"PC1"], pca2.loc[mask,"PC2"], s=12, label=f"Cluster {g}", alpha=0.8)
+def _plot_pca_scatter(pca2: pd.DataFrame, labels: pd.Series, out_png: Path, pca_info=None, top_feats:int=8) -> None:
+    # pca_info: {"var_ratio": (pc1,pc2), "components": np.ndarray(2,n), "feature_names": list}
+    plt.figure(figsize=(6.2, 5.2))
+    ax = plt.gca()
+
+    if pca2.empty or labels is None or labels.empty:
+        plt.text(0.5,0.5,"PCA indisponible", ha="center")
+        _save_fig(out_png); return
+
+    # Scatter par cluster
+    for g in sorted(labels.dropna().unique()):
+        mask = (labels == g)
+        plt.scatter(pca2.loc[mask,"PC1"], pca2.loc[mask,"PC2"], s=14, alpha=0.8, label=f"Cluster {g}")
+
+    # Axes = % variance si dispo
+    if isinstance(pca_info, dict) and pca_info.get("var_ratio"):
+        vr = pca_info["var_ratio"]
+        plt.xlabel(f"PC1 ({vr[0]*100:.1f}%)")
+        plt.ylabel(f"PC2 ({vr[1]*100:.1f}%)")
+    else:
+        plt.xlabel("PC1"); plt.ylabel("PC2")
+
     plt.title("Profils 24 h — PCA(2) par cluster")
-    plt.xlabel("PC1"); plt.ylabel("PC2")
     plt.legend(loc="best", fontsize=8, ncol=2)
+
+    # Biplot léger : projeter quelques features (heures) avec plus forte norme de loading
+    try:
+        if isinstance(pca_info, dict) and isinstance(pca_info.get("components"), np.ndarray) and pca_info.get("feature_names"):
+            comps = pca_info["components"]      # shape (2, n_features)
+            feats = pca_info["feature_names"]   # list len=n_features
+            norms = np.sqrt(comps[0]**2 + comps[1]**2)
+            idx = np.argsort(norms)[-int(top_feats):]  # top |loading|
+            # échelle raisonnable des flèches par rapport au nuage
+            scale = 2.0
+            for i in idx:
+                x, y = comps[0, i]*scale, comps[1, i]*scale
+                ax.arrow(0, 0, x, y, head_width=0.05, head_length=0.08, fc="#555", ec="#555", alpha=0.8, length_includes_head=True)
+                ax.text(x*1.06, y*1.06, str(feats[i]), fontsize=8, ha="left", va="center", color="#333")
+    except Exception:
+        pass
+
     _save_fig(out_png)
+
 
 def _map_clusters(meta: pd.DataFrame, labels: pd.Series | pd.DataFrame, out_html: Path) -> None:
     # Besoins: folium + coords valides
@@ -462,16 +494,26 @@ def _map_clusters(meta: pd.DataFrame, labels: pd.Series | pd.DataFrame, out_html
         tiles="cartodbpositron",
     )
 
-    # Points colorés par cluster
+    # Points colorés par cluster (taille ~ sqrt(capacité), bornée 2–8 px)
     for _, r in df.iterrows():
-        cap = r.get("capacity_est", np.nan)
+        # cluster → couleur
+        cl_val = r.get("cluster")
         try:
-            c_int = int(r.get("cluster"))
+            c_int = int(cl_val) if pd.notna(cl_val) else None
         except Exception:
             c_int = None
         color = color_of.get(c_int, "#4c78a8")  # défaut bleu
-        name = r["name"] if "name" in r and pd.notna(r["name"]) else str(r["station_id"])
-        rad = 5.0 if pd.isna(cap) else float(np.clip(float(cap) / 2.0, 3.0, 12.0))
+
+        # nom station
+        name = str(r.get("name") or r.get("station_id"))
+
+        # capacité estimée → rayon
+        cap = pd.to_numeric(r.get("capacity_est"), errors="coerce")
+        if pd.isna(cap) or float(cap) <= 0:
+            rad = 3.0
+        else:
+            # racine pour lisser l’échelle, bornes 2–8 px
+            rad = float(np.clip(np.sqrt(float(cap)) / 2.5, 2.0, 8.0))
 
         folium.CircleMarker(
             location=[float(r["lat"]), float(r["lon"])],
@@ -481,7 +523,7 @@ def _map_clusters(meta: pd.DataFrame, labels: pd.Series | pd.DataFrame, out_html
             fill_color=color,
             fill_opacity=0.75,
             weight=0.8,
-            tooltip=f"{name} • cap≈{'' if pd.isna(cap) else int(cap)} • cluster={r.get('cluster')}",
+            tooltip=f"{name} • cap≈{'' if pd.isna(cap) else int(cap)} • cluster={c_int if c_int is not None else '—'}",
         ).add_to(m)
 
     # Légende simple (HTML)
@@ -522,7 +564,7 @@ def main(events_path: Path, last_days: int, k: int, hours: int, select: int, by:
 
     # ---------- 2) Profils 24 h & Clustering ----------
     prof, meta = _build_24h_profile(events, days=PROFILE_WINDOW_DAYS)
-    labels, summary, pca2 = _cluster_profiles(prof, k=k)
+    labels, summary, pca2, pca_info = _cluster_profiles(prof, k=k)
 
     # Sauvegarde résultats clustering
     if not prof.empty and not labels.empty:
@@ -563,7 +605,7 @@ def main(events_path: Path, last_days: int, k: int, hours: int, select: int, by:
 
         # Figures
         _plot_centroids(prof, labels, FIGS_DIR / "centroids_24h.png")
-        _plot_pca_scatter(pca2, labels, FIGS_DIR / "clusters_pca.png")
+        _plot_pca_scatter(pca2, labels, FIGS_DIR / "clusters_pca.png", pca_info=pca_info, top_feats=10)
 
         # Carte
         _map_clusters(meta, labels, MAPS_DIR / "network_stations_clusters.html")
