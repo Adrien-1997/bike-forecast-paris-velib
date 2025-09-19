@@ -64,8 +64,7 @@ flowchart TD
   E --> EV[events.parquet]
   E --> PF[perf.parquet]
 
-  %% Build features now branches from Normalize
-  E --> G[Build features (from velib.parquet schema)]
+  E --> G[Build features from velib]
   G --> H[Train LGBM h60]
   H --> I[Model bundle]
   I --> M[Apply model -> y_pred]
@@ -73,18 +72,18 @@ flowchart TD
   PF --> M
 
   subgraph Pages
-    R1[network/overview]
-    R2[network/stations]
-    R3[network/dynamics]
-    M1[model/performance]
-    M2[model/pipeline]
-    M3[model/explainability]
-    Q1[monitoring/data_health]
-    Q2[monitoring/drift]
-    Q3[monitoring/model_health]
-    D1[data/exports]
-    D2[data/dictionary]
-    D3[data/methodology]
+    R1[network overview]
+    R2[network stations]
+    R3[network dynamics]
+    M1[model performance]
+    M2[model pipeline]
+    M3[model explainability]
+    Q1[monitoring data_health]
+    Q2[monitoring drift]
+    Q3[monitoring model_health]
+    D1[data exports]
+    D2[data dictionary]
+    D3[data methodology]
   end
 
   EV --> R1 --> X[assets]
