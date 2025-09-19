@@ -16,6 +16,7 @@ jobs:
     env:
       MPLBACKEND: Agg
       TZ: Europe/Paris
+      PYTHONPATH: ${{ github.workspace }}   # <- pour que src soit trouvé
     concurrency:
       group: pages-build
       cancel-in-progress: false
@@ -43,23 +44,15 @@ jobs:
           pip install -r requirements-doc.txt huggingface_hub
           sudo apt-get update && sudo apt-get install -y jq git-lfs
 
-      # --- Download exports from Hugging Face (auth + checks) ---
       - name: Download velib exports from HF
         shell: bash
         env:
-          HF_DATASET: ${{ vars.HF_DATASET }}      # ex: adrien97/velib-monitoring-historical
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}        # token HF read
+          HF_DATASET: ${{ vars.HF_DATASET }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
-          if [[ -z "${HF_DATASET:-}" ]]; then
-            echo "HF_DATASET not set (Settings → Actions → Variables). Expected 'user/repo'."; exit 1
-          fi
-          if [[ -z "${HF_TOKEN:-}" ]]; then
-            echo "HF_TOKEN not set (Settings → Actions → Secrets)."; exit 1
-          fi
           git lfs install
           rm -rf hf-ds
-          # injecte le token pour cloner un dataset privé
           HF_USER="${HF_DATASET%%/*}"
           git clone "https://${HF_USER}:${HF_TOKEN}@huggingface.co/datasets/${HF_DATASET}" hf-ds
           mkdir -p docs/exports
@@ -106,6 +99,7 @@ jobs:
     env:
       MPLBACKEND: Agg
       TZ: Europe/Paris
+      PYTHONPATH: ${{ github.workspace }}   # <- idem ici
     concurrency:
       group: pages-build
       cancel-in-progress: false
@@ -129,7 +123,6 @@ jobs:
           pip install -r requirements-doc.txt huggingface_hub
           sudo apt-get update && sudo apt-get install -y git-lfs
 
-      # --- Download exports from Hugging Face (auth + checks) ---
       - name: Download velib exports from HF
         shell: bash
         env:
@@ -137,12 +130,6 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
-          if [[ -z "${HF_DATASET:-}" ]]; then
-            echo "HF_DATASET not set (Settings → Actions → Variables). Expected 'user/repo'."; exit 1
-          fi
-          if [[ -z "${HF_TOKEN:-}" ]]; then
-            echo "HF_TOKEN not set (Settings → Actions → Secrets)."; exit 1
-          fi
           git lfs install
           rm -rf hf-ds
           HF_USER="${HF_DATASET%%/*}"
