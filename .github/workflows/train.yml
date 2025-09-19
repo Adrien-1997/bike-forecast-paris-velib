@@ -17,6 +17,9 @@ jobs:
   train_daily:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      HF_DATASET: ${{ vars.HF_DATASET }}              # ex: adrien97/velib-monitoring-historical
+      HUGGINGFACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}  # token HF (read au minimum)
 
     steps:
       - uses: actions/checkout@v4
@@ -29,19 +32,51 @@ jobs:
       - name: Install training deps (+ HF)
         run: |
           python -m pip install -U pip
-          pip install -r requirements-train.txt huggingface_hub
+          # Si requirements-train.txt n'existe pas encore, installe le minimum vital :
+          if [ -f requirements-train.txt ]; then
+            pip install -r requirements-train.txt
+          else
+            pip install pandas pyarrow lightgbm scikit-learn joblib huggingface_hub
+          fi
 
-      # --- NEW: récupérer le parquet depuis Hugging Face ---
+      # --- Download parquet depuis Hugging Face (AUTH + dataset type) ---
       - name: Download velib.parquet from HF
         shell: bash
-        env:
-          HF_DATASET: ${{ vars.HF_DATASET }}
         run: |
           python - <<'PY'
-          import os, pathlib, shutil
-          from huggingface_hub import hf_hub_download
-          dst_dir = pathlib.Path("docs/exports"); dst_dir.mkdir(parents=True, exist_ok=True)
-          hf_path = hf_hub_download(repo_id=os.environ["HF_DATASET"], filename="exports/velib.parquet")
+          import os, pathlib, shutil, sys
+          from huggingface_hub import hf_hub_download, login
+
+          repo = os.environ.get("HF_DATASET")
+          token = os.environ.get("HUGGINGFACE_HUB_TOKEN")
+
+          if not repo:
+            sys.exit("HF_DATASET not set (Actions → Variables). Expected 'user/repo'.")
+          # Recommandé: référentiel HF en minuscules
+          repo = repo.lower()
+
+          if token:
+            login(token=token)
+
+          dst_dir = pathlib.Path("docs/exports")
+          dst_dir.mkdir(parents=True, exist_ok=True)
+
+          try:
+            hf_path = hf_hub_download(
+              repo_id=repo,
+              filename="exports/velib.parquet",
+              repo_type="dataset",
+              revision="main",
+              force_download=False
+            )
+          except Exception as e:
+            msg = str(e)
+            if "401" in msg or "Unauthorized" in msg or "invalid username or password" in msg.lower():
+              sys.exit("401 Unauthorized: vérifie HF_TOKEN (secret) et que le dataset est accessible.")
+            if "Repository Not Found" in msg or "404" in msg:
+              sys.exit(f"Repo introuvable: '{repo}'. Crée-le (dataset) ou corrige HF_DATASET.")
+            raise
+
           shutil.copy(hf_path, dst_dir / "velib.parquet")
           print("[train] Downloaded velib.parquet from HF to", dst_dir)
           PY
@@ -74,7 +109,7 @@ jobs:
           echo "=== Check model presence ==="
           test -f models/lgb_nbvelos_T+60min.joblib || { echo "[CI] modèle introuvable après entraînement"; exit 1; }
 
-      - name: Upload model bundle
+      - name: Upload model bundle (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: model-lgbm-T+60min
