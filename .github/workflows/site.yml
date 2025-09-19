@@ -43,20 +43,29 @@ jobs:
           pip install -r requirements-doc.txt huggingface_hub
           sudo apt-get update && sudo apt-get install -y jq git-lfs
 
-      # --- NEW: récupérer les exports depuis Hugging Face ---
+      # --- Download exports from Hugging Face (auth + checks) ---
       - name: Download velib exports from HF
         shell: bash
         env:
-          HF_DATASET: ${{ vars.HF_DATASET }}
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET: ${{ vars.HF_DATASET }}      # ex: adrien97/velib-monitoring-historical
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}        # token HF read
         run: |
-          set -e
+          set -euo pipefail
+          if [[ -z "${HF_DATASET:-}" ]]; then
+            echo "HF_DATASET not set (Settings → Actions → Variables). Expected 'user/repo'."; exit 1
+          fi
+          if [[ -z "${HF_TOKEN:-}" ]]; then
+            echo "HF_TOKEN not set (Settings → Actions → Secrets)."; exit 1
+          fi
           git lfs install
           rm -rf hf-ds
-          git clone https://huggingface.co/datasets/${HF_DATASET} hf-ds
+          # injecte le token pour cloner un dataset privé
+          HF_USER="${HF_DATASET%%/*}"
+          git clone "https://${HF_USER}:${HF_TOKEN}@huggingface.co/datasets/${HF_DATASET}" hf-ds
           mkdir -p docs/exports
           cp -v hf-ds/exports/velib.parquet docs/exports/velib.parquet || true
-          cp -v hf-ds/exports/velib.csv docs/exports/velib.csv || true
+          cp -v hf-ds/exports/velib.csv     docs/exports/velib.csv     || true
+          ls -lh docs/exports || true
 
       - name: Build monitoring artifacts
         run: |
@@ -74,10 +83,10 @@ jobs:
           THRESH_MAE_PCT: "1.20"
         run: |
           python tools/check_retrain.py | tee check.json
-          echo "need_retrain=$(jq -r '.need_retrain' check.json)" >> "$GITHUB_OUTPUT"
-          echo "max_psi=$(jq -r '.max_psi' check.json)"         >> "$GITHUB_OUTPUT"
-          echo "mae_24h=$(jq -r '.mae_24h' check.json)"         >> "$GITHUB_OUTPUT"
-          echo "mae_baseline=$(jq -r '.mae_baseline' check.json)" >> "$GITHUB_OUTPUT"
+          echo "need_retrain=$(jq -r '.need_retrain' check.json)"   >> "$GITHUB_OUTPUT"
+          echo "max_psi=$(jq -r '.max_psi' check.json)"             >> "$GITHUB_OUTPUT"
+          echo "mae_24h=$(jq -r '.mae_24h' check.json)"             >> "$GITHUB_OUTPUT"
+          echo "mae_baseline=$(jq -r '.mae_baseline' check.json)"   >> "$GITHUB_OUTPUT"
 
       - name: Build MkDocs
         run: mkdocs build --clean
@@ -120,20 +129,28 @@ jobs:
           pip install -r requirements-doc.txt huggingface_hub
           sudo apt-get update && sudo apt-get install -y git-lfs
 
-      # --- NEW: récupérer les exports depuis Hugging Face ---
+      # --- Download exports from Hugging Face (auth + checks) ---
       - name: Download velib exports from HF
         shell: bash
         env:
           HF_DATASET: ${{ vars.HF_DATASET }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          set -e
+          set -euo pipefail
+          if [[ -z "${HF_DATASET:-}" ]]; then
+            echo "HF_DATASET not set (Settings → Actions → Variables). Expected 'user/repo'."; exit 1
+          fi
+          if [[ -z "${HF_TOKEN:-}" ]]; then
+            echo "HF_TOKEN not set (Settings → Actions → Secrets)."; exit 1
+          fi
           git lfs install
           rm -rf hf-ds
-          git clone https://huggingface.co/datasets/${HF_DATASET} hf-ds
+          HF_USER="${HF_DATASET%%/*}"
+          git clone "https://${HF_USER}:${HF_TOKEN}@huggingface.co/datasets/${HF_DATASET}" hf-ds
           mkdir -p docs/exports
           cp -v hf-ds/exports/velib.parquet docs/exports/velib.parquet || true
-          cp -v hf-ds/exports/velib.csv docs/exports/velib.csv || true
+          cp -v hf-ds/exports/velib.csv     docs/exports/velib.csv     || true
+          ls -lh docs/exports || true
 
       - name: Retrain LightGBM (T+60)
         run: |
@@ -157,7 +174,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f docs/exports/baseline.json || true
           git add -f models/*.joblib || true
-          git commit -m "ci: retrain model on drift/perf threshold [skip ci]" || echo "no changes"
+          git commit -m "ci(retrain): update model & baseline [skip ci]" || echo "no changes"
           git fetch origin main
           git -c rebase.autoStash=true pull --rebase origin main
           git push origin HEAD:main
