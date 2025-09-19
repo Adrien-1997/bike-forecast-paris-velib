@@ -56,7 +56,7 @@ Public GBFS snapshots -> normalized 15-min aggregates -> features & model traini
 ## 🧭 Pipelines — Data → ML → Docs & App
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[GBFS ingest] --> B[DuckDB]
   B --> C[Aggregate + weather]
   C --> D[Export velib.parquet]
@@ -64,8 +64,8 @@ flowchart LR
   E --> EV[events.parquet]
   E --> PF[perf.parquet]
 
-  EV --> G[Build features]
-  PF --> G
+  %% Build features now branches from Normalize (not EV/PF)
+  E --> G[Build features (from velib.parquet schema)]
   G --> H[Train LGBM h60]
   H --> I[Model bundle]
   I --> M[Apply model -> y_pred]
@@ -109,7 +109,6 @@ flowchart LR
   T -->|yes| CI2[train daily]
   CI2 --> H
   CI2 --> K
-
 ```
 
 ### Core src/* chain
