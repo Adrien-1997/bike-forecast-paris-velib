@@ -11,15 +11,17 @@ import requests
 import folium
 from folium.plugins import MarkerCluster
 import streamlit as st
+from utils_io import get_export_path
 
 # -----------------------------------------------------------------------------
 # PATHS & GLOBALS
 # -----------------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]
 MODELS_DIR = ROOT / "models"
-DATA_PARQUET = ROOT / "docs" / "exports" / "velib.parquet"   # <-- unique export 15min
 FIGS_DIR = ROOT / "docs" / "assets" / "figs"
 DEBUG = False
+
+DATA_PARQUET = get_export_path("velib.parquet")
 
 # Pour import interne
 sys.path.insert(0, str(ROOT))
@@ -551,12 +553,6 @@ def _sanity_checks():
     if problems:
         st.error(" • ".join(problems))
 _sanity_checks()
-
-
-
-
-
-
 
 
 # prédiction T+1h
