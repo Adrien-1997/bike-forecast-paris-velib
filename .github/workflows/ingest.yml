@@ -83,10 +83,12 @@ jobs:
         shell: bash
         env:
           HF_DATASET: ${{ vars.HF_DATASET }}   # ex: "adrien/velib-paris-exports"
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
-          if [[ -z "${HF_DATASET:-}" ]]; then
-            echo "HF_DATASET not set (Actions → Variables). Expected 'user/repo'."
+
+          if [[ -z "${HF_DATASET:-}" || -z "${HF_TOKEN:-}" ]]; then
+            echo "HF_DATASET or HF_TOKEN missing"
             exit 1
           fi
 
@@ -100,4 +102,9 @@ jobs:
           cd hf-ds
           git add -A
           git commit -m "Update velib exports from ingest (15min)" || echo "Nothing to commit"
-          git push
+
+          # --- inject token dans le remote pour le push https ---
+          HF_USER="${HF_DATASET%%/*}"
+          git remote set-url origin "https://${HF_USER}:${HF_TOKEN}@huggingface.co/datasets/${HF_DATASET}"
+
+          git push origin main
