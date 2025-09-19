@@ -634,7 +634,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Build 'Network / Stations & profils' assets from events.parquet")
     ap.add_argument("--events", type=Path, required=True, help="Path to docs/exports/events.parquet")
     ap.add_argument("--last-days", type=int, default=7, help="Fenêtre récente pour la table (7 j par défaut)")
-    ap.add_argument("--clusters", type=int, default=6, help="Nombre de clusters (K-Means)")
+    ap.add_argument("--clusters", type=int, default=4, help="Nombre de clusters (K-Means)")
     ap.add_argument("--hours", type=int, default=48, help="(Réservé) fenêtre d'illustration station (heures)")
     ap.add_argument("--select", type=int, default=12, help="Nombre de stations à sélectionner pour exemples")
     ap.add_argument("--by", type=str, default="volatility", choices=["volatility","coverage","count"], help="Critère de sélection d'exemples")
