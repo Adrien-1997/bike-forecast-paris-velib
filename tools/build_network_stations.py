@@ -112,7 +112,9 @@ Chaque station peut avoir une fiche dédiée (optionnel) :
 
 ## 5bis) Cercle des corrélations (PCA)
 
-![PCA Circle]({pca_circle_png_rel})
+<div style="max-width:480px;margin:auto;">
+<img src="{pca_circle_png_rel}" alt="PCA Circle"/>
+</div>
 
 > Les flèches indiquent la contribution des variables (quarts d’heure) aux deux premiers axes.
 
@@ -503,18 +505,19 @@ def _plot_pca_correlation_circle(pca_info, out_png: Path, top_feats: int = 10) -
 
     for i in sel_idx:
         x, y = load_norm[i, 0], load_norm[i, 1]
-        ax.arrow(0, 0, x, y,
-                 head_width=0.03, head_length=0.05,
-                 fc="#444", ec="#444", alpha=0.85, length_includes_head=True)
-        ax.text(x * 1.07, y * 1.07, str(feats[i]),
-                fontsize=8, ha="left", va="center", color="#333")
+        if not np.isnan(x) and not np.isnan(y):
+            ax.arrow(0, 0, x, y,
+                    head_width=0.03, head_length=0.05,
+                    fc="#444", ec="#444", alpha=0.85, length_includes_head=True)
+            ax.text(x * 1.07, y * 1.07, str(feats[i]),
+                    fontsize=8, ha="left", va="center", color="#333")
 
     # Axes, limites, aspect
     ax.set_title("Cercle des corrélations (PCA)")
     ax.set_xlim(-1.1, 1.1)
     ax.set_ylim(-1.1, 1.1)
     ax.set_aspect("equal", adjustable="box")
-
+    print("[pca_circle] load_norm shape:", load_norm.shape, "norms max:", norms.max())
     _save_fig(out_png)
 
 
