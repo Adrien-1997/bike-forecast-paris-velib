@@ -467,57 +467,80 @@ from matplotlib.patches import Circle
 
 def _plot_pca_correlation_circle(pca_info, out_png: Path, top_feats: int = 10) -> None:
     """
-    Trace le cercle des corrélations (biplot des features) à partir des infos PCA.
-    - pca_info doit contenir: {"components", "explained_variance", "feature_names"}.
-    - top_feats: nombre de features les plus contributives à annoter.
+    Cercle des corrélations (biplot des features) robuste :
+    - nettoie NaN/Inf dans components & explained_variance(_ratio_)
+    - si rien de significatif, affiche un message au lieu d'un cercle vide
     """
-    plt.figure(figsize=(6.2, 6.2))
+    plt.figure(figsize=(5.2, 5.2))
     ax = plt.gca()
 
+    # Vérifs d'entrée
     if not isinstance(pca_info, dict):
         plt.text(0.5, 0.5, "Infos PCA indisponibles", ha="center")
-        _save_fig(out_png)
-        return
+        _save_fig(out_png); return
 
-    comps = np.asarray(pca_info.get("components"))
+    comps = np.asarray(pca_info.get("components"), dtype=float)          # shape (2, n_features)
     feats = pca_info.get("feature_names")
-    expl = np.asarray(pca_info.get("explained_variance"), dtype=float)
+    expl  = pca_info.get("explained_variance")
+    var_r = pca_info.get("var_ratio")
 
-    if comps is None or feats is None or expl is None:
+    if comps is None or feats is None or (expl is None and var_r is None):
         plt.text(0.5, 0.5, "Infos PCA incomplètes", ha="center")
-        _save_fig(out_png)
-        return
+        _save_fig(out_png); return
 
-    # Loadings = eigenvectors * sqrt(eigenvalues)
-    load = comps.T * np.sqrt(expl)  # shape = (n_features, 2)
+    # Sanitize arrays
+    comps = np.nan_to_num(comps, nan=0.0, posinf=0.0, neginf=0.0)  # (2, n)
+    if expl is not None:
+        expl = np.asarray(expl, dtype=float)
+        expl = np.nan_to_num(expl, nan=0.0, posinf=0.0, neginf=0.0)
+        expl = np.clip(expl, 1e-12, None)  # >0
+        scale = np.sqrt(expl)              # eigenvalues -> sqrt
+    else:
+        var_r = np.asarray(var_r, dtype=float)
+        var_r = np.nan_to_num(var_r, nan=0.0, posinf=0.0, neginf=0.0)
+        var_r = np.clip(var_r, 1e-12, None)
+        scale = np.sqrt(var_r)
+
+    # Loadings (n_features, 2)
+    load = comps.T * scale[:2]   # (n,2)
     norms = np.linalg.norm(load, axis=1)
-    eps = 1e-12
-    load_norm = np.divide(load, np.maximum(norms[:, None], eps))
+    norms = np.nan_to_num(norms, nan=0.0, posinf=0.0, neginf=0.0)
 
-    # Cercle unité
+    # Si aucune feature significative, message clair
+    if not np.any(norms > 1e-6):
+        ax.text(0.5, 0.5, "Pas de variables significatives pour PC1/PC2", ha="center")
+        ax.set_axis_off()
+        _save_fig(out_png); return
+
+    # Normalisation pour tracer dans le disque unité
+    denom = np.maximum(norms, 1e-12)[:, None]
+    load_norm = load / denom
+
+    # Cercle unité + axes
     circle = Circle((0, 0), 1.0, fill=False, color="#888", linestyle="--", linewidth=1.0)
     ax.add_patch(circle)
     ax.axhline(0, color="#bbb", linewidth=0.8)
     ax.axvline(0, color="#bbb", linewidth=0.8)
 
-    # Sélection des top features
-    sel_idx = np.argsort(norms)[-int(top_feats):]
+    # Choisir les top features par norme de loading
+    n_features = load_norm.shape[0]
+    k = int(min(max(top_feats, 1), n_features))
+    sel_idx = np.argsort(norms)[-k:]
 
+    # Tracer les flèches et labels
     for i in sel_idx:
-        x, y = load_norm[i, 0], load_norm[i, 1]
-        if not np.isnan(x) and not np.isnan(y):
-            ax.arrow(0, 0, x, y,
-                    head_width=0.03, head_length=0.05,
-                    fc="#444", ec="#444", alpha=0.85, length_includes_head=True)
-            ax.text(x * 1.07, y * 1.07, str(feats[i]),
-                    fontsize=8, ha="left", va="center", color="#333")
+        x, y = float(load_norm[i, 0]), float(load_norm[i, 1])
+        ax.arrow(0, 0, x, y,
+                 head_width=0.03, head_length=0.05,
+                 fc="#444", ec="#444", alpha=0.85, length_includes_head=True)
+        ax.text(x * 1.07, y * 1.07, str(feats[i]),
+                fontsize=8, ha="left", va="center", color="#333")
 
-    # Axes, limites, aspect
+    # Mise en forme
     ax.set_title("Cercle des corrélations (PCA)")
-    ax.set_xlim(-1.1, 1.1)
-    ax.set_ylim(-1.1, 1.1)
+    ax.set_xlim(-1.1, 1.1); ax.set_ylim(-1.1, 1.1)
     ax.set_aspect("equal", adjustable="box")
-    print("[pca_circle] load_norm shape:", load_norm.shape, "norms max:", norms.max())
+
     _save_fig(out_png)
 
 
@@ -689,7 +712,7 @@ def main(events_path: Path, last_days: int, k: int, hours: int, select: int, by:
         # Figures
         _plot_centroids(prof, labels, FIGS_DIR / "centroids_24h.png")
         _plot_pca_scatter(pca2, labels, FIGS_DIR / "clusters_pca.png", pca_info=pca_info, top_feats=10)
-        _plot_pca_correlation_circle(pca_info, FIGS_DIR / "clusters_pca_circle.png", top_feats=12)
+        _plot_pca_correlation_circle(pca_info, FIGS_DIR / "clusters_pca_circle.png", top_feats=10)
 
         # Carte
         _map_clusters(meta, labels, MAPS_DIR / "network_stations_clusters.html")
