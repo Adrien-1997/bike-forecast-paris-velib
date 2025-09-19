@@ -19,6 +19,7 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
 
 import warnings
 
@@ -102,10 +103,18 @@ Chaque station peut avoir une fiche dédiée (optionnel) :
 ## 4) Profils 24 h — centroïdes par cluster
 ![Centroids]({centroids_png_rel})
 
+---
+
 ## 5) Projection PCA(2) des profils
 ![PCA]({pca_png_rel})
 
 > La PCA ne sert **qu'à visualiser** la séparation des groupes ; le clustering se fait sur **l’espace complet (96 points)**.
+
+## 5bis) Cercle des corrélations (PCA)
+
+![PCA Circle]({pca_circle_png_rel})
+
+> Les flèches indiquent la contribution des variables (quarts d’heure) aux deux premiers axes.
 
 ---
 
@@ -452,6 +461,62 @@ def _plot_pca_scatter(pca2: pd.DataFrame, labels: pd.Series, out_png: Path, pca_
 
     _save_fig(out_png)
 
+from matplotlib.patches import Circle
+
+def _plot_pca_correlation_circle(pca_info, out_png: Path, top_feats: int = 10) -> None:
+    """
+    Trace le cercle des corrélations (biplot des features) à partir des infos PCA.
+    - pca_info doit contenir: {"components", "explained_variance", "feature_names"}.
+    - top_feats: nombre de features les plus contributives à annoter.
+    """
+    plt.figure(figsize=(6.2, 6.2))
+    ax = plt.gca()
+
+    if not isinstance(pca_info, dict):
+        plt.text(0.5, 0.5, "Infos PCA indisponibles", ha="center")
+        _save_fig(out_png)
+        return
+
+    comps = np.asarray(pca_info.get("components"))
+    feats = pca_info.get("feature_names")
+    expl = np.asarray(pca_info.get("explained_variance"), dtype=float)
+
+    if comps is None or feats is None or expl is None:
+        plt.text(0.5, 0.5, "Infos PCA incomplètes", ha="center")
+        _save_fig(out_png)
+        return
+
+    # Loadings = eigenvectors * sqrt(eigenvalues)
+    load = comps.T * np.sqrt(expl)  # shape = (n_features, 2)
+    norms = np.linalg.norm(load, axis=1)
+    eps = 1e-12
+    load_norm = np.divide(load, np.maximum(norms[:, None], eps))
+
+    # Cercle unité
+    circle = Circle((0, 0), 1.0, fill=False, color="#888", linestyle="--", linewidth=1.0)
+    ax.add_patch(circle)
+    ax.axhline(0, color="#bbb", linewidth=0.8)
+    ax.axvline(0, color="#bbb", linewidth=0.8)
+
+    # Sélection des top features
+    sel_idx = np.argsort(norms)[-int(top_feats):]
+
+    for i in sel_idx:
+        x, y = load_norm[i, 0], load_norm[i, 1]
+        ax.arrow(0, 0, x, y,
+                 head_width=0.03, head_length=0.05,
+                 fc="#444", ec="#444", alpha=0.85, length_includes_head=True)
+        ax.text(x * 1.07, y * 1.07, str(feats[i]),
+                fontsize=8, ha="left", va="center", color="#333")
+
+    # Axes, limites, aspect
+    ax.set_title("Cercle des corrélations (PCA)")
+    ax.set_xlim(-1.1, 1.1)
+    ax.set_ylim(-1.1, 1.1)
+    ax.set_aspect("equal", adjustable="box")
+
+    _save_fig(out_png)
+
 
 def _map_clusters(meta: pd.DataFrame, labels: pd.Series | pd.DataFrame, out_html: Path) -> None:
     # Besoins: folium + coords valides
@@ -621,6 +686,7 @@ def main(events_path: Path, last_days: int, k: int, hours: int, select: int, by:
         # Figures
         _plot_centroids(prof, labels, FIGS_DIR / "centroids_24h.png")
         _plot_pca_scatter(pca2, labels, FIGS_DIR / "clusters_pca.png", pca_info=pca_info, top_feats=10)
+        _plot_pca_correlation_circle(pca_info, FIGS_DIR / "clusters_pca_circle.png", top_feats=12)
 
         # Carte
         _map_clusters(meta, labels, MAPS_DIR / "network_stations_clusters.html")
@@ -644,6 +710,7 @@ def main(events_path: Path, last_days: int, k: int, hours: int, select: int, by:
         OUT_MD.parent.mkdir(parents=True, exist_ok=True)
         centroids_png = FIGS_DIR / "centroids_24h.png"
         pca_png = FIGS_DIR / "clusters_pca.png"
+        pca_circle_png = FIGS_DIR / "clusters_pca_circle.png"   # <-- ajoute
         map_html = MAPS_DIR / "network_stations_clusters.html"
         stats7 = TABLES_DIR / "station_stats_7d.csv"
         stats30 = TABLES_DIR / "station_stats_30d.csv"
@@ -662,6 +729,7 @@ def main(events_path: Path, last_days: int, k: int, hours: int, select: int, by:
             map_rel=rel_from_md(OUT_MD, map_html),
             centroids_png_rel=rel_from_md(OUT_MD, centroids_png),
             pca_png_rel=rel_from_md(OUT_MD, pca_png),
+            pca_circle_png_rel=rel_from_md(OUT_MD, pca_circle_png),
             stats7_rel=rel_from_md(OUT_MD, stats7),
             stats30_rel=rel_from_md(OUT_MD, stats30),
             clusters_rel=rel_from_md(OUT_MD, clusters_csv),
