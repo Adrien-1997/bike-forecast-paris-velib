@@ -294,49 +294,62 @@ def _build_24h_profile(df: pd.DataFrame, days: int = PROFILE_WINDOW_DAYS) -> Tup
 
     return prof, meta
 
-def _cluster_profiles(prof: pd.DataFrame, k: int = 4, min_profile_cov: float = 0.40, neutral_fill: float = 0.5):
-    """Clusterise les profils 24 h.
+def _cluster_profiles(
+    prof: pd.DataFrame,
+    k: int = 4,
+    min_profile_cov: float = 0.40,
+    neutral_fill: float = 0.5,
+):
+    """Clusterise les profils 24 h et renvoie (labels, summary, pca2, pca_info).
+    pca_info = {"var_ratio": (pc1, pc2), "components": np.ndarray shape (2, n_features), "feature_names": list[str]}
     - min_profile_cov: proportion min de points non-NaN par station (0.40 = >= 40% des 96 quarts d'heure).
-    - neutral_fill: valeur neutre utilisée si une colonne entière est NaN (occupation ~0.5).
+    - neutral_fill: valeur neutre si une colonne entière est NaN (occupation ~0.5).
     """
     summary = {"sklearn_available": HAS_SK}
-    if not HAS_SK or prof.empty:
-        return pd.Series(dtype="int64"), summary, pd.DataFrame()
 
-    # 1) Filtrer les profils trop incomplets
-    cov = 1.0 - prof.isna().mean(axis=1)           # couverture par station (sur 96 colonnes)
+    # Cas sans sklearn ou profil vide -> toujours 4 retours
+    if not HAS_SK or prof.empty:
+        return pd.Series(dtype="int64"), summary, pd.DataFrame(), None
+
+    # 1) Filtrer profils trop incomplets
+    cov = 1.0 - prof.isna().mean(axis=1)
     keep_idx = cov >= float(min_profile_cov)
     summary["profile_row_coverage_min"] = float(min_profile_cov)
     summary["n_input"] = int(prof.shape[0])
     summary["n_kept"] = int(keep_idx.sum())
     if summary["n_kept"] < 2:
         # Trop peu pour clusteriser proprement
-        return pd.Series(dtype="int64"), summary, pd.DataFrame()
+        return pd.Series(dtype="int64"), summary, pd.DataFrame(), None
 
     prof2 = prof.loc[keep_idx].copy()
+    feat_names = list(prof2.columns)
 
-    # 2) Imputation NaN : médiane colonne, fallback neutre si colonne totalement NaN
+    # 2) Imputation NaN : médiane colonne, fallback neutre
     X = prof2.values.astype(float)
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)  # masque "All-NaN slice"
+        warnings.simplefilter("ignore", category=RuntimeWarning)
         col_med = np.nanmedian(X, axis=0)
     col_med = np.where(np.isnan(col_med), neutral_fill, col_med)
     X = np.where(np.isnan(X), col_med, X)
-    X = np.where(np.isnan(X), neutral_fill, X)     # ultime filet de sécurité
+    X = np.where(np.isnan(X), neutral_fill, X)
 
     # 3) Standardisation
     scaler = StandardScaler()
     Xn = scaler.fit_transform(X)
 
-    # 4) KMeans robuste (k <= nb d'échantillons, k >= 2)
+    # 4) KMeans robuste
     k_eff = max(2, min(int(k), Xn.shape[0]))
     km = KMeans(n_clusters=k_eff, n_init=10, random_state=42)
     lab_arr = km.fit_predict(Xn)
     labels = pd.Series(lab_arr, index=prof2.index, name="cluster", dtype="int64")
 
-    # 5) PCA 2D pour la visualisation
-    pca = PCA(n_components=2, random_state=42)
-    pca2 = pd.DataFrame(pca.fit_transform(Xn), index=prof2.index, columns=["PC1","PC2"])
+    # 5) PCA 2D pour visu (+ infos)
+    p = PCA(n_components=2, random_state=42)
+    Z = p.fit_transform(Xn)
+    pca2 = pd.DataFrame(Z, index=prof2.index, columns=["PC1", "PC2"])
+    var_ratio = tuple(map(float, p.explained_variance_ratio_[:2]))
+    comps = p.components_.astype(float)  # shape (2, n_features)
+    pca_info = {"var_ratio": var_ratio, "components": comps, "feature_names": feat_names}
 
     # 6) Scores internes
     try:
@@ -353,8 +366,10 @@ def _cluster_profiles(prof: pd.DataFrame, k: int = 4, min_profile_cov: float = 0
         "silhouette": sil,
         "davies_bouldin": dbi,
         "n_stations": int(labels.shape[0]),
+        "pca_var_ratio": var_ratio,
     })
-    return labels, summary, pca2
+
+    return labels, summary, pca2, pca_info
 
 
 def _plot_centroids(prof: pd.DataFrame, labels: pd.Series, out_png: Path) -> None:
