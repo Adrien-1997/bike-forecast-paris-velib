@@ -138,7 +138,7 @@ def main():
     ap.add_argument("--tz", type=str, default=None, help="Display timezone (data remains UTC).")
 
     # Options specific to some pages
-    ap.add_argument("--clusters", type=int, default=6, help="Number of KMeans clusters for station behavior.")
+    ap.add_argument("--clusters", type=int, default=4, help="Number of KMeans clusters for station behavior.")
     ap.add_argument("--hours", type=int, default=48, help="Window for station-level example plots (if used).")
     ap.add_argument("--select", type=int, default=12, help="How many stations to profile (if used).")
     ap.add_argument("--by", type=str, default="volatility", choices=["volatility", "coverage", "count"],
