@@ -5,7 +5,8 @@ site/
 *.ipynb_checkpoints/
 
 # --- Exports data (lourds, envoyés sur Hugging Face) ---
-docs/exports/*
+docs/exports/*.parquet
+docs/exports/*.csv
 *.parquet
 *.csv
 *.csv.gz
