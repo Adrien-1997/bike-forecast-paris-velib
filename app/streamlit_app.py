@@ -281,6 +281,49 @@ try:
 except Exception:
     fetched_local = pd.Timestamp.utcnow().tz_localize("UTC").tz_convert("Europe/Paris")
 
+
+def _parquet_age_minutes() -> int | None:
+    try:
+        dfp = pd.read_parquet(_velib_path())
+        if dfp.empty:
+            return None
+        ts_col = (
+            dfp["tbin_utc"]
+            if "tbin_utc" in dfp.columns else
+            (dfp["ts"] if "ts" in dfp.columns else None)
+        )
+        if ts_col is None:
+            return None
+        ts_parquet = pd.to_datetime(ts_col, errors="coerce").max()
+        if pd.isna(ts_parquet):
+            return None
+        if ts_parquet.tzinfo is None:
+            ts_parquet = ts_parquet.tz_localize("UTC")
+        now_paris = pd.Timestamp.now(tz="Europe/Paris").floor("15min")
+        ts_paris  = ts_parquet.tz_convert("Europe/Paris").floor("15min")
+        return int((now_paris - ts_paris).total_seconds() // 60)
+    except Exception:
+        return None
+
+# Auto-refresh si parquet > 15 minutes (une seule fois par session)
+_age_min = _parquet_age_minutes()
+if _age_min is not None and _age_min > 15 and not st.session_state.get("did_auto_refresh", False):
+    st.warning(f"⏱️ Données parquet âgées de {_age_min} min → actualisation automatique…")
+
+    # --- vidage de caches ---
+    try:
+        st.cache_data.clear()      # vide tout le cache Streamlit data
+    except Exception:
+        pass
+    try:
+        load_live_data_cached.clear()  # ta fonction spécifique
+    except Exception:
+        pass
+
+    st.session_state["did_auto_refresh"] = True
+    st.experimental_rerun()
+
+
 def _sanity_checks():
     problems = []
     try:
@@ -304,17 +347,15 @@ def _sanity_checks():
 
 _sanity_checks()
 
+# 3) — remplacez la fonction parquet_freshness_badge() par cette version
 def parquet_freshness_badge() -> str:
     try:
         dfp = pd.read_parquet(_velib_path())
         if dfp.empty:
             return "<span class='badge'>Parquet: vide</span>"
 
-        if "tbin_utc" in dfp.columns:
-            ts_col = dfp["tbin_utc"]
-        elif "ts" in dfp.columns:
-            ts_col = dfp["ts"]
-        else:
+        ts_col = dfp["tbin_utc"] if "tbin_utc" in dfp.columns else dfp.get("ts", None)
+        if ts_col is None:
             return "<span class='badge'>Parquet: timestamp absent</span>"
 
         ts_parquet = pd.to_datetime(ts_col, errors="coerce").max()
@@ -327,18 +368,20 @@ def parquet_freshness_badge() -> str:
         now_paris = pd.Timestamp.now(tz="Europe/Paris").floor("15min")
         delta_min = int((now_paris - ts_paris).total_seconds() // 60)
 
-        if delta_min <= 30:
-            color = "#dcfce7; color:#166534"
-        elif delta_min <= 90:
-            color = "#fef9c3; color:#854d0e"
+        # Seuils resserrés autour de 15 min
+        if delta_min <= 15:
+            color = "#dcfce7; color:#166534"   # vert
+        elif delta_min <= 60:
+            color = "#fef9c3; color:#854d0e"   # jaune
         else:
-            color = "#fee2e2; color:#991b1b"
+            color = "#fee2e2; color:#991b1b"   # rouge
 
         return f"<span class='badge' style='background:{color}'>Parquet: {delta_min} min</span>"
     except FileNotFoundError:
         return "<span class='badge'>Parquet: introuvable</span>"
     except Exception:
         return "<span class='badge'>Parquet: erreur</span>"
+
 
 
 pred_df = predict_nbvelos_t1h(df_now)
