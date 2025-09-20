@@ -510,28 +510,26 @@ else:
     with c3: st.markdown(f"<div class='kpi-row kpi-card'><div class='kpi-title'>Bornes libres (actuel)</div><div class='kpi-value'>{kpis['docks_total']}</div></div>", unsafe_allow_html=True)
     with c4: st.markdown(f"<div class='kpi-row kpi-card'><div class='kpi-title'>Occupation réseau</div><div class='kpi-value'>{kpis['occ_pct']} %</div></div>", unsafe_allow_html=True)
 
-    # ------------------------ Préparation données Top 10 ------------------------
+    # ------------------------ Préparation données ------------------------
     dfm = df_with_pred.copy()
     for c in ["capacity","numbikesavailable","numdocksavailable","y_nb_pred"]:
         dfm[c] = pd.to_numeric(dfm.get(c), errors="coerce").fillna(0)
 
-    # capacité effective = éviter divisions par 0 (et tenir compte de cap mal déclarées)
-    dfm["cap_eff"] = dfm[["capacity","numbikesavailable", "numdocksavailable"]].max(axis=1)
+    dfm["cap_eff"] = dfm[["capacity","numbikesavailable","numdocksavailable"]].max(axis=1)
     dfm = dfm[dfm["cap_eff"] > 0].copy()
     dfm["pct_now"]  = 100 * dfm["numbikesavailable"] / dfm["cap_eff"]
     dfm["pct_pred"] = 100 * dfm["y_nb_pred"]          / dfm["cap_eff"]
     dfm["delta_pts"] = dfm["pct_pred"] - dfm["pct_now"]
 
-    # ------------------------ Contrôles ergonomiques ------------------------
+    # ------------------------ Contrôles ------------------------
     st.divider()
     st.subheader("Stations critiques (T+1h)")
 
     cc1, cc2, cc3, cc4 = st.columns([1.1, 1, 1, 1.2])
     with cc1:
-        top_n = st.slider("Top N", min_value=5, max_value=30, value=10, step=1, help="Nombre de stations affichées.")
+        top_n = st.slider("Top N", min_value=5, max_value=30, value=10, step=1)
     with cc2:
-        cap_min = st.number_input("Capacité min.", min_value=0, max_value=80, value=10, step=5,
-                                  help="Filtrer les toutes petites stations.")
+        cap_min = st.number_input("Capacité min.", min_value=0, max_value=80, value=10, step=5)
     with cc3:
         metric = st.selectbox("Classement par", ["% prévu", "Δ points (prévu-actuel)"], index=0)
     with cc4:
@@ -539,112 +537,63 @@ else:
 
     dfv = dfm[dfm["cap_eff"] >= cap_min].copy()
 
-    # Construction des tops selon la métrique choisie
     if metric == "% prévu":
         top_sat  = dfv.sort_values("pct_pred", ascending=False).head(top_n).copy()
         top_lack = dfv.sort_values("pct_pred", ascending=True ).head(top_n).copy()
-        y_now, y_pred, xlabel, fmt = "pct_now", "pct_pred", "% remplissage (vélos / capacité)", lambda x: f"{x:.0f}%"
+        y_now, y_pred = "pct_now", "pct_pred"
     else:
-        # Δ points = variation relative à la capacité (%), mais on le montre côté label
         top_sat  = dfv.sort_values("delta_pts", ascending=False).head(top_n).copy()
         top_lack = dfv.sort_values("delta_pts", ascending=True ).head(top_n).copy()
-        y_now, y_pred, xlabel, fmt = "pct_now", "pct_pred", "% remplissage (vélos / capacité)", lambda x: f"{x:.0f}%"
+        y_now, y_pred = "pct_now", "pct_pred"
 
-    # Option d’affichage en nb vélos au lieu de %
     if mode_val == "Nb vélos":
         y_now, y_pred = "numbikesavailable", "y_nb_pred"
-        xlabel, fmt = "Vélos disponibles (actuel/prévu)", lambda x: f"{int(x)}"
 
-    # ------------------------ Onglets + graph + tableau téléchargeable ------------------------
-    tab1, tab2 = st.tabs(["Risque de saturation (haut %)", "Risque de manque (bas %)"])
-
-    # Remplace l'ancien _plot_barh par ceci
+    # ------------------------ Dumbbell plot ------------------------
     def _shorten(s: str, max_chars=32) -> str:
         s = (s or "").strip()
         return (s[: max_chars - 1] + "…") if len(s) > max_chars else s
 
     def _plot_dumbbell(df: pd.DataFrame, title: str):
-        # figure adaptative (hauteur par ligne)
         n = len(df)
         h = max(0.55 * n, 3.8)
         fig, ax = plt.subplots(figsize=(8.5, h))
-
-        # Axes & grille lisibles
         ax.grid(axis="x", linestyle="--", linewidth=0.6, alpha=0.35)
         ax.set_axisbelow(True)
 
-        # Prépare données
         y = np.arange(n)
         names = df["name"].fillna("—").map(_shorten).tolist()
         x_now = pd.to_numeric(df[y_now], errors="coerce").fillna(0).values
         x_pred = pd.to_numeric(df[y_pred], errors="coerce").fillna(0).values
         deltas = x_pred - x_now
 
-        # Limites X
         if mode_val == "% remplissage":
             ax.set_xlim(0, 100)
-            tick_step = 10
         else:
             xmax = float(np.nanmax([x_now.max(), x_pred.max(), 1]))
             ax.set_xlim(0, np.ceil(xmax / 5) * 5)
-            tick_step = max(5, int(ax.get_xlim()[1] / 10))
 
-        # Lignes reliant Actuel → Prévu (dumbbells)
         for i, (a, b, d) in enumerate(zip(x_now, x_pred, deltas)):
-            # ligne
             ax.hlines(y=i, xmin=min(a, b), xmax=max(a, b), linewidth=3, alpha=0.8)
-            # points (marqueurs distincts)
             ax.scatter(a, i, s=36, marker="o", zorder=3, label="Actuel" if i == 0 else None)
             ax.scatter(b, i, s=48, marker="D", zorder=3, label="Prévu"  if i == 0 else None)
-            # annotation compacte côté "prévu"
-            if mode_val == "% remplissage":
-                ax.text(b + 1.2, i, f"{b:.0f}% ({d:+.0f})", va="center", fontsize=8)
-            else:
-                ax.text(b + (0.02 * ax.get_xlim()[1] + 0.6), i, f"{int(b)} ({int(d):+d})", va="center", fontsize=8)
+            label = f"{b:.0f}% ({d:+.0f})" if mode_val == "% remplissage" else f"{int(b)} ({int(d):+d})"
+            ax.text(b + 1.5, i, label, va="center", fontsize=8)
 
-        # Y ticks & titres
         ax.set_yticks(y)
         ax.set_yticklabels(names)
         ax.invert_yaxis()
         ax.set_title(title, fontsize=12, pad=8)
-        ax.set_xlabel("% remplissage (vélos / capacité)" if mode_val == "% remplissage" else "Vélos disponibles (actuel / prévu)")
-
-        # Légende compacte
+        ax.set_xlabel("% remplissage (vélos / capacité)" if mode_val == "% remplissage" else "Vélos disponibles (actuel/prévu)")
         ax.legend(loc="lower right", frameon=False, fontsize=9)
-
         plt.tight_layout()
         return fig
 
-    def _table_for(df: pd.DataFrame) -> pd.DataFrame:
-        cols = ["stationcode", "name", "capacity", "numbikesavailable", "y_nb_pred", "pct_now", "pct_pred", "delta_pts"]
-        out = df[cols].copy()
-        out.rename(columns={
-            "stationcode": "Station",
-            "name": "Nom",
-            "capacity": "Capacité",
-            "numbikesavailable": "Actuel (nb)",
-            "y_nb_pred": "Prévu (nb)",
-            "pct_now": "Actuel (%)",
-            "pct_pred": "Prévu (%)",
-            "delta_pts": "Δ points",
-        }, inplace=True)
-        # arrondis jolis
-        for c in ["Actuel (%)", "Prévu (%)", "Δ points"]:
-            out[c] = out[c].round(0)
-        return out
-
+    # ------------------------ Onglets ------------------------
+    tab1, tab2 = st.tabs(["Risque de saturation", "Risque de manque"])
     with tab1:
         st.markdown("**Top — proches de 100% (pleines)**")
-        st.pyplot(_plot_barh(top_sat, "Stations proches de 100% (pleines)"))
-        with st.expander("Voir le tableau / Export CSV"):
-            st.dataframe(_table_for(top_sat), use_container_width=True, hide_index=True)
-            csv = _table_for(top_sat).to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Télécharger (CSV)", csv, file_name="top_saturation.csv", mime="text/csv")
-
+        st.pyplot(_plot_dumbbell(top_sat, "Stations proches de 100% (pleines)"))
     with tab2:
         st.markdown("**Top — proches de 0% (vides)**")
-        st.pyplot(_plot_barh(top_lack, "Stations proches de 0% (vides)"))
-        with st.expander("Voir le tableau / Export CSV"):
-            st.dataframe(_table_for(top_lack), use_container_width=True, hide_index=True)
-            csv = _table_for(top_lack).to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Télécharger (CSV)", csv, file_name="top_manque.csv", mime="text/csv")
+        st.pyplot(_plot_dumbbell(top_lack, "Stations proches de 0% (vides)"))
