@@ -34,26 +34,50 @@ Public GBFS snapshots -> normalized 15-min aggregates -> features & model traini
 
 ## 🔎 Key Features
 
-- Ingestion every 15 min -> DuckDB snapshots.
-- 15-min aggregation -> canonical exports (`docs/exports/velib.parquet`, CSV) + weather.
-- Real-time monitoring: map + availability/saturation.
-- KPIs & history: occupancy, availability, daily/hourly profiles.
-- Forecasts: LightGBM predicts bikes at T+60 (1h).
-- CI/CD:
-  1) velib-ingest (15 min) -> export parquet
-  2) velib-train (daily or triggered) -> models + baseline.json
-  3) monitoring-site (4x/day) -> build pages, drift/perf checks, deploy gh-pages
-- ML artifacts: `models/lgb_nbvelos_T+60min.joblib`.
-- Streamlit app: interactive map + forecasts; reads models + parquet.
-- Usage analytics: station clustering, heatmaps, variability.
-- Forecast performance: MAE/RMSE, lift, obs vs pred, residuals, calibration.
-- Monitoring: data health, PSI drift, MAE trend.
+## Key Features
 
-> All figures/tables come from `docs/exports/velib.parquet` via `tools/*` scripts.
+- **60-min forecasting (T+60)**  
+  LightGBM predicts bike availability 60 minutes ahead with strict feature parity (lags/rollings + calendar features).
+
+- **Robust data pipeline**  
+  Ingestion every **15 min** → DuckDB snapshots → 15-min aggregation + weather join → canonical `docs/exports/velib.parquet`.
+
+- **Clean targets & alignment**  
+  `y_true = bikes@T+60` (shift), baseline = persistence@T, predictions aligned on **T** to avoid leakage.
+
+- **Hugging Face integration**  
+  - **Datasets**: parquet exports pushed to HF Datasets.  
+  - **Models**: `.joblib` bundles (model + feature contract + horizon) pushed to HF Model Hub.
+
+- **Monitoring & quality**  
+  - **Data health**: freshness, completeness, schema checks.  
+  - **Drift**: PSI across key features.  
+  - **Model health**: MAE/RMSE, lift vs baseline, coverage, calibration.  
+  - **Parquet freshness badge** in the app UI.
+
+- **Documentation pages (MkDocs)**  
+  - **Data**: Exports, Dictionary, Methodology.  
+  - **Monitoring**: Data health, Drift, Model health.  
+  - **Model**: Pipeline, Performance, Explainability.  
+  - **Network**: Overview, Stations, Dynamics.
+
+- **CI/CD**  
+  1. `velib-ingest` (15 min) → update parquet + push HF dataset.  
+  2. `velib-train` (daily or triggered) → export models to HF.  
+  3. `monitoring-site` (4×/day) → build pages, run drift/perf checks, deploy **gh-pages**.
+
+- **Streamlit app**  
+  Interactive map, real-time availability/saturation, **T+60** forecasts, reads model bundle + parquet.
+
+- **Analytics & insights**  
+  Station clustering, heatmaps, variability, daily/hourly profiles, residual analysis & calibration.
+
+
+> All figures and tables displayed on the online site are generated from the canonical dataset (`velib.parquet`), available on Hugging Face Datasets.
 
 ---
 
-## 🧭 Pipelines — Data → ML → Docs & App
+## 🧭 Pipelines — Data → ML → Docs & App (+ Hugging Face)
 
 ```mermaid
 flowchart TD
@@ -73,17 +97,19 @@ flowchart TD
   NORM  --> EV[events_parquet];
   NORM  --> PF[perf_parquet];
 
-  %% PIPELINE MODÈLE
+  %% PIPELINE MODELE
+  CAL[Calendar features];
   VELIB --> FEAT[Build features];
+  CAL   --> FEAT;
   FEAT  --> TRAIN[Train LGBM T+15];
   TRAIN --> MODEL[Model bundle joblib];
 
-  %% APPLICATION MODÈLE
+  %% APPLICATION MODELE
   MODEL --> APPLY[Apply model y_pred];
   EV    --> APPLY;
   PF    --> APPLY;
 
-  %% PAGES / RAPPORTS (simplifiées)
+  %% PAGES / RAPPORTS (simplifiés)
   subgraph Pages
     P1[Data pages];
     P2[Monitoring pages];
@@ -91,11 +117,20 @@ flowchart TD
     P4[Network pages];
   end
 
-  EV --> P4;
-  EV --> P1;
-  PF --> P2;
-  PF --> P3;
+  EV    --> P4;
+  EV    --> P1;
+  PF    --> P2;
+  PF    --> P3;
   VELIB --> P1;
+
+  %% HUGGING FACE HUB
+  subgraph HuggingFace
+    HFDS[Datasets];
+    HFM[Models];
+  end
+
+  VELIB --> HFDS;
+  MODEL --> HFM;
 
   %% ORCHESTRATIONS CI/CD
   subgraph CI_CD
@@ -107,16 +142,17 @@ flowchart TD
 
   CI1 --> GBFS;
   CI1 --> WX;
+  CI1 --> HFDS;
 
   CI3 --> NORM;
   CI3 --> APPLY;
   CI3 --> P1; CI3 --> P2; CI3 --> P3; CI3 --> P4;
 
-  M1[metrics] -.-> CHECK;
   P2 -.-> CHECK;
   P3 -.-> CHECK;
   CHECK --> CI2;
   CI2 --> TRAIN;
+  CI2 --> HFM;
 
   %% APP
   APP[Streamlit app] --> AGG;
@@ -241,7 +277,7 @@ bike-forecast-paris-velib/
 ---
 
 
-## Release Notes — v2.2.0
+## Release Notes — v2.3.0
 
 **MkDocs revamp (site overhaul)**
 - Clear 4×3 structure: **Network**, **Model**, **Monitoring**, **Data**.
@@ -249,6 +285,7 @@ bike-forecast-paris-velib/
 - Maps & charts: Folium map **with legend**, “Today vs Median” curve, daily KPIs vs **D-7/D-14/D-21**.
 - Robust relative paths (`use_directory_urls: true`) and auto-created `docs/assets/{figs,tables,maps}`.
 - Windows-friendly: ASCII logs, UTF-8 (no BOM).
+- **Backed by Hugging Face**: the canonical dataset (`velib.parquet`) is stored on **Hugging Face Datasets**; pages are built from that source and published on GitHub Pages.
 
 **Model & data**
 - `apply_model.py`: correct **T+h → T** alignment, stable station mapping.
