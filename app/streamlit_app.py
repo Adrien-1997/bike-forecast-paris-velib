@@ -304,6 +304,43 @@ def _sanity_checks():
 
 _sanity_checks()
 
+def parquet_freshness_badge() -> str:
+    try:
+        dfp = pd.read_parquet(_velib_path())
+        if dfp.empty:
+            return "<span class='badge'>Parquet: vide</span>"
+
+        if "tbin_utc" in dfp.columns:
+            ts_col = dfp["tbin_utc"]
+        elif "ts" in dfp.columns:
+            ts_col = dfp["ts"]
+        else:
+            return "<span class='badge'>Parquet: timestamp absent</span>"
+
+        ts_parquet = pd.to_datetime(ts_col, errors="coerce").max()
+        if pd.isna(ts_parquet):
+            return "<span class='badge'>Parquet: invalide</span>"
+
+        if ts_parquet.tzinfo is None:
+            ts_parquet = ts_parquet.tz_localize("UTC")
+        ts_paris = ts_parquet.tz_convert("Europe/Paris").floor("15min")
+        now_paris = pd.Timestamp.now(tz="Europe/Paris").floor("15min")
+        delta_min = int((now_paris - ts_paris).total_seconds() // 60)
+
+        if delta_min <= 30:
+            color = "#dcfce7; color:#166534"
+        elif delta_min <= 90:
+            color = "#fef9c3; color:#854d0e"
+        else:
+            color = "#fee2e2; color:#991b1b"
+
+        return f"<span class='badge' style='background:{color}'>Parquet: {delta_min} min</span>"
+    except FileNotFoundError:
+        return "<span class='badge'>Parquet: introuvable</span>"
+    except Exception:
+        return "<span class='badge'>Parquet: erreur</span>"
+
+
 pred_df = predict_nbvelos_t1h(df_now)
 df_with_pred = df_now.merge(pred_df, on="stationcode", how="left")
 
@@ -335,7 +372,12 @@ if PAGE == "Carte":
     display_pred = (display_mode == "Prévision T+1h")
 
     wx_badges = weather_badges_from_parquet(_velib_path())
-    render_badges(f"<span class='badge'>Mode : <b>{'Prévision T+1h' if display_pred else 'Actuel'}</b></span>" + wx_badges)
+    pf_badge = parquet_freshness_badge()
+    render_badges(
+        f"<span class='badge'>Mode : <b>{'Prévision T+1h' if display_pred else 'Actuel'}</b></span>"
+        + wx_badges
+        + pf_badge
+    )
 
     # Finder
     st.markdown("<div class='finder-card'>", unsafe_allow_html=True)
@@ -488,8 +530,15 @@ if PAGE == "Carte":
 
 else:
     st.markdown("### 📊 Monitoring réseau")
+
     wx_badges = weather_badges_from_parquet(_velib_path())
-    render_badges("<span class='badge'>Prévision : <b>T+1h</b></span>" + wx_badges)
+    pf_badge = parquet_freshness_badge()
+
+    render_badges(
+        "<span class='badge'>Prévision : <b>T+1h</b></span>"
+        + wx_badges
+        + pf_badge
+    )
 
     # ------------------------ KPIs réseau (actuel) ------------------------
     def compute_network_kpis(df_now: pd.DataFrame) -> dict:
