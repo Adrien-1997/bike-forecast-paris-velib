@@ -1,5 +1,4 @@
-﻿# app/streamlit_app.py
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 from typing import Tuple, List
@@ -11,13 +10,19 @@ import requests
 import folium
 from folium.plugins import MarkerCluster
 import streamlit as st
-from src.utils_io import get_export_path
 
 # -----------------------------------------------------------------------------
 # PATHS & GLOBALS
 # -----------------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))  # ajoute la racine du repo → permet d'importer src.*
+
+from src.forecast import load_model_bundle
+from src.cal_features import add_calendar_features
+from src.utils_io import get_export_path  # <— nouvel import
+
 MODELS_DIR = ROOT / "models"
+DATA_PARQUET = get_export_path("velib.parquet")   # remplace chemin en dur
 FIGS_DIR = ROOT / "docs" / "assets" / "figs"
 DEBUG = False
 

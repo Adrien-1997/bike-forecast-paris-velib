@@ -7,11 +7,12 @@ from typing import Optional
 from huggingface_hub import hf_hub_download
 
 # --------- Configuration via variables d'environnement (surchargeables) ----------
-HF_REPO_ID: str = os.getenv("HF_REPO_ID", "adrien-morel/bike-forecast-paris-velib")
+HF_REPO_ID: str = os.getenv("HF_REPO_ID", "Adrien97/velib-monitoring-historical")
 HF_REPO_TYPE: str = os.getenv("HF_REPO_TYPE", "dataset")  # dataset | model | space
 HF_REVISION: Optional[str] = os.getenv("HF_REVISION")     # ex. "main", "v2025-09-18", ou un SHA
 HF_FORCE_HF: bool = os.getenv("HF_FORCE_HF", "0") == "1"  # si "1", ignore le local
 HF_TOKEN: Optional[str] = os.getenv("HF_TOKEN")           # si repo privé
+HF_DISABLE_HF: bool = os.getenv("HF_DISABLE_HF", "0") == "1"  # si "1", interdit tout fallback HF
 
 # Miroir simple de l'arbo : local "docs/exports/*" <-> Hub "exports/*"
 LOCAL_EXPORTS_DIR = Path("docs/exports")
@@ -22,14 +23,15 @@ def _hub_filename_for_exports(filename: str) -> str:
     return f"{HUB_EXPORTS_PREFIX.rstrip('/')}/{filename.lstrip('/')}"
 
 def get_export_path(filename: str) -> Path:
-    """
-    Retourne un chemin de fichier lisible par pandas :
-      - Si présent en local (docs/exports/...), renvoie ce chemin (sauf si HF_FORCE_HF=1).
-      - Sinon télécharge depuis Hugging Face Hub (dataset) et renvoie le chemin du cache HF.
-    """
     local_path = LOCAL_EXPORTS_DIR / filename
     if not HF_FORCE_HF and local_path.exists():
         return local_path
+
+    if HF_DISABLE_HF:
+        raise FileNotFoundError(
+            f"Local export missing: {local_path}. "
+            "HF fallback disabled (HF_DISABLE_HF=1)."
+        )
 
     hub_filename = _hub_filename_for_exports(filename)
     path = hf_hub_download(
@@ -37,7 +39,7 @@ def get_export_path(filename: str) -> Path:
         filename=hub_filename,
         repo_type=HF_REPO_TYPE,
         revision=HF_REVISION,
-        token=HF_TOKEN,           # None si public
+        token=HF_TOKEN,
     )
     return Path(path)
 
