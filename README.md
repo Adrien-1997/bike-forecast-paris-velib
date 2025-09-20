@@ -83,35 +83,19 @@ flowchart TD
   EV    --> APPLY;
   PF    --> APPLY;
 
-  %% PAGES / RAPPORTS
+  %% PAGES / RAPPORTS (simplifiées)
   subgraph Pages
-    R1[Network overview];
-    R2[Network stations];
-    R3[Network dynamics];
-    M1[Model performance];
-    M2[Model pipeline];
-    M3[Model explainability];
-    Q1[Monitoring data_health];
-    Q2[Monitoring drift];
-    Q3[Monitoring model_health];
-    D1[Data exports];
-    D2[Data dictionary];
-    D3[Data methodology];
+    P1[Data pages];
+    P2[Monitoring pages];
+    P3[Model pages];
+    P4[Network pages];
   end
 
-  EV --> R1 --> ASSETS[docs_assets];
-  EV --> R2 --> ASSETS;
-  EV --> R3 --> ASSETS;
-  PF --> M1 --> ASSETS;
-  VELIB --> M2 --> ASSETS;
-  PF --> M3 --> ASSETS;
-  EV --> Q1 --> ASSETS;
-  EV --> Q2 --> ASSETS;
-  PF --> Q3 --> ASSETS;
-  VELIB --> D1 --> ASSETS;
-  VELIB --> D2 --> ASSETS;
-  VELIB --> D3 --> ASSETS;
-  ASSETS --> PAGES[gh_pages];
+  EV --> P4;
+  EV --> P1;
+  PF --> P2;
+  PF --> P3;
+  VELIB --> P1;
 
   %% ORCHESTRATIONS CI/CD
   subgraph CI_CD
@@ -126,17 +110,13 @@ flowchart TD
 
   CI3 --> NORM;
   CI3 --> APPLY;
-  CI3 --> R1; CI3 --> R2; CI3 --> R3;
-  CI3 --> M1; CI3 --> M2; CI3 --> M3;
-  CI3 --> Q1; CI3 --> Q2; CI3 --> Q3;
-  CI3 --> D1; CI3 --> D2; CI3 --> D3;
+  CI3 --> P1; CI3 --> P2; CI3 --> P3; CI3 --> P4;
 
-  M1 --> CHECK;
-  Q2 --> CHECK;
-  Q3 --> CHECK;
+  M1[metrics] -.-> CHECK;
+  P2 -.-> CHECK;
+  P3 -.-> CHECK;
   CHECK --> CI2;
   CI2 --> TRAIN;
-  CI2 --> PAGES;
 
   %% APP
   APP[Streamlit app] --> AGG;
