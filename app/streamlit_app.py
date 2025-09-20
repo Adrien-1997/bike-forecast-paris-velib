@@ -281,8 +281,18 @@ try:
 except Exception:
     fetched_local = pd.Timestamp.utcnow().tz_localize("UTC").tz_convert("Europe/Paris")
 
+# ===============================================================
+#  Helpers parquet fraicheur + auto-refresh Hugging Face
+# ===============================================================
+
+def _safe_rerun():
+    """Appelle st.rerun() si dispo, sinon experimental_rerun (compat anciennes versions)."""
+    fn = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+    if callable(fn):
+        fn()
 
 def _parquet_age_minutes() -> int | None:
+    """Retourne l’âge du parquet velib.parquet en minutes (UTC→Paris, arrondi 15min)."""
     try:
         dfp = pd.read_parquet(_velib_path())
         if dfp.empty:
@@ -300,33 +310,44 @@ def _parquet_age_minutes() -> int | None:
         if ts_parquet.tzinfo is None:
             ts_parquet = ts_parquet.tz_localize("UTC")
         now_paris = pd.Timestamp.now(tz="Europe/Paris").floor("15min")
-        ts_paris  = ts_parquet.tz_convert("Europe/Paris").floor("15min")
+        ts_paris = ts_parquet.tz_convert("Europe/Paris").floor("15min")
         return int((now_paris - ts_paris).total_seconds() // 60)
     except Exception:
         return None
+    
+def _refresh_parquet_from_hf() -> str | None:
+    """Force un download du parquet velib.parquet depuis Hugging Face Hub."""
+    try:
+        path = get_export_path("velib.parquet", force=True)
+        return str(path)
+    except Exception as e:
+        st.error(f"Impossible de rafraîchir velib.parquet depuis HF : {e}")
+        return None
 
-# Auto-refresh si parquet > 15 minutes (une seule fois par session)
+# ===============================================================
+#  Auto-refresh si parquet > 15 min
+# ===============================================================
+
 _age_min = _parquet_age_minutes()
 if _age_min is not None and _age_min > 15 and not st.session_state.get("did_auto_refresh", False):
-    st.warning(f"⏱️ Données parquet âgées de {_age_min} min → actualisation automatique…")
+    st.warning(f"⏱️ Parquet âgé de {_age_min} min → téléchargement depuis HF…")
 
-    # purge caches (idem avant)
+    # 1) télécharger un parquet frais depuis Hugging Face
+    _refreshed = _refresh_parquet_from_hf()
+
+    # 2) purge des caches
     try:
         st.cache_data.clear()
     except Exception:
         pass
     try:
-        load_live_data_cached.clear()   # adapte si besoin
+        load_live_data_cached.clear()  # si tu as une fonction cache spécifique
     except Exception:
         pass
 
+    # 3) marquer et relancer
     st.session_state["did_auto_refresh"] = True
-
-    # ✅ rerun compatible
-    _rerun = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
-    if callable(_rerun):
-        _rerun()
-
+    _safe_rerun()
 
 
 def _sanity_checks():
@@ -352,7 +373,10 @@ def _sanity_checks():
 
 _sanity_checks()
 
-# 3) — remplacez la fonction parquet_freshness_badge() par cette version
+# ===============================================================
+#  Badge fraîcheur parquet
+# ===============================================================
+
 def parquet_freshness_badge() -> str:
     try:
         dfp = pd.read_parquet(_velib_path())
@@ -373,7 +397,7 @@ def parquet_freshness_badge() -> str:
         now_paris = pd.Timestamp.now(tz="Europe/Paris").floor("15min")
         delta_min = int((now_paris - ts_paris).total_seconds() // 60)
 
-        # Seuils resserrés autour de 15 min
+        # Seuils autour de 15 min
         if delta_min <= 15:
             color = "#dcfce7; color:#166534"   # vert
         elif delta_min <= 60:
