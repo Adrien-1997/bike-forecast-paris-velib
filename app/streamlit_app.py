@@ -491,7 +491,7 @@ else:
     wx_badges = weather_badges_from_parquet(_velib_path())
     render_badges("<span class='badge'>Prévision : <b>T+1h</b></span>" + wx_badges)
 
-    # KPIs
+    # ------------------------ KPIs réseau (actuel) ------------------------
     def compute_network_kpis(df_now: pd.DataFrame) -> dict:
         try:
             stations = int(df_now["stationcode"].nunique())
@@ -505,27 +505,34 @@ else:
 
     kpis = compute_network_kpis(df_now)
     c1, c2, c3, c4 = st.columns(4)
-    with c1: st.markdown(f"<div class='kpi-row kpi-card'><div class='kpi-title'>Stations</div><div class='kpi-value'>{kpis['stations']}</div></div>", unsafe_allow_html=True)
-    with c2: st.markdown(f"<div class='kpi-row kpi-card'><div class='kpi-title'>Vélos dispo (actuel)</div><div class='kpi-value'>{kpis['bikes_total']}</div></div>", unsafe_allow_html=True)
-    with c3: st.markdown(f"<div class='kpi-row kpi-card'><div class='kpi-title'>Bornes libres (actuel)</div><div class='kpi-value'>{kpis['docks_total']}</div></div>", unsafe_allow_html=True)
-    with c4: st.markdown(f"<div class='kpi-row kpi-card'><div class='kpi-title'>Occupation réseau</div><div class='kpi-value'>{kpis['occ_pct']} %</div></div>", unsafe_allow_html=True)
+    with c1:
+        st.markdown(
+            f"<div class='kpi-row kpi-card'><div class='kpi-title'>Stations</div>"
+            f"<div class='kpi-value'>{kpis['stations']}</div></div>", unsafe_allow_html=True
+        )
+    with c2:
+        st.markdown(
+            f"<div class='kpi-row kpi-card'><div class='kpi-title'>Vélos dispo (actuel)</div>"
+            f"<div class='kpi-value'>{kpis['bikes_total']}</div></div>", unsafe_allow_html=True
+        )
+    with c3:
+        st.markdown(
+            f"<div class='kpi-row kpi-card'><div class='kpi-title'>Bornes libres (actuel)</div>"
+            f"<div class='kpi-value'>{kpis['docks_total']}</div></div>", unsafe_allow_html=True
+        )
+    with c4:
+        st.markdown(
+            f"<div class='kpi-row kpi-card'><div class='kpi-title'>Occupation réseau</div>"
+            f"<div class='kpi-value'>{kpis['occ_pct']} %</div></div>", unsafe_allow_html=True
+        )
 
-    # Historique global — image fallback
-    st.markdown("### Historique réseau (indicateurs clés)")
-    fallback_img = ROOT / "docs" / "assets" / "figs" / "network" / "overview" / "kpis_today_vs_lags.png"
-    if fallback_img.exists():
-        st.markdown("<div class='monitoring-fig'>", unsafe_allow_html=True)
-        st.image(str(fallback_img), use_container_width=True,
-                 caption="KPIs réseau : comparaison aujourd’hui vs historiques (lags)")
-        st.markdown("</div>", unsafe_allow_html=True)
-    else:
-        st.info("Aucune figure réseau disponible dans docs/assets/figs/network/overview/")
-
-    # Top 10 stations critiques (T+1h)
+    # ------------------------ Top 10 stations critiques (T+1h) ------------------------
     st.markdown("### 🔴 Stations critiques à T+1h")
+
     dfm = df_with_pred.copy()
     for c in ["capacity","numbikesavailable","numdocksavailable","y_nb_pred"]:
         dfm[c] = pd.to_numeric(dfm.get(c), errors="coerce").fillna(0).astype(int)
+    # capacité effective = éviter divisions par 0
     dfm["cap_eff"] = dfm[["capacity","numbikesavailable"]].max(axis=1)
     dfm = dfm[dfm["cap_eff"] > 0].copy()
     dfm["pct_now"]  = 100 * dfm["numbikesavailable"] / dfm["cap_eff"]
@@ -538,17 +545,20 @@ else:
     n_max = max(len(top_sat), len(top_lack), 10)
     figsize = (7, n_max * 0.5)
 
-    def plot_comparison(df, title, figsize):
+    def plot_comparison(df: pd.DataFrame, title: str, figsize: tuple[float, float]):
         fig, ax = plt.subplots(figsize=figsize)
         y = np.arange(len(df))
-        ax.barh(y - 0.2, df["pct_now"],  height=0.4, color="#999999", label="Actuel")
-        ax.barh(y + 0.2, df["pct_pred"], height=0.4, color="#1f78b4", label="Prévu")
-        ax.set_yticks(y); ax.set_yticklabels(df["name"])
+        ax.barh(y - 0.2, df["pct_now"],  height=0.4, label="Actuel")
+        ax.barh(y + 0.2, df["pct_pred"], height=0.4, label="Prévu")
+        ax.set_yticks(y)
+        ax.set_yticklabels(df["name"])
         ax.set_xlabel("% remplissage (vélos / capacité)")
         ax.set_xlim(0, 100)
-        ax.axvline(100, color="red", linestyle="--", linewidth=1, label="Seuil critique")
-        ax.axvline(0,   color="red", linestyle="--", linewidth=1)
-        ax.invert_yaxis(); ax.legend(loc="lower right"); ax.set_title(title)
+        ax.axvline(100, linestyle="--", linewidth=1, label="Seuil critique")
+        ax.axvline(0,   linestyle="--", linewidth=1)
+        ax.invert_yaxis()
+        ax.legend(loc="lower right")
+        ax.set_title(title)
         for i, (now, pred) in enumerate(zip(df["pct_now"], df["pct_pred"])):
             delta = pred - now
             ax.text(pred + 1, i + 0.2, f"{pred:.0f}% ({delta:+.0f} pts)", va="center", fontsize=8)
