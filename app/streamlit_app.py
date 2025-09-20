@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from typing import Tuple, List
-import os, glob, sys
+import sys, os, glob
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -12,41 +12,28 @@ from folium.plugins import MarkerCluster
 import streamlit as st
 
 # -----------------------------------------------------------------------------
-# PATHS & GLOBALS
+# BOOTSTRAP
 # -----------------------------------------------------------------------------
+st.set_page_config(page_title="Prévisions Vélib’ Paris", page_icon="🚲", layout="wide")
+
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))  # ajoute la racine du repo → permet d'importer src.*
+sys.path.insert(0, str(ROOT))  # permet d'importer src.*
 
 from src.forecast import load_model_bundle
 from src.cal_features import add_calendar_features
-from src.utils_io import get_export_path  # <— nouvel import
+from src.utils_io import get_export_path
 
 MODELS_DIR = ROOT / "models"
-@st.cache_resource
-def load_parquet():
-    from src.utils_io import get_export_path
-    return get_export_path("velib.parquet")
-
-DATA_PARQUET = load_parquet()
 FIGS_DIR = ROOT / "docs" / "assets" / "figs"
 DEBUG = False
 
-# Pour import interne
-sys.path.insert(0, str(ROOT))
-
-from src.forecast import load_model_bundle
-from src.cal_features import add_calendar_features
-# (on n'utilise plus prepare_live_features: on génère les features live 15min ici)
-
-# -----------------------------------------------------------------------------
-# UI CONFIG
-# -----------------------------------------------------------------------------
-st.set_page_config(page_title="Prévisions Vélib’ Paris", page_icon="🚲", layout="wide")
 st.session_state.setdefault("map_center", (48.8566, 2.3522))
 st.session_state.setdefault("map_zoom", 15)
 st.session_state.setdefault("map_highlight", None)
 
-# CSS (inchangé) ...
+# -----------------------------------------------------------------------------
+# STYLES
+# -----------------------------------------------------------------------------
 st.markdown("""
 <style>
 .block-container { padding-top: 1.2rem; padding-bottom: .75rem; max-width: 1300px; }
@@ -83,91 +70,72 @@ div[data-testid="stDataFrameResizable"] { overflow-x: auto; }
 
 TITLE = "🚲 Prévisions Vélib’ Paris"
 
-def _velib_path() -> Path:
-    """Chemin vers velib.parquet (local si présent, sinon téléchargé depuis HF)."""
+# -----------------------------------------------------------------------------
+# RÉSOLUTIONS DIFFÉRÉES (HF + OpenData)
+# -----------------------------------------------------------------------------
+@st.cache_resource
+def resolve_velib_parquet() -> Path:
+    """Résout le chemin de velib.parquet (local d'abord, sinon HF)."""
     return get_export_path("velib.parquet")
 
-# --- WEATHER BADGE ------------------------------------------------------------
+def _velib_path() -> Path:
+    return resolve_velib_parquet()
+
 def _format_badge(val, unit, icon):
     try:
-        v = float(val)
-        return f"<span class='badge'>{icon} {v:.1f} {unit}</span>"
+        v = float(val);  return f"<span class='badge'>{icon} {v:.1f} {unit}</span>"
     except Exception:
         return ""
 
 def weather_badges_from_parquet(parquet_path: Path) -> str:
-    """
-    Lit docs/exports/velib.parquet, prend la DERNIÈRE heure disponible (hour_utc max),
-    et renvoie des badges météo (temp / pluie / vent). Retourne "" si indispo.
-    """
     try:
         dfp = pd.read_parquet(parquet_path)
-        if dfp.empty:
-            return ""
+        if dfp.empty: return ""
         dfp["hour_utc"] = pd.to_datetime(dfp["hour_utc"], utc=True).dt.tz_localize(None)
         last_h = dfp["hour_utc"].max()
         sub = dfp[dfp["hour_utc"] == last_h][["temp_C", "precip_mm", "wind_mps"]].dropna(how="all")
-        if sub.empty:
-            return ""
-        temp = sub["temp_C"].mean() if "temp_C" in sub else None
-        rain = sub["precip_mm"].mean() if "precip_mm" in sub else None
-        wind = sub["wind_mps"].mean() if "wind_mps" in sub else None
-        parts = [
-            _format_badge(temp, "°C", "🌡️"),
-            _format_badge(rain, "mm", "🌧️"),
-            _format_badge(wind, "km/h", "💨"),
-        ]
+        if sub.empty: return ""
+        temp = sub.get("temp_C", pd.Series([np.nan])).mean()
+        rain = sub.get("precip_mm", pd.Series([np.nan])).mean()
+        wind = sub.get("wind_mps", pd.Series([np.nan])).mean()
+        parts = [_format_badge(temp, "°C", "🌡️"), _format_badge(rain, "mm", "🌧️"), _format_badge(wind, "km/h", "💨")]
         return "".join([p for p in parts if p])
     except Exception:
         return ""
 
-# -----------------------------------------------------------------------------
-# HELPERS — DONNÉES LIVE (OpenData v1 pour positions/état)
-# -----------------------------------------------------------------------------
-
 def _extract_latlon(coord):
-    # OpenData peut renvoyer un dict {"lat":..., "lon":...} ou une liste [lat, lon] (rarement [lon, lat])
     if isinstance(coord, dict):
         return coord.get("lat"), coord.get("lon")
     if isinstance(coord, (list, tuple)) and len(coord) == 2:
-        a, b = coord[0], coord[1]
-        # heuristique Paris : lat ~ 48.x , lon ~ 2.x
-        if a is not None and b is not None:
-            try:
-                af, bf = float(a), float(b)
-                # si ça ressemble à [lon, lat] (ex: 2.x, 48.x) → swap
-                if abs(af) < 10 and abs(bf) > 10:
-                    return bf, af
-                return af, bf
-            except Exception:
-                return None, None
+        a, b = coord
+        try:
+            af, bf = float(a), float(b)
+            if abs(af) < 10 and abs(bf) > 10:  # heuristique: [lon,lat] -> swap
+                return bf, af
+            return af, bf
+        except Exception:
+            return None, None
     return None, None
 
 def _make_session() -> requests.Session:
     from urllib3.util.retry import Retry
     from requests.adapters import HTTPAdapter
     s = requests.Session()
-    retry = Retry(
-        total=3, read=3, connect=3, backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET", "HEAD", "OPTIONS"],
-    )
+    retry = Retry(total=3, read=3, connect=3, backoff_factor=0.5,
+                  status_forcelist=[429, 500, 502, 503, 504],
+                  allowed_methods=["GET", "HEAD", "OPTIONS"])
     s.mount("https://", HTTPAdapter(max_retries=retry))
     s.headers.update({"User-Agent": "velib-app/1.0 (+github.com/Adrien-1997)"})
     return s
 
 def fetch_opendata_v1() -> pd.DataFrame:
     URL = "https://opendata.paris.fr/api/records/1.0/search/?dataset=velib-disponibilite-en-temps-reel&rows=2000"
-    s = _make_session()
-    r = s.get(URL, timeout=25)
+    r = _make_session().get(URL, timeout=25)
     r.raise_for_status()
-    j = r.json()
     rows = []
-    for rec in j.get("records", []):
+    for rec in r.json().get("records", []):
         f = rec.get("fields", {})
-        coord = f.get("coordonnees_geo")
-        lat, lon = _extract_latlon(coord)
-
+        lat, lon = _extract_latlon(f.get("coordonnees_geo"))
         rows.append({
             "stationcode": f.get("stationcode") or f.get("station_id"),
             "name": f.get("name"),
@@ -203,7 +171,6 @@ def fetch_synthetic(n: int = 60) -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def load_live_data_cached() -> Tuple[pd.DataFrame, str, str, pd.Timestamp]:
-    """Retourne (df, source_label, debug_reason, fetched_at_utc)."""
     try:
         df = fetch_opendata_v1()
         return df, "OpenData", "", df["fetched_at_utc"].iloc[0]
@@ -212,30 +179,19 @@ def load_live_data_cached() -> Tuple[pd.DataFrame, str, str, pd.Timestamp]:
         return df, "fallback", f"OpenData failed: {e2}", df["fetched_at_utc"].iloc[0]
 
 # -----------------------------------------------------------------------------
-# HELPERS — FEATURES LIVE 15min (depuis docs/exports/velib.parquet)
+# FEATURES LIVE (depuis velib.parquet)
 # -----------------------------------------------------------------------------
 def _load_recent_bins() -> pd.DataFrame:
-    """Charge le parquet 15 min et ne garde que les derniers bins utiles (≤ 24h)."""
     df = pd.read_parquet(_velib_path())
-    if df.empty:
-        return df
-    # garde 2 jours par sécurité (lags jusqu'à 16 bins = 4h)
+    if df.empty: return df
     cutoff = pd.Timestamp.utcnow().floor("15min") - pd.Timedelta(days=2)
     return df[pd.to_datetime(df["tbin_utc"]) >= cutoff.tz_localize(None)].copy()
 
 def _add_lags_rollings(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Recalcule lags/rollings/trend par station.
-    Compatible pandas >=2.2 (include_groups=False) et <2.2 (fallback).
-    """
-    if df is None or df.empty:
-        return df
-
+    if df is None or df.empty: return df
     req_cols = ["tbin_utc", "nb_velos_bin", "occ_ratio_bin"]
     for c in req_cols:
-        if c not in df.columns:
-            df[c] = np.nan
-
+        if c not in df.columns: df[c] = np.nan
     gdf = df.copy()
     gdf["tbin_utc"] = pd.to_datetime(gdf["tbin_utc"], utc=True, errors="coerce").dt.tz_localize(None)
     gdf["nb_velos_bin"] = pd.to_numeric(gdf["nb_velos_bin"], errors="coerce")
@@ -243,15 +199,14 @@ def _add_lags_rollings(df: pd.DataFrame) -> pd.DataFrame:
 
     def _per_station(g: pd.DataFrame) -> pd.DataFrame:
         g = g.sort_values("tbin_utc").copy()
-        lag_bins = (1, 2, 3, 4, 8, 16)
-        for b in lag_bins:
+        for b in (1, 2, 3, 4, 8, 16):
             g[f"lag_nb_{b}b"]  = g["nb_velos_bin"].shift(b)
             g[f"lag_occ_{b}b"] = g["occ_ratio_bin"].shift(b)
-        g["roll_nb_4b"]  = g["nb_velos_bin"].rolling(window=4, min_periods=1).mean()
-        g["roll_nb_8b"]  = g["nb_velos_bin"].rolling(window=8, min_periods=1).mean()
-        g["roll_occ_4b"] = g["occ_ratio_bin"].rolling(window=4, min_periods=1).mean()
-        g["roll_occ_8b"] = g["occ_ratio_bin"].rolling(window=8, min_periods=1).mean()
-        g["trend_nb_4b"]  = (g["nb_velos_bin"] - g["nb_velos_bin"].shift(4)) / 4.0
+        g["roll_nb_4b"]  = g["nb_velos_bin"].rolling(window=4,  min_periods=1).mean()
+        g["roll_nb_8b"]  = g["nb_velos_bin"].rolling(window=8,  min_periods=1).mean()
+        g["roll_occ_4b"] = g["occ_ratio_bin"].rolling(window=4,  min_periods=1).mean()
+        g["roll_occ_8b"] = g["occ_ratio_bin"].rolling(window=8,  min_periods=1).mean()
+        g["trend_nb_4b"]  = (g["nb_velos_bin"]  - g["nb_velos_bin"].shift(4))  / 4.0
         g["trend_occ_4b"] = (g["occ_ratio_bin"] - g["occ_ratio_bin"].shift(4)) / 4.0
         return g
 
@@ -263,80 +218,41 @@ def _add_lags_rollings(df: pd.DataFrame) -> pd.DataFrame:
     if "stationcode" not in out.columns and "stationcode" in gdf.columns:
         out = out.join(gdf[["stationcode"]])
 
-    # Ne convertir que les float64 en float32 (on laisse les int tranquilles)
     float_cols = out.select_dtypes(include=["float64"]).columns
-    if len(float_cols):
-        out[float_cols] = out[float_cols].astype("float32", copy=False)
-
+    if len(float_cols): out[float_cols] = out[float_cols].astype("float32", copy=False)
     return out
-
-    # apply groupby avec compatibilité versions pandas
-    try:
-        out = gdf.groupby("stationcode", group_keys=False).apply(_per_station, include_groups=False)
-    except TypeError:
-        # pandas < 2.2 ne connaît pas include_groups
-        out = gdf.groupby("stationcode", group_keys=False).apply(_per_station)
-
-    # Assure la présence de stationcode (utile pour les merges ultérieurs)
-    if "stationcode" not in out.columns and "stationcode" in gdf.columns:
-        out = out.join(gdf[["stationcode"]])
-
-    # Types compacts (optionnel)
-    num_cols = out.select_dtypes(include=["float64", "int64"]).columns
-    out[num_cols] = out[num_cols].astype("float32", copy=False)
-
-    return out
-
-
 
 def build_live_feature_frame(feat_cols: List[str]) -> pd.DataFrame:
-    """
-    Construit un X live au pas 15 min :
-      - lit docs/exports/velib.parquet
-      - calcule lags/rollings/trend
-      - ajoute features calendrier (sur hour_utc)
-      - conserve le DERNIER bin par station
-      - sélectionne/ordonne exactement feat_cols (remplit 0.0 si manquant)
-    """
     base = _load_recent_bins()
     if base is None or base.empty:
         return pd.DataFrame(columns=feat_cols)
     base["tbin_utc"] = pd.to_datetime(base["tbin_utc"], utc=True).dt.tz_localize(None)
     base["hour_utc"] = pd.to_datetime(base["hour_utc"], utc=True).dt.tz_localize(None)
-
     base = _add_lags_rollings(base)
     base = add_calendar_features(base, tz="Europe/Paris")
-
-    # garde dernier bin par station (celui qu'on veut prédire à +1h)
     base = base.sort_values(["stationcode","tbin_utc"]).groupby("stationcode", as_index=False).tail(1)
 
-    # coercition numérique + alignement features
     X = base.copy()
-    # colonnes numériques utilisées à l'entraînement peuvent inclure météo déjà présente dans parquet
     for c in feat_cols:
-        if c not in X.columns:
-            X[c] = 0.0
+        if c not in X.columns: X[c] = 0.0
     X = X[feat_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).astype("float32")
-    X["stationcode"] = base["stationcode"].astype(str).values  # pour remerge après prédiction
+    X["stationcode"] = base["stationcode"].astype(str).values
     return X
 
 # -----------------------------------------------------------------------------
-# HELPERS — PRÉDICTIONS
+# PRÉDICTIONS
 # -----------------------------------------------------------------------------
 @st.cache_resource
 def load_model_cached_minutes(h_minutes: int):
-    # le bundle exporté est au format "T+60min"
     model, feats = load_model_bundle(horizon_minutes=h_minutes, model_dir=str(MODELS_DIR))
     return model, feats
 
-# --- REPLACE existing predict_nbvelos_t1h with this version ---
 def predict_nbvelos_t1h(df_now: pd.DataFrame) -> pd.DataFrame:
     try:
         model, feat_cols = load_model_cached_minutes(60)
         X = build_live_feature_frame(feat_cols)
         if X.empty:
             raise RuntimeError("No live features available (empty X)")
-
         stationcode = X["stationcode"].astype(str).values
         Xmat = X.drop(columns=["stationcode"], errors="ignore")
         best_it = getattr(model, "best_iteration", None)
@@ -345,204 +261,25 @@ def predict_nbvelos_t1h(df_now: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame({"stationcode": stationcode, "y_nb_pred": y})
     except Exception as e:
         st.warning(f"⚠️ Fallback baseline activé : {type(e).__name__}: {e}")
-        # Optionnel : afficher les colonnes attendues vs présentes
-        try:
-            st.caption("Debug features live")
-            base = _load_recent_bins()
-            if base is None or base.empty:
-                st.code("velib.parquet vide ou trop ancien (<-2 jours).", language="text")
-            else:
-                st.code(
-                    "Manque colonnes ? " +
-                    f"has_tbin={ 'tbin_utc' in base.columns }, " +
-                    f"has_hour={ 'hour_utc' in base.columns }, " +
-                    f"has_nb={ 'nb_velos_bin' in base.columns }, " +
-                    f"has_occ={ 'occ_ratio_bin' in base.columns }, " +
-                    f"rows={len(base)}",
-                    language="text"
-                )
-        except Exception:
-            pass
-        # Persistance
         y = pd.to_numeric(df_now.get("numbikesavailable"), errors="coerce").fillna(0).astype(int)
         return pd.DataFrame({"stationcode": df_now["stationcode"].astype(str), "y_nb_pred": y})
 
-
-
-
 # -----------------------------------------------------------------------------
-# HELPERS — GEO/MAP
-# -----------------------------------------------------------------------------
-def _ring_color(ratio: float) -> str:
-    if pd.isna(ratio): return "#9aa0a6"
-    if ratio >= 0.75:  return "#1a9641"
-    if ratio >= 0.50:  return "#a6d96a"
-    if ratio >= 0.25:  return "#fdae61"
-    return "#d7191c"
-
-def build_map(
-    df: pd.DataFrame,
-    center=(48.8566, 2.3522),
-    zoom=12,
-    highlight_stationcode: str | None = None,
-    open_popup: bool = False,
-    display_prediction: bool = False,
-    # --- sémantique inversée, plus naturelle :
-    bubbles_start_zoom: int = 19,   # <== en-dessous: pas de bulles; à partir de ce zoom: bulles
-    cluster_radius: int = 120,      # fusion au dézoom (augmente si trop de bulles subsistent)
-) -> folium.Map:
-    m = folium.Map(location=center, zoom_start=zoom, control_scale=True,
-                   tiles="cartodbpositron", prefer_canvas=True)
-
-    # Clustering: les bulles apparaissent seulement à partir de bubbles_start_zoom
-    mc = MarkerCluster(
-        name="Stations",
-        options={
-            "disableClusteringAtZoom": int(bubbles_start_zoom),
-            "maxClusterRadius": int(cluster_radius),
-            "showCoverageOnHover": False,
-        },
-    ).add_to(m)
-
-    df = df.copy()
-    for c in ["capacity", "numbikesavailable", "y_nb_pred", "lat", "lon"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-
-    def _to_int_safe(v):
-        v = pd.to_numeric(v, errors="coerce")
-        return int(0 if pd.isna(v) else v)
-
-    def _delta_badge(nb_act: int, nb_pred: int, cap: int) -> str:
-        if cap <= 0:
-            return "<span class='badge' style='background:#f3f4f6'>▬ 0%</span>"
-        delta = 100.0 * (nb_pred - nb_act) / cap
-        if abs(delta) < 0.5:  symbol, bg, fg = "▬", "#e5e7eb", "#111827"
-        elif delta > 0:       symbol, bg, fg = "▲", "#dcfce7", "#166534"
-        else:                 symbol, bg, fg = "▼", "#fee2e2", "#991b1b"
-        return f"<span class='badge' style='background:{bg}; color:{fg}; border-color:rgba(0,0,0,.08)'>{symbol} {delta:+.0f}%</span>"
-
-    for _, r in df.iterrows():
-        name = (r.get("name") or "—").strip()
-        code = str(r.get("stationcode", ""))
-        lat  = float(r.get("lat")) if pd.notna(r.get("lat")) else 0.0
-        lon  = float(r.get("lon")) if pd.notna(r.get("lon")) else 0.0
-
-        cap     = _to_int_safe(r.get("capacity"))
-        nb_act  = _to_int_safe(r.get("numbikesavailable"))
-        nb_pred = _to_int_safe(r.get("y_nb_pred"))
-        nb_show = nb_pred if display_prediction else nb_act
-        ratio   = (nb_show / cap) if cap > 0 else np.nan
-
-        col_ring = _ring_color(ratio)  # ton helper existant
-        deg = int(max(0, min(1, 0 if pd.isna(ratio) else ratio)) * 360)
-        size = 52 if highlight_stationcode == code else 44
-
-        icon_html = f"""
-        <div style="position:relative; width:{size}px; height:{size}px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.25));">
-          <div style="width:100%; height:100%; border-radius:50%;
-                      background: conic-gradient({col_ring} {deg}deg, #e5e7eb 0deg);
-                      display:flex; align-items:center; justify-content:center;
-                      border:2px solid #263238; box-sizing:border-box;">
-            <div style="width:{size-12}px; height:{size-12}px; border-radius:50%; background:#fff;
-                        display:flex; align-items:center; justify-content:center;
-                        font: 700 {int(size*0.42)}px/1 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:#263238;">
-              {nb_show}
-            </div>
-          </div>
-          <div style="position:absolute; left:50%; bottom:-12px; transform:translateX(-50%);
-                      width:0; height:0; border-left:8px solid transparent; border-right:8px solid transparent;
-                      border-top:12px solid #263238; opacity:.9;"></div>
-        </div>
-        """
-        icon = folium.DivIcon(html=icon_html, icon_size=(size, size + 12), icon_anchor=(size/2, size + 12))
-
-        popup_html = (
-            f"<div style='font-family:Inter,system-ui,Segoe UI,Roboto,sans-serif;'>"
-            f"<div style='font-weight:700;margin-bottom:.15rem'>{name}</div>"
-            f"<div style='color:#6b7280;margin-bottom:.35rem'>#{code}</div>"
-            f"<div style='display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.35rem'>"
-            f"<span style='padding:.2rem .5rem;border-radius:8px;background:#f3f4f6'>"
-            f"Actuel&nbsp;: <b>{nb_act}</b> / {cap}</span>"
-            f"<span style='padding:.2rem .5rem;border-radius:8px;background:#eef2ff'>"
-            f"Prévision T+1h&nbsp;: <b>{nb_pred}</b></span>"
-            f"{_delta_badge(nb_act, nb_pred, cap)}"
-            f"</div>"
-            f"</div>"
-        )
-
-        folium.Marker(
-            (lat, lon),
-            icon=icon,
-            tooltip=f"{name} (#{code})",
-            popup=folium.Popup(popup_html, max_width=300, show=(open_popup and highlight_stationcode == code)),
-        ).add_to(mc)
-
-    folium.LayerControl(collapsed=True).add_to(m)
-    return m
-
-
-def find_nearest_station(
-    df: pd.DataFrame,
-    user_lat: float,
-    user_lon: float,
-    min_bikes: int = 5,
-    use_prediction: bool = False,
-) -> dict | None:
-    if df.empty or pd.isna(user_lat) or pd.isna(user_lon):
-        return None
-    dff = df.copy()
-    for c in ["lat","lon","capacity","numbikesavailable","y_nb_pred"]:
-        if c in dff:
-            dff[c] = pd.to_numeric(dff[c], errors="coerce")
-    dff = dff.dropna(subset=["lat","lon"])
-    if dff.empty:
-        return None
-
-    qty_col = "y_nb_pred" if (use_prediction and "y_nb_pred" in dff.columns) else "numbikesavailable"
-    R  = 6371000.0
-    φ1 = np.radians(float(user_lat))
-    φ2 = np.radians(dff["lat"].to_numpy(float))
-    dφ = np.radians(dff["lat"].to_numpy(float) - float(user_lat))
-    dλ = np.radians(dff["lon"].to_numpy(float) - float(user_lon))
-    a  = (np.sin(dφ/2.0)**2) + np.cos(φ1) * np.cos(φ2) * (np.sin(dλ/2.0)**2)
-    a  = np.clip(a, 0.0, 1.0)
-    dff["dist_m"] = 2.0 * R * np.arcsin(np.sqrt(a))
-
-    for radius in (250, 500, 800, 1200, 2000):
-        cand = dff[(dff[qty_col] >= int(min_bikes)) & (dff["dist_m"] <= radius)].copy()
-        if not cand.empty:
-            cand.sort_values(["dist_m", qty_col], ascending=[True, False], inplace=True)
-            return cand.iloc[0].to_dict()
-
-    for v in range(int(min_bikes) - 1, 0, -1):
-        cand = dff[dff[qty_col] >= v].copy()
-        if not cand.empty:
-            cand.sort_values(["dist_m", qty_col], ascending=[True, False], inplace=True)
-            return cand.iloc[0].to_dict()
-
-    score = dff["dist_m"] - 30.0 * dff[qty_col]
-    return dff.iloc[int(np.argmin(score))].to_dict()
-
-# -----------------------------------------------------------------------------
-# ROUTER
+# ROUTER & ACTIONS
 # -----------------------------------------------------------------------------
 PAGE = st.sidebar.radio("Navigation", ["Carte", "Monitoring réseau"], index=0)
-
-# bouton refresh commun
 if st.sidebar.button("Actualiser données"):
     load_live_data_cached.clear()
 
 # -----------------------------------------------------------------------------
-# DONNÉES + PRÉDICTIONS
+# DONNÉES + PRÉDICTIONS (différées après démarrage)
 # -----------------------------------------------------------------------------
-df_now, source_label, debug_reason, fetched_utc = load_live_data_cached()
+with st.spinner("Initialisation des données…"):
+    df_now, source_label, debug_reason, fetched_utc = load_live_data_cached()
 try:
     fetched_local = pd.to_datetime(fetched_utc, utc=True).tz_convert("Europe/Paris")
 except Exception:
     fetched_local = pd.Timestamp.utcnow().tz_localize("UTC").tz_convert("Europe/Paris")
-
-
 
 def _sanity_checks():
     problems = []
@@ -554,31 +291,26 @@ def _sanity_checks():
         else:
             last = pd.to_datetime(dfp["tbin_utc"], utc=True, errors="coerce").max()
             if pd.isna(last) or (pd.Timestamp.utcnow() - last) > pd.Timedelta(days=2):
-                problems.append("❌ velib.parquet trop ancien (filtré par cutoff 2 jours)")
+                problems.append("❌ velib.parquet trop ancien (cutoff 2 jours)")
             need = {"tbin_utc","hour_utc","stationcode","nb_velos_bin","occ_ratio_bin"}
             miss = need - set(dfp.columns)
             if miss: problems.append(f"❌ colonnes manquantes: {sorted(miss)}")
     except FileNotFoundError:
         problems.append("❌ velib.parquet introuvable (local et HF)")
-    model_path = MODELS_DIR
-    if not model_path.exists():
+    if not MODELS_DIR.exists():
         problems.append("❌ models/ introuvable")
     if problems:
         st.error(" • ".join(problems))
+
 _sanity_checks()
 
-
-# prédiction T+1h
 pred_df = predict_nbvelos_t1h(df_now)
 df_with_pred = df_now.merge(pred_df, on="stationcode", how="left")
 
-
-# Clip par capacité si dispo
 if "capacity" in df_with_pred:
     cap = pd.to_numeric(df_with_pred["capacity"], errors="coerce").fillna(0).astype(int)
     df_with_pred["y_nb_pred"] = np.clip(pd.to_numeric(df_with_pred["y_nb_pred"], errors="coerce").fillna(0), 0, cap).astype(int)
 
-# badges
 def render_badges(extra: str = ""):
     st.markdown(
         f"<div class='badges'>"
@@ -590,26 +322,20 @@ def render_badges(extra: str = ""):
     )
 
 # -----------------------------------------------------------------------------
-# PAGE — CARTE
+# PAGES
 # -----------------------------------------------------------------------------
 if PAGE == "Carte":
     st.markdown(f"### {TITLE}")
-
-    # sélecteur d'affichage
     try:
-        display_mode = st.segmented_control(
-            "Mode d'affichage", options=["Actuel", "Prévision T+1h"],
-            selection_mode="single", default="Actuel", label_visibility="collapsed"
-        )
+        display_mode = st.segmented_control("Mode d'affichage",
+            options=["Actuel", "Prévision T+1h"],
+            selection_mode="single", default="Actuel", label_visibility="collapsed")
     except Exception:
-        display_mode = st.radio("Mode d'affichage", options=["Actuel", "Prévision T+1h"], index=0, horizontal=True, label_visibility="collapsed")
+        display_mode = st.radio("Mode d'affichage", ["Actuel", "Prévision T+1h"], index=0, horizontal=True, label_visibility="collapsed")
     display_pred = (display_mode == "Prévision T+1h")
 
     wx_badges = weather_badges_from_parquet(_velib_path())
-    render_badges(
-        f"<span class='badge'>Mode : <b>{'Prévision T+1h' if display_pred else 'Actuel'}</b></span>"
-        + wx_badges
-    )
+    render_badges(f"<span class='badge'>Mode : <b>{'Prévision T+1h' if display_pred else 'Actuel'}</b></span>" + wx_badges)
 
     # Finder
     st.markdown("<div class='finder-card'>", unsafe_allow_html=True)
@@ -625,20 +351,14 @@ if PAGE == "Carte":
     # Géocodage simple
     def geocode_address(q: str) -> tuple[float, float] | None:
         q = (q or "").strip()
-        if not q:
-            return None
+        if not q: return None
         try:
-            r = requests.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": q, "format": "json", "limit": 1, "accept-language": "fr"},
-                headers={"User-Agent": "velib-app/1.0"},
-                timeout=10,
-            )
+            r = requests.get("https://nominatim.openstreetmap.org/search",
+                             params={"q": q, "format": "json", "limit": 1, "accept-language": "fr"},
+                             headers={"User-Agent": "velib-app/1.0"}, timeout=10)
             r.raise_for_status()
             js = r.json()
-            if not js:
-                return None
-            return float(js[0]["lat"]), float(js[0]["lon"])
+            return (float(js[0]["lat"]), float(js[0]["lon"])) if js else None
         except Exception:
             return None
 
@@ -653,7 +373,7 @@ if PAGE == "Carte":
 
     user_lat, user_lon = origin if origin else (48.8566, 2.3522)
 
-    # Si bouton, cherche station la plus proche
+    # Cherche la meilleure station selon seuil et mode
     target = None
     if go:
         target = find_nearest_station(
@@ -663,39 +383,115 @@ if PAGE == "Carte":
         if target is None:
             st.warning("Aucune station trouvée avec ce seuil.")
         else:
-            st.success(
-                f"✅ Station la plus proche : {target['name']} "
-                f"(#{target['stationcode']}) à ~{int(target['dist_m'])} m"
-            )
+            st.success(f"✅ Station la plus proche : {target['name']} (#{target['stationcode']}) à ~{int(target['dist_m'])} m")
             st.session_state["map_highlight"] = str(target["stationcode"])
             st.session_state["map_center"] = (float(target["lat"]), float(target["lon"]))
             st.session_state["map_zoom"] = 17
+
+    # Carte
+    def _ring_color(ratio: float) -> str:
+        if pd.isna(ratio): return "#9aa0a6"
+        if ratio >= 0.75:  return "#1a9641"
+        if ratio >= 0.50:  return "#a6d96a"
+        if ratio >= 0.25:  return "#fdae61"
+        return "#d7191c"
+
+    def build_map(
+        df: pd.DataFrame,
+        center=(48.8566, 2.3522),
+        zoom=12,
+        highlight_stationcode: str | None = None,
+        open_popup: bool = False,
+        display_prediction: bool = False,
+        bubbles_start_zoom: int = 19,
+        cluster_radius: int = 120,
+    ) -> folium.Map:
+        m = folium.Map(location=center, zoom_start=zoom, control_scale=True,
+                       tiles="cartodbpositron", prefer_canvas=True)
+        mc = MarkerCluster(name="Stations",
+                           options={"disableClusteringAtZoom": int(bubbles_start_zoom),
+                                    "maxClusterRadius": int(cluster_radius),
+                                    "showCoverageOnHover": False}).add_to(m)
+        df = df.copy()
+        for c in ["capacity","numbikesavailable","y_nb_pred","lat","lon"]:
+            if c in df.columns: df[c] = pd.to_numeric(df[c], errors="coerce")
+
+        def _to_int_safe(v):
+            v = pd.to_numeric(v, errors="coerce"); return int(0 if pd.isna(v) else v)
+
+        def _delta_badge(nb_act: int, nb_pred: int, cap: int) -> str:
+            if cap <= 0: return "<span class='badge' style='background:#f3f4f6'>▬ 0%</span>"
+            delta = 100.0 * (nb_pred - nb_act) / cap
+            if abs(delta) < 0.5:  symbol, bg, fg = "▬", "#e5e7eb", "#111827"
+            elif delta > 0:       symbol, bg, fg = "▲", "#dcfce7", "#166534"
+            else:                 symbol, bg, fg = "▼", "#fee2e2", "#991b1b"
+            return f"<span class='badge' style='background:{bg}; color:{fg}; border-color:rgba(0,0,0,.08)'>{symbol} {delta:+.0f}%</span>"
+
+        for _, r in df.iterrows():
+            name = (r.get("name") or "—").strip()
+            code = str(r.get("stationcode", ""))
+            lat  = float(r.get("lat")) if pd.notna(r.get("lat")) else 0.0
+            lon  = float(r.get("lon")) if pd.notna(r.get("lon")) else 0.0
+            cap     = _to_int_safe(r.get("capacity"))
+            nb_act  = _to_int_safe(r.get("numbikesavailable"))
+            nb_pred = _to_int_safe(r.get("y_nb_pred"))
+            nb_show = nb_pred if display_prediction else nb_act
+            ratio   = (nb_show / cap) if cap > 0 else np.nan
+            col_ring = _ring_color(ratio)
+            deg = int(max(0, min(1, 0 if pd.isna(ratio) else ratio)) * 360)
+            size = 52 if highlight_stationcode == code else 44
+
+            icon_html = f"""
+            <div style="position:relative; width:{size}px; height:{size}px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.25));">
+              <div style="width:100%; height:100%; border-radius:50%;
+                          background: conic-gradient({col_ring} {deg}deg, #e5e7eb 0deg);
+                          display:flex; align-items:center; justify-content:center;
+                          border:2px solid #263238; box-sizing:border-box;">
+                <div style="width:{size-12}px; height:{size-12}px; border-radius:50%; background:#fff;
+                            display:flex; align-items:center; justify-content:center;
+                            font: 700 {int(size*0.42)}px/1 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:#263238;">
+                  {nb_show}
+                </div>
+              </div>
+              <div style="position:absolute; left:50%; bottom:-12px; transform:translateX(-50%);
+                          width:0; height:0; border-left:8px solid transparent; border-right:8px solid transparent;
+                          border-top:12px solid #263238; opacity:.9;"></div>
+            </div>
+            """
+            icon = folium.DivIcon(html=icon_html, icon_size=(size, size + 12), icon_anchor=(size/2, size + 12))
+            popup_html = (
+                f"<div style='font-family:Inter,system-ui,Segoe UI,Roboto,sans-serif;'>"
+                f"<div style='font-weight:700;margin-bottom:.15rem'>{name}</div>"
+                f"<div style='color:#6b7280;margin-bottom:.35rem'>#{code}</div>"
+                f"<div style='display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.35rem'>"
+                f"<span style='padding:.2rem .5rem;border-radius:8px;background:#f3f4f6'>Actuel&nbsp;: <b>{nb_act}</b> / {cap}</span>"
+                f"<span style='padding:.2rem .5rem;border-radius:8px;background:#eef2ff'>Prévision T+1h&nbsp;: <b>{nb_pred}</b></span>"
+                f"{_delta_badge(nb_act, nb_pred, cap)}</div></div>"
+            )
+            folium.Marker((lat, lon), icon=icon, tooltip=f"{name} (#{code})",
+                          popup=folium.Popup(popup_html, max_width=300,
+                          show=(open_popup and highlight_stationcode == code))).add_to(mc)
+        folium.LayerControl(collapsed=True).add_to(m)
+        return m
 
     center = st.session_state.get("map_center", (48.8566, 2.3522))
     zoom   = st.session_state.get("map_zoom", 12)
     highlight_code = st.session_state.get("map_highlight")
 
     m = build_map(
-        df_with_pred,
-        center=center,
-        zoom=zoom,
+        df_with_pred, center=center, zoom=zoom,
         highlight_stationcode=str(highlight_code) if highlight_code else None,
-        open_popup=bool(highlight_code),
-        display_prediction=bool(display_pred),
+        open_popup=bool(highlight_code), display_prediction=bool(display_pred),
     )
     st.components.v1.html(m.get_root().render(), height=560)
     st.markdown("<div style='color:#999;font-size:12px;margin-top:8px;'>Cache 5 min. Utilisez « Actualiser données » dans la barre latérale.</div>", unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# PAGE — MONITORING
-# -----------------------------------------------------------------------------
 else:
     st.markdown("### 📊 Monitoring réseau")
-
     wx_badges = weather_badges_from_parquet(_velib_path())
     render_badges("<span class='badge'>Prévision : <b>T+1h</b></span>" + wx_badges)
 
-    # KPIs (à partir des données actuelles)
+    # KPIs
     def compute_network_kpis(df_now: pd.DataFrame) -> dict:
         try:
             stations = int(df_now["stationcode"].nunique())
@@ -714,82 +510,53 @@ else:
     with c3: st.markdown(f"<div class='kpi-row kpi-card'><div class='kpi-title'>Bornes libres (actuel)</div><div class='kpi-value'>{kpis['docks_total']}</div></div>", unsafe_allow_html=True)
     with c4: st.markdown(f"<div class='kpi-row kpi-card'><div class='kpi-title'>Occupation réseau</div><div class='kpi-value'>{kpis['occ_pct']} %</div></div>", unsafe_allow_html=True)
 
-
-    # -------------------------------------------------------------------------
-    # PAGE — MONITORING — Historique global
-    # -------------------------------------------------------------------------
+    # Historique global — image fallback
     st.markdown("### Historique réseau (indicateurs clés)")
-
-    # Image locale (présente dans le dépôt)
     fallback_img = ROOT / "docs" / "assets" / "figs" / "network" / "overview" / "kpis_today_vs_lags.png"
-
     if fallback_img.exists():
         st.markdown("<div class='monitoring-fig'>", unsafe_allow_html=True)
-        st.image(
-            str(fallback_img),
-            use_container_width=True,
-            caption="KPIs réseau : comparaison aujourd’hui vs historiques (lags)"
-        )
+        st.image(str(fallback_img), use_container_width=True,
+                 caption="KPIs réseau : comparaison aujourd’hui vs historiques (lags)")
         st.markdown("</div>", unsafe_allow_html=True)
     else:
         st.info("Aucune figure réseau disponible dans docs/assets/figs/network/overview/")
 
-    # -------------------------------------------------------------------------
-    # PAGE — MONITORING — Top 10 stations critiques (T+1h)
-    # -------------------------------------------------------------------------
+    # Top 10 stations critiques (T+1h)
     st.markdown("### 🔴 Stations critiques à T+1h")
-
     dfm = df_with_pred.copy()
     for c in ["capacity","numbikesavailable","numdocksavailable","y_nb_pred"]:
         dfm[c] = pd.to_numeric(dfm.get(c), errors="coerce").fillna(0).astype(int)
-
     dfm["cap_eff"] = dfm[["capacity","numbikesavailable"]].max(axis=1)
     dfm = dfm[dfm["cap_eff"] > 0].copy()
+    dfm["pct_now"]  = 100 * dfm["numbikesavailable"] / dfm["cap_eff"]
+    dfm["pct_pred"] = 100 * dfm["y_nb_pred"]          / dfm["cap_eff"]
 
-    # Pourcentages actuel et prévision
-    dfm["pct_now"] = 100 * dfm["numbikesavailable"] / dfm["cap_eff"]
-    dfm["pct_pred"] = 100 * dfm["y_nb_pred"] / dfm["cap_eff"]
-
-    # Sélection critique
-    top_sat  = dfm.sort_values("pct_pred", ascending=False).head(10).copy()  # proches de 100%
-    top_lack = dfm.sort_values("pct_pred", ascending=True).head(10).copy()   # proches de 0%
+    top_sat  = dfm.sort_values("pct_pred", ascending=False).head(10).copy()
+    top_lack = dfm.sort_values("pct_pred", ascending=True ).head(10).copy()
 
     c1, c2 = st.columns(2, gap="large")
-
-    # Nombre max de lignes entre les deux tops
-    n_max = max(len(top_sat), len(top_lack), 10)  # min 10 pour garder lisible
-    figsize = (7, n_max * 0.5)  # largeur 7, hauteur dynamique commune
+    n_max = max(len(top_sat), len(top_lack), 10)
+    figsize = (7, n_max * 0.5)
 
     def plot_comparison(df, title, figsize):
         fig, ax = plt.subplots(figsize=figsize)
-
         y = np.arange(len(df))
-        ax.barh(y - 0.2, df["pct_now"], height=0.4, color="#999999", label="Actuel")
+        ax.barh(y - 0.2, df["pct_now"],  height=0.4, color="#999999", label="Actuel")
         ax.barh(y + 0.2, df["pct_pred"], height=0.4, color="#1f78b4", label="Prévu")
-        ax.set_yticks(y)
-        ax.set_yticklabels(df["name"])
+        ax.set_yticks(y); ax.set_yticklabels(df["name"])
         ax.set_xlabel("% remplissage (vélos / capacité)")
         ax.set_xlim(0, 100)
         ax.axvline(100, color="red", linestyle="--", linewidth=1, label="Seuil critique")
-        ax.axvline(0, color="red", linestyle="--", linewidth=1)
-        ax.invert_yaxis()
-        ax.legend(loc="lower right")
-        ax.set_title(title)
-
-        # annotation delta
+        ax.axvline(0,   color="red", linestyle="--", linewidth=1)
+        ax.invert_yaxis(); ax.legend(loc="lower right"); ax.set_title(title)
         for i, (now, pred) in enumerate(zip(df["pct_now"], df["pct_pred"])):
             delta = pred - now
             ax.text(pred + 1, i + 0.2, f"{pred:.0f}% ({delta:+.0f} pts)", va="center", fontsize=8)
-
         return fig
 
     with c1:
         st.markdown("**Top 10 — Risque de saturation**")
-        fig = plot_comparison(top_sat, "Stations proches de 100% (pleines)", figsize)
-        st.pyplot(fig)
-
+        st.pyplot(plot_comparison(top_sat, "Stations proches de 100% (pleines)", figsize))
     with c2:
         st.markdown("**Top 10 — Risque de manque**")
-        fig = plot_comparison(top_lack, "Stations proches de 0% (vides)", figsize)
-        st.pyplot(fig)
-
+        st.pyplot(plot_comparison(top_lack, "Stations proches de 0% (vides)", figsize))
