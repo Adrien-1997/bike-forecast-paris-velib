@@ -22,7 +22,12 @@ from src.cal_features import add_calendar_features
 from src.utils_io import get_export_path  # <— nouvel import
 
 MODELS_DIR = ROOT / "models"
-DATA_PARQUET = get_export_path("velib.parquet")   # remplace chemin en dur
+@st.cache_resource
+def load_parquet():
+    from src.utils_io import get_export_path
+    return get_export_path("velib.parquet")
+
+DATA_PARQUET = load_parquet()
 FIGS_DIR = ROOT / "docs" / "assets" / "figs"
 DEBUG = False
 
