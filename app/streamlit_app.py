@@ -310,18 +310,23 @@ _age_min = _parquet_age_minutes()
 if _age_min is not None and _age_min > 15 and not st.session_state.get("did_auto_refresh", False):
     st.warning(f"⏱️ Données parquet âgées de {_age_min} min → actualisation automatique…")
 
-    # --- vidage de caches ---
+    # purge caches (idem avant)
     try:
-        st.cache_data.clear()      # vide tout le cache Streamlit data
+        st.cache_data.clear()
     except Exception:
         pass
     try:
-        load_live_data_cached.clear()  # ta fonction spécifique
+        load_live_data_cached.clear()   # adapte si besoin
     except Exception:
         pass
 
     st.session_state["did_auto_refresh"] = True
-    st.experimental_rerun()
+
+    # ✅ rerun compatible
+    _rerun = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+    if callable(_rerun):
+        _rerun()
+
 
 
 def _sanity_checks():
