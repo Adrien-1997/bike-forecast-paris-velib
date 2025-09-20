@@ -73,9 +73,45 @@ TITLE = "🚲 Prévisions Vélib’ Paris"
 # -----------------------------------------------------------------------------
 # RÉSOLUTIONS (HF + OpenData)
 # -----------------------------------------------------------------------------
+# --- remplace ta fonction _velib_local_path par celle-ci
 def _velib_local_path(force_hf: bool = False) -> str:
-    # force=False : privilégie local si présent ; force=True : re-télécharge depuis HF
-    return str(get_export_path("velib.parquet", force=bool(force_hf)))
+    """
+    Retourne le chemin local du parquet.
+    - Appel simple sans mot-clé si force_hf=False
+    - Si force_hf=True, tente plusieurs signatures courantes : force, force_download, refresh
+    """
+    try:
+        if not force_hf:
+            return str(get_export_path("velib.parquet"))  # appel simple
+        # force_hf=True : tester différentes signatures
+        try:
+            return str(get_export_path("velib.parquet", force=True))
+        except TypeError:
+            pass
+        try:
+            return str(get_export_path("velib.parquet", force_download=True))
+        except TypeError:
+            pass
+        try:
+            return str(get_export_path("velib.parquet", refresh=True))
+        except TypeError:
+            pass
+        # Dernier recours : appel simple (sans forcer)
+        return str(get_export_path("velib.parquet"))
+    except Exception as e:
+        st.error(f"get_export_path a échoué : {e}")
+        # Fallback très conservateur si ta fonction n'est pas dispo : chemin attendu en repo
+        return "docs/exports/velib.parquet"
+
+def _gentle_refresh_from_hf() -> str | None:
+    try:
+        path = _velib_local_path(force_hf=True)   # ← force via multi-signatures
+        st.session_state["cache_buster"] += 1
+        st.toast("Parquet rafraîchi depuis Hugging Face ✅")
+        return path
+    except Exception as e:
+        st.error(f"Échec du rafraîchissement HF : {e}")
+        return None
 
 def _format_badge(val, unit, icon):
     try:
