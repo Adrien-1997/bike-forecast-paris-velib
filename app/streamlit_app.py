@@ -21,8 +21,6 @@ MODELS_DIR = ROOT / "models"
 FIGS_DIR = ROOT / "docs" / "assets" / "figs"
 DEBUG = False
 
-DATA_PARQUET = get_export_path("velib.parquet")
-
 # Pour import interne
 sys.path.insert(0, str(ROOT))
 
@@ -74,6 +72,10 @@ div[data-testid="stDataFrameResizable"] { overflow-x: auto; }
 """, unsafe_allow_html=True)
 
 TITLE = "🚲 Prévisions Vélib’ Paris"
+
+def _velib_path() -> Path:
+    """Chemin vers velib.parquet (local si présent, sinon téléchargé depuis HF)."""
+    return get_export_path("velib.parquet")
 
 # --- WEATHER BADGE ------------------------------------------------------------
 def _format_badge(val, unit, icon):
@@ -204,7 +206,7 @@ def load_live_data_cached() -> Tuple[pd.DataFrame, str, str, pd.Timestamp]:
 # -----------------------------------------------------------------------------
 def _load_recent_bins() -> pd.DataFrame:
     """Charge le parquet 15 min et ne garde que les derniers bins utiles (≤ 24h)."""
-    df = pd.read_parquet(DATA_PARQUET)
+    df = pd.read_parquet(_velib_path())
     if df.empty:
         return df
     # garde 2 jours par sécurité (lags jusqu'à 16 bins = 4h)
@@ -534,10 +536,9 @@ except Exception:
 
 def _sanity_checks():
     problems = []
-    if not DATA_PARQUET.exists():
-        problems.append("❌ docs/exports/velib.parquet absent")
-    else:
-        dfp = pd.read_parquet(DATA_PARQUET)
+    try:
+        p = _velib_path()
+        dfp = pd.read_parquet(p)
         if dfp.empty:
             problems.append("❌ velib.parquet vide")
         else:
@@ -547,6 +548,8 @@ def _sanity_checks():
             need = {"tbin_utc","hour_utc","stationcode","nb_velos_bin","occ_ratio_bin"}
             miss = need - set(dfp.columns)
             if miss: problems.append(f"❌ colonnes manquantes: {sorted(miss)}")
+    except FileNotFoundError:
+        problems.append("❌ velib.parquet introuvable (local et HF)")
     model_path = MODELS_DIR
     if not model_path.exists():
         problems.append("❌ models/ introuvable")
@@ -592,7 +595,7 @@ if PAGE == "Carte":
         display_mode = st.radio("Mode d'affichage", options=["Actuel", "Prévision T+1h"], index=0, horizontal=True, label_visibility="collapsed")
     display_pred = (display_mode == "Prévision T+1h")
 
-    wx_badges = weather_badges_from_parquet(DATA_PARQUET)
+    wx_badges = weather_badges_from_parquet(_velib_path())
     render_badges(
         f"<span class='badge'>Mode : <b>{'Prévision T+1h' if display_pred else 'Actuel'}</b></span>"
         + wx_badges
@@ -679,7 +682,7 @@ if PAGE == "Carte":
 else:
     st.markdown("### 📊 Monitoring réseau")
 
-    wx_badges = weather_badges_from_parquet(DATA_PARQUET)
+    wx_badges = weather_badges_from_parquet(_velib_path())
     render_badges("<span class='badge'>Prévision : <b>T+1h</b></span>" + wx_badges)
 
     # KPIs (à partir des données actuelles)
