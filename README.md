@@ -58,7 +58,7 @@ Public GBFS snapshots -> normalized 15-min aggregates -> features & model traini
 ```mermaid
 flowchart TD
 
-  %% ===== SOURCES & AGRÉGAT =====
+  %% SOURCES & AGRÉGAT
   subgraph Sources
     GBFS[GBFS snapshots];
     WX[Weather hourly];
@@ -66,24 +66,24 @@ flowchart TD
 
   GBFS --> AGG[Aggregate + weather join];
   WX   --> AGG;
-  AGG  --> VELIB[velib.parquet (15-min)];
+  AGG  --> VELIB[velib_parquet];
 
-  %% ===== NORMALISATION =====
+  %% NORMALISATION
   VELIB --> NORM[Normalize datasets];
-  NORM  --> EV[events.parquet];
-  NORM  --> PF[perf.parquet];
+  NORM  --> EV[events_parquet];
+  NORM  --> PF[perf_parquet];
 
-  %% ===== PIPELINE MODÈLE =====
+  %% PIPELINE MODÈLE
   VELIB --> FEAT[Build features];
-  FEAT  --> TRAIN[Train LGBM (T+15)];
-  TRAIN --> MODEL[Model bundle (.joblib)];
+  FEAT  --> TRAIN[Train LGBM T+15];
+  TRAIN --> MODEL[Model bundle joblib];
 
-  %% Application modèle (inférence alignée sur T)
-  MODEL --> APPLY[Apply model → y_pred];
+  %% APPLICATION MODÈLE
+  MODEL --> APPLY[Apply model y_pred];
   EV    --> APPLY;
   PF    --> APPLY;
 
-  %% ===== PAGES / RAPPORTS =====
+  %% PAGES / RAPPORTS
   subgraph Pages
     R1[Network overview];
     R2[Network stations];
@@ -91,15 +91,15 @@ flowchart TD
     M1[Model performance];
     M2[Model pipeline];
     M3[Model explainability];
-    Q1[Monitoring · data_health];
-    Q2[Monitoring · drift];
-    Q3[Monitoring · model_health];
-    D1[Data · exports];
-    D2[Data · dictionary];
-    D3[Data · methodology];
+    Q1[Monitoring data_health];
+    Q2[Monitoring drift];
+    Q3[Monitoring model_health];
+    D1[Data exports];
+    D2[Data dictionary];
+    D3[Data methodology];
   end
 
-  EV --> R1 --> ASSETS[docs/assets/*];
+  EV --> R1 --> ASSETS[docs_assets];
   EV --> R2 --> ASSETS;
   EV --> R3 --> ASSETS;
   PF --> M1 --> ASSETS;
@@ -111,14 +111,14 @@ flowchart TD
   VELIB --> D1 --> ASSETS;
   VELIB --> D2 --> ASSETS;
   VELIB --> D3 --> ASSETS;
-  ASSETS --> PAGES[gh-pages];
+  ASSETS --> PAGES[gh_pages];
 
-  %% ===== ORCHESTRATIONS CI/CD =====
-  subgraph CI/CD
-    CI1[ingest: every 15m];
-    CI3[site build: 4x/day];
-    CI2[train: daily];
-    CHECK[check_retrain (MAE lift + PSI)];
+  %% ORCHESTRATIONS CI/CD
+  subgraph CI_CD
+    CI1[ingest every 15m];
+    CI3[site build 4x/day];
+    CI2[train daily];
+    CHECK[check_retrain];
   end
 
   CI1 --> GBFS;
@@ -138,7 +138,7 @@ flowchart TD
   CI2 --> TRAIN;
   CI2 --> PAGES;
 
-  %% ===== APP =====
+  %% APP
   APP[Streamlit app] --> AGG;
 ```
 
