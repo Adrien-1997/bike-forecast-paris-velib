@@ -20,4 +20,5 @@ lightgbm>=4.2
 scikit-learn>=1.4
 joblib>=1.4
 
-huggingface-hub>=0.23   
+huggingface-hub>=0.23  
+hf_xet
