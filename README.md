@@ -14,7 +14,7 @@ Public GBFS snapshots -> normalized 15-min aggregates -> features & model traini
 
 > Quick links:
 > Docs -> https://adrien-1997.github.io/bike-forecast-paris-velib/
-> App  -> https://adrien-1997-bike-forecast-paris-velib-appstreamlit-app-vq1xma.streamlit.app/
+> App  -> https://velib-forecast.streamlit.app/
 
 ---
 
@@ -275,6 +275,6 @@ bike-forecast-paris-velib/
 ## 👤 Author & License
 
 **Adrien Morel** — Data Scientist (applied math & ML)  
-Docs: https://adrien-1997.github.io/bike-forecast-paris-velib/ • App: https://adrien-1997-bike-forecast-paris-velib-appstreamlit-app-vq1xma.streamlit.app/
+Docs: [https://adrien-1997.github.io/bike-forecast-paris-velib/](https://adrien-1997.github.io/bike-forecast-paris-velib/) • App: [https://adrien-1997-bike-forecast-paris-velib-appstreamlit-app-vq1xma.streamlit.app/](https://velib-forecast.streamlit.app/)
 
 **License:** MIT
