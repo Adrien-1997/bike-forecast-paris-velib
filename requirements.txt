@@ -1,24 +1,12 @@
-﻿# --- Core app ---
-streamlit==1.37.1
-pandas==2.2.2
-numpy==1.26.4
-
-# Lire parquet
-pyarrow==16.1.0
-
-# Cartes / bulles
+﻿streamlit==1.37.1
+pandas==2.2.3
+numpy==2.1.2
+scipy==1.14.1
+scikit-learn==1.6.0
+pyarrow==17.0.0
 folium==0.16.0
-
-# Graphiques (top 10)
 matplotlib==3.8.4
-
-# HTTP (GBFS + géocodage)
 requests==2.32.3
-
-# Charger le modèle et prédire
-lightgbm==4.3.0
-scikit-learn==1.4.2
+lightgbm==4.4.0
 joblib==1.4.2
-
-# Hugging Face Hub
 huggingface_hub==0.24.6
