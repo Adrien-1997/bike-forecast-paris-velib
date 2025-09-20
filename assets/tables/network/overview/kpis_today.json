@@ -1,0 +1,15 @@
+{
+  "snapshot_ts_utc": "2025-09-20 17:30:00",
+  "snapshot_ts_local": "2025-09-20 19:30:00+02:00",
+  "stations_universe": 1473,
+  "stations_active": 1150,
+  "stations_offline": 323,
+  "availability_bike_pct": 98.0,
+  "availability_dock_pct": 99.39,
+  "penury_pct": 2.0,
+  "saturation_pct": 0.61,
+  "coverage_pct": 94.7,
+  "volatility_today": 2.18,
+  "last_days": 14,
+  "ref_days": 28
+}

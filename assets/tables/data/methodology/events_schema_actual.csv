@@ -1,0 +1,13 @@
+column,dtype,nulls,nunique,sample
+ts,"datetime64[us, UTC]",0,240,"[Timestamp('2025-09-07 23:00:00+0000', tz='UTC'), Timestamp('2025-09-07 23:00:00+0000', tz='UTC'), Timestamp('2025-09-07 23:00:00+0000', tz='UTC')]"
+station_id,Int64,1,1472,"[10003, 10004, 10005]"
+bikes,int32,0,84,"[4, 17, 12]"
+capacity,Int32,153,68,"[17, 48, 17]"
+occ,float64,153,1601,"[0.23529411764705882, 0.3541666666666667, 0.7058823529411765]"
+lat,float64,15,1473,"[48.87077436024, 48.870893, 48.87397217237368]"
+lon,float64,15,1472,"[2.3496496368327, 2.353521, 2.348388757504776]"
+name,object,15,1470,"['Hauteville - Bonne Nouvelle', 'Metz - Faubourg Saint-Denis', 'Petites Ecuries - Faubourg Poissonnière']"
+hour_utc,datetime64[us],0,93,"[Timestamp('2025-09-07 23:00:00'), Timestamp('2025-09-07 23:00:00'), Timestamp('2025-09-07 23:00:00')]"
+temp_C,float64,257124,22,"[15.7, 15.7, 15.7]"
+precip_mm,float64,257124,8,"[0.2, 0.2, 0.2]"
+wind_mps,float64,257124,26,"[10.0, 10.0, 10.0]"

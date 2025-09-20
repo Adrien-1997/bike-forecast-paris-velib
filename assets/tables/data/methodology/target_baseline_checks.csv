@@ -1,0 +1,4 @@
+check,value,source
+horizon_minutes,60.0,perf:horizon_min
+target_alignment_share,0.2771171429510214,events.bikes @ T+60min
+baseline_persistence_share,1.0,events.bikes @ T

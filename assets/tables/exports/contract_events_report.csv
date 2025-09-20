@@ -1,0 +1,13 @@
+check,status,level,detail
+column:ts:exists,pass,hard,
+column:station_id:exists,pass,hard,
+column:bikes:exists,pass,hard,
+type:ts:datetime64,pass,hard,
+type:station_id:str,pass,soft,
+type:bikes:numeric,pass,hard,
+rule:bikes>=0,pass,hard,
+rule:capacity>=0,pass,hard,
+"rule:occ∈[0,1]",pass,soft,share_in_range=100.00%
+"rule:occ≈bikes/capacity (tol. médiane ≤ 0,05)",pass,soft,median_abs_diff=0.000
+"key:(ts,station_id):unique",pass,hard,duplicated_pct=0.000%
+time:aligned_15min,pass,soft,misaligned_pct=0.000%

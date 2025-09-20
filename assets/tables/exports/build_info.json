@@ -1,0 +1,15 @@
+{
+  "build_utc": "2025-09-20T17:55:25.389690+00:00",
+  "events": {
+    "path": "/home/runner/work/bike-forecast-paris-velib/bike-forecast-paris-velib/docs/exports/events.parquet",
+    "ts_min": "2025-09-07T23:00:00+00:00",
+    "ts_max": "2025-09-20T17:30:00+00:00",
+    "rows": 334779
+  },
+  "perf": {
+    "path": "/home/runner/work/bike-forecast-paris-velib/bike-forecast-paris-velib/docs/exports/perf.parquet",
+    "ts_min": "2025-09-07T23:00:00+00:00",
+    "ts_max": "2025-09-20T17:30:00+00:00",
+    "rows": 334779
+  }
+}

@@ -1,0 +1,5 @@
+metric,count,total_active,pct
+bike_avail,1127,1150,98.0
+dock_avail,1143,1150,99.39
+penury,23,1150,2.0
+saturation,7,1150,0.61

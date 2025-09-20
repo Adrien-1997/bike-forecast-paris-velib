@@ -1,0 +1,13 @@
+name,type_pandas,type_sql,unit_or_domain,description,required,default,examples
+ts,"datetime64[ns, UTC]",timestamp with time zone,"UTC, pas 15 min (xx:00, :15, :30, :45)","Horodatage du *bin source* (UTC tz-aware), arrondi 15 min.",True,,2025-01-02 08:15
+station_id,string,text,Identifiant station stable,Identifiant canonique de la station (chaîne).,True,,3005
+bikes,int64,bigint,"≥ 0, vélos disponibles",Nombre de vélos disponibles à T.,True,0.0,"0, 7, 15"
+capacity,int64,bigint,"≥ 0, docks totaux (estimés)",Capacité totale estimée (si connue).,False,,"20, 35"
+occ,float64,double precision,"[0,1], ratio d’occupation",Rapport *bikes/capacity* si *capacity*>0.,False,,"0.35, 0.80"
+name,string,text,Texte libre,Nom d’affichage (optionnel).,False,,Rivoli - Pont Neuf
+lat,float64,double precision,WGS84,Latitude (WGS84).,False,,48.859
+lon,float64,double precision,WGS84,Longitude (WGS84).,False,,2.347
+hour_utc,int64,bigint,Entier 0–23,Heure UTC extraite de ts (optionnel).,False,,"8,17,23"
+temp_C,float64,double precision,°C,Température (si intégrée).,False,,12.3
+precip_mm,float64,double precision,mm,Précipitations (si intégrées).,False,,0.4
+wind_mps,float64,double precision,m/s,Vent (si intégré).,False,,3.2

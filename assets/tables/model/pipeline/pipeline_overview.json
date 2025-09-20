@@ -1,0 +1,15 @@
+{
+  "events_rows": 334779,
+  "perf_rows": 334779,
+  "events_stations": 1473,
+  "perf_stations": 1473,
+  "ts_min_events": "2025-09-07T23:00:00",
+  "ts_max_events": "2025-09-20T17:30:00",
+  "ts_min_perf": "2025-09-07T23:00:00",
+  "ts_max_perf": "2025-09-20T17:30:00",
+  "horizon_min": 60,
+  "outputs": {
+    "tables": "/home/runner/work/bike-forecast-paris-velib/bike-forecast-paris-velib/docs/assets/tables/model/pipeline",
+    "figs": "/home/runner/work/bike-forecast-paris-velib/bike-forecast-paris-velib/docs/assets/figs/model/pipeline"
+  }
+}

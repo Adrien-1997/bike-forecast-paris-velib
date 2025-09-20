@@ -1,0 +1,14 @@
+{
+  "sklearn_available": true,
+  "profile_row_coverage_min": 0.4,
+  "n_input": 1473,
+  "n_kept": 1458,
+  "k_effective": 4,
+  "silhouette": 0.17287840748892636,
+  "davies_bouldin": 1.6552853172520234,
+  "n_stations": 1458,
+  "pca_var_ratio": [
+    0.3420552784459012,
+    0.289820994824761
+  ]
+}

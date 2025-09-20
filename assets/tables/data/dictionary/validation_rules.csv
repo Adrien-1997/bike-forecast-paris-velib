@@ -1,0 +1,20 @@
+id,applies_to,severity,rule,description
+E_COL_TS,events,hard,column_exists(ts),Colonne ts présente
+E_COL_STID,events,hard,column_exists(station_id),Colonne station_id présente
+E_COL_BIKES,events,hard,column_exists(bikes),Colonne bikes présente
+E_TYPE_TS,events,hard,dtype(ts) is datetime64 (UTC tz-aware),ts de type attendu (datetime64 (UTC tz-aware))
+E_NUM_BIKES,events,hard,numeric(bikes) & bikes>=0,"bikes numérique, non négatif"
+E_RANGE_OCC,events,soft,0<=occ<=1 (si présent),"occ borné à [0,1]"
+E_RANGE_CAP,events,soft,capacity>=0 (si présent),capacity non négatif
+E_OCC_FORMULA,events,soft,median(|occ-(bikes/capacity)|) <= tol (95% lignes avec capacity>0),occ≈bikes/capacity (tolérance)
+E_KEY_UNIQ,events,hard,"unique(ts,station_id)","Clé (ts,station_id) unique"
+E_STEP_15M,events,soft,ts minute%15==0,Horodatages alignés (pas 15 min)
+P_COL_TS,perf,hard,column_exists(ts),Colonne ts présente
+P_COL_STID,perf,hard,column_exists(station_id),Colonne station_id présente
+P_COL_YTRUE,perf,hard,column_exists(y_true),Colonne y_true présente
+P_COL_BASE,perf,hard,column_exists(y_pred_baseline),Colonne y_pred_baseline présente
+P_TYPE_TS,perf,hard,dtype(ts) is datetime64 (UTC tz-aware),ts de type attendu (datetime64 (UTC tz-aware))
+P_NUM_NONNEG,perf,soft,"y_true,y_pred_baseline,y_pred >= 0 (si présents)",Non négatifs
+P_HORIZON_GT0,perf,soft,horizon_min>0 (si présent),Horizon positif
+P_KEY_UNIQ,perf,hard,"unique(ts,station_id)","Clé (ts,station_id) unique"
+P_STEP_15M,perf,soft,ts minute%15==0,Horodatages alignés (pas 15 min)

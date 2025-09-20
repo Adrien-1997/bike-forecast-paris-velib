@@ -1,0 +1,12 @@
+id,status,detail
+P_COL_TS,pass,
+P_COL_STID,pass,
+P_COL_YTRUE,pass,
+P_COL_BASE,pass,
+P_TYPE_TS,fail,tz-naive
+P_STEP_15M,pass,misaligned_pct=0.000%
+P_NUM_NONNEG,pass,y_true: share_nonneg=100.00%
+P_NUM_NONNEG,pass,y_pred_baseline: share_nonneg=100.00%
+P_NUM_NONNEG,pass,y_pred: share_nonneg=99.71%
+P_HORIZON_GT0,pass,share>0=100.00%
+P_KEY_UNIQ,pass,duplicated_pct=0.000%

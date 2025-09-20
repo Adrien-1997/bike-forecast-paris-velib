@@ -1,0 +1,12 @@
+table,check,ok,expected,value
+events,columns_presence,False,"['ts', 'station_id', 'bikes', 'docks']",
+perf,columns_presence_min,True,"['ts', 'station_id', 'y_true']",
+events,dtype_ts,,,"datetime64[us, UTC]"
+events,dtype_station_id,,,Int64
+events,dtype_bikes,,,int32
+perf,dtype_ts,,,"datetime64[us, UTC]"
+perf,dtype_station_id,,,Int64
+perf,dtype_y_true,,,float64
+perf,dtype_y_pred,,,float64
+perf,dtype_y_pred_baseline,,,int32
+perf,dtype_horizon_min,,,int64

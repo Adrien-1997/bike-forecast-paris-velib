@@ -1,0 +1,7 @@
+name,type_pandas,type_sql,unit_or_domain,description,required,default,examples
+ts,"datetime64[ns, UTC]",timestamp with time zone,"UTC, pas 15 min (xx:00, :15, :30, :45)","Horodatage *T* (même bin que events, UTC tz-aware).",True,,2025-01-02 08:15
+station_id,string,text,Identifiant station stable,Identifiant canonique (chaîne).,True,,3005
+y_true,float64,double precision,≥ 0,"Cible observée à T+h, ramenée à T (shift(-steps)).",True,,"5, 12"
+y_pred_baseline,float64,double precision,≥ 0,Baseline persistance (valeur observée à T).,True,,"7, 9"
+y_pred,float64,double precision,≥ 0,Prédiction du modèle alignée sur T (optionnelle).,False,,8.4
+horizon_min,int64,bigint,> 0,Horizon en minutes (ex. 60).,False,,60

@@ -1,0 +1,34 @@
+{
+  "contract": {
+    "events": {
+      "columns": [
+        "ts",
+        "station_id",
+        "bikes",
+        "capacity",
+        "occ",
+        "lat",
+        "lon",
+        "name",
+        "hour_utc",
+        "temp_C",
+        "precip_mm",
+        "wind_mps"
+      ],
+      "hash": "b5e92159349340ce"
+    },
+    "perf": {
+      "columns": [
+        "ts",
+        "station_id",
+        "y_true",
+        "y_pred_baseline",
+        "horizon_min",
+        "ts_decision",
+        "ts_target",
+        "y_pred"
+      ],
+      "hash": "2189f9e1ca1986bd"
+    }
+  }
+}

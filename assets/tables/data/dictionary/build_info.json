@@ -1,0 +1,30 @@
+{
+  "build_utc": "2025-09-20T17:55:26.587592+00:00",
+  "inputs": {
+    "events": "/home/runner/work/bike-forecast-paris-velib/bike-forecast-paris-velib/docs/exports/events.parquet",
+    "perf": "/home/runner/work/bike-forecast-paris-velib/bike-forecast-paris-velib/docs/exports/perf.parquet"
+  },
+  "rows": {
+    "events": 334779,
+    "perf": 334779
+  },
+  "time_bounds": {
+    "events": {
+      "ts_min": "2025-09-07T23:00:00+00:00",
+      "ts_max": "2025-09-20T17:30:00+00:00"
+    },
+    "perf": {
+      "ts_min": "2025-09-07T23:00:00+00:00",
+      "ts_max": "2025-09-20T17:30:00+00:00"
+    }
+  },
+  "tolerances": {
+    "occ_abs_tolerance": 0.05,
+    "occ_share_within_tol_min_pct": 95.0
+  },
+  "primary_key": [
+    "ts",
+    "station_id"
+  ],
+  "timestamp_granularity": "15min (UTC tz-aware)"
+}

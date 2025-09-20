@@ -1,0 +1,13 @@
+column,dtype_pandas_detected,dtype_sql_guess
+bikes,int32,bigint
+capacity,Int32,bigint
+hour_utc,datetime64[us],timestamp without time zone
+lat,float64,double precision
+lon,float64,double precision
+name,object,text
+occ,float64,double precision
+precip_mm,float64,double precision
+station_id,object,text
+temp_C,float64,double precision
+ts,"datetime64[us, UTC]",timestamp with time zone
+wind_mps,float64,double precision

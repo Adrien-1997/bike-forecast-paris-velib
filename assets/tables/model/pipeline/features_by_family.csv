@@ -1,0 +1,8 @@
+family,count
+lags,12
+other,10
+rolling,4
+seasonality,3
+trend,2
+normalization,1
+weather,1

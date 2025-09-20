@@ -1,0 +1,9 @@
+column,dtype_pandas_detected,dtype_sql_guess
+horizon_min,int64,bigint
+station_id,object,text
+ts,"datetime64[us, UTC]",timestamp with time zone
+ts_decision,datetime64[us],timestamp without time zone
+ts_target,datetime64[ns],timestamp without time zone
+y_pred,float64,double precision
+y_pred_baseline,int32,bigint
+y_true,float64,double precision

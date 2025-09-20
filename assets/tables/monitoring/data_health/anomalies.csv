@@ -1,0 +1,87 @@
+type,station_id,start,end,steps,detail,missing,expected
+flat_sequence,40009,2025-09-20T10:15:00,2025-09-20T17:30:00,19.0,flat for 19×15min,,
+flat_sequence,31101,2025-09-20T10:30:00,2025-09-20T17:15:00,19.0,flat for 19×15min,,
+flat_sequence,32301,2025-09-20T10:45:00,2025-09-20T17:30:00,18.0,flat for 18×15min,,
+flat_sequence,48010,2025-09-13T17:45:00,2025-09-20T17:30:00,18.0,flat for 18×15min,,
+flat_sequence,21951,2025-09-20T11:15:00,2025-09-20T17:30:00,17.0,flat for 17×15min,,
+flat_sequence,8027,2025-09-20T10:30:00,2025-09-20T17:30:00,17.0,flat for 17×15min,,
+flat_sequence,40014,2025-09-20T10:30:00,2025-09-20T17:30:00,16.0,flat for 16×15min,,
+flat_sequence,45003,2025-09-20T11:15:00,2025-09-20T17:30:00,16.0,flat for 16×15min,,
+flat_sequence,40015,2025-09-20T10:15:00,2025-09-20T16:15:00,15.0,flat for 15×15min,,
+flat_sequence,31702,2025-09-20T10:45:00,2025-09-20T17:30:00,15.0,flat for 15×15min,,
+flat_sequence,27008,2025-09-20T10:45:00,2025-09-20T17:15:00,14.0,flat for 14×15min,,
+flat_sequence,40002,2025-09-20T11:45:00,2025-09-20T17:30:00,14.0,flat for 14×15min,,
+flat_sequence,15042,2025-09-20T11:45:00,2025-09-20T17:15:00,13.0,flat for 13×15min,,
+flat_sequence,23106,2025-09-20T10:30:00,2025-09-20T15:45:00,11.0,flat for 11×15min,,
+flat_sequence,16104,2025-09-13T17:45:00,2025-09-20T14:30:00,11.0,flat for 11×15min,,
+flat_sequence,40016,2025-09-20T10:30:00,2025-09-20T14:45:00,11.0,flat for 11×15min,,
+flat_sequence,22103,2025-09-20T10:45:00,2025-09-20T15:15:00,11.0,flat for 11×15min,,
+flat_sequence,20037,2025-09-20T12:45:00,2025-09-20T16:45:00,10.0,flat for 10×15min,,
+flat_sequence,32603,2025-09-20T12:45:00,2025-09-20T16:15:00,10.0,flat for 10×15min,,
+flat_sequence,51003,2025-09-20T10:15:00,2025-09-20T13:45:00,9.0,flat for 9×15min,,
+flat_sequence,24007,2025-09-20T13:15:00,2025-09-20T17:30:00,9.0,flat for 9×15min,,
+flat_sequence,46001,2025-09-20T14:15:00,2025-09-20T17:30:00,9.0,flat for 9×15min,,
+flat_sequence,92008,2025-09-20T14:15:00,2025-09-20T17:15:00,9.0,flat for 9×15min,,
+flat_sequence,41304,2025-09-20T10:15:00,2025-09-20T14:15:00,9.0,flat for 9×15min,,
+flat_sequence,21312,2025-09-20T10:30:00,2025-09-20T14:30:00,9.0,flat for 9×15min,,
+flat_sequence,21955,2025-09-20T12:45:00,2025-09-20T15:30:00,9.0,flat for 9×15min,,
+flat_sequence,15311,2025-09-20T13:45:00,2025-09-20T16:45:00,8.0,flat for 8×15min,,
+flat_sequence,22303,2025-09-20T10:30:00,2025-09-20T13:45:00,8.0,flat for 8×15min,,
+flat_sequence,40007,2025-09-20T14:45:00,2025-09-20T17:30:00,8.0,flat for 8×15min,,
+flat_sequence,25009,2025-09-20T10:30:00,2025-09-20T14:15:00,8.0,flat for 8×15min,,
+flat_sequence,21514,2025-09-13T17:45:00,2025-09-20T13:30:00,8.0,flat for 8×15min,,
+flat_sequence,44010,2025-09-20T11:30:00,2025-09-20T14:30:00,8.0,flat for 8×15min,,
+flat_sequence,51008,2025-09-20T10:30:00,2025-09-20T14:30:00,8.0,flat for 8×15min,,
+flat_sequence,8102,2025-09-20T13:30:00,2025-09-20T16:30:00,8.0,flat for 8×15min,,
+flat_sequence,9023,2025-09-20T11:15:00,2025-09-20T14:15:00,8.0,flat for 8×15min,,
+flat_sequence,92006,2025-09-13T17:45:00,2025-09-20T12:45:00,8.0,flat for 8×15min,,
+missing_bins,20007,,,,missing=672/673 bins in window,672.0,673.0
+missing_bins,23041,,,,missing=659/673 bins in window,659.0,673.0
+missing_bins,16006,,,,missing=658/673 bins in window,658.0,673.0
+missing_bins,3002,,,,missing=658/673 bins in window,658.0,673.0
+missing_bins,35001,,,,missing=658/673 bins in window,658.0,673.0
+missing_bins,6020,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,20033,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,21013,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,22502,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,21707,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,18206,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,18135,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,8039,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,15053,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,13102,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,13049,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,24007,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,26006,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,44016,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,41101,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,31201,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,12155,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,9025,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,9114,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,4010,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,13024,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,41208,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,34014,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,13051,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,5201,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,23106,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,26005,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,5002,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,27008,,,,missing=657/673 bins in window,657.0,673.0
+missing_bins,1014,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,8033,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,8117,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,18134,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,18113,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,18101,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,18033,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,8012,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,18024,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,18023,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,18015,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,20142,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,15128,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,7007,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,7023,,,,missing=656/673 bins in window,656.0,673.0
+missing_bins,11011,,,,missing=656/673 bins in window,656.0,673.0

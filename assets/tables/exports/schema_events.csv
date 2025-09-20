@@ -1,0 +1,13 @@
+column,dtype
+bikes,int32
+capacity,Int32
+hour_utc,datetime64[us]
+lat,float64
+lon,float64
+name,object
+occ,float64
+precip_mm,float64
+station_id,object
+temp_C,float64
+ts,"datetime64[us, UTC]"
+wind_mps,float64

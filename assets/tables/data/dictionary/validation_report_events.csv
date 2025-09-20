@@ -1,0 +1,11 @@
+id,status,detail
+E_COL_TS,pass,
+E_COL_STID,pass,
+E_COL_BIKES,pass,
+E_TYPE_TS,fail,tz-naive
+E_STEP_15M,pass,misaligned_pct=0.000%
+E_NUM_BIKES,pass,share_nonneg=100.00%
+E_RANGE_OCC,pass,share_in_range=100.00%
+E_RANGE_CAP,pass,share_nonneg=100.00%
+E_OCC_FORMULA,pass,median_abs_diff=0.000; share<=tol=100.0%
+E_KEY_UNIQ,pass,duplicated_pct=0.000%
