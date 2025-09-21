@@ -1,3 +1,4 @@
+# tools/build_network_dynamics.py
 # -----------------------------------------------------------------------------
 # Projet : Bike Forecasting — Réseau / Dynamiques spatio-temporelles
 # Cadence d’ingestion : 5 minutes
@@ -121,7 +122,8 @@ def _read_events(path: Path, bin_min: int) -> pd.DataFrame:
 
     # bikes
     bikes_col = None
-    for c in ("bikes", "nb_velos_bin", "velos_disponibles", "num_bikes_available", "numBikesAvailable", "n_bikes", "available_bikes"):
+    for c in ("bikes", "nb_velos_bin", "velos_disponibles", "num_bikes_available",
+              "numBikesAvailable", "n_bikes", "available_bikes"):
         if c in df.columns:
             bikes_col = c; break
     if bikes_col is None:
@@ -130,7 +132,8 @@ def _read_events(path: Path, bin_min: int) -> pd.DataFrame:
 
     # docks + capacity (optionnels)
     docks_col = None
-    for c in ("docks_avail", "docks", "docks_disponibles", "num_docks_available", "numDocksAvailable", "available_docks"):
+    for c in ("docks_avail", "docks", "docks_disponibles", "num_docks_available",
+              "numDocksAvailable", "available_docks"):
         if c in df.columns:
             docks_col = c; break
     df["docks_avail"] = pd.to_numeric(df.get(docks_col, np.nan), errors="coerce")
@@ -278,7 +281,7 @@ def _heatmap_network(df: pd.DataFrame, tz: Optional[str]) -> pd.DataFrame:
 
 # --------------------------- 1bis) Profils & autres visuels ---------------------------
 
-def _extra_network_views(df: pd.DataFrame, tz: Optional[str], last_days: int) -> None:
+def _extra_network_views(df: pd.DataFrame, tz: Optional[str], last_days: int, bin_min: int) -> None:
     if df.empty:
         _placeholder_fig(FIGS_DIR / "profile_occ_by_dow.png", "Pas de données")
         _placeholder_fig(FIGS_DIR / "hourly_pen_sat.png", "Pas de données")
@@ -329,8 +332,8 @@ def _extra_network_views(df: pd.DataFrame, tz: Optional[str], last_days: int) ->
     plt.xlabel("Heure"); plt.ylabel("Taux"); plt.legend()
     _save_fig(FIGS_DIR / "hourly_pen_sat.png")
 
-    # ---- Histogramme des épisodes (7 j par défaut)
-    epi = _episodes(df, last_days=last_days, bin_min_hint=15)  # hint uniquement pour l'étiquette (voir _episodes)
+    # ---- Histogramme des épisodes (fenêtre {last_days} j)
+    epi = _episodes(df, last_days=last_days, bin_min_hint=bin_min)  # <-- bin_min utilisé comme hint robuste
     if len(epi):
         epi = epi.copy()
         # duration_min déjà calculée dans _episodes
@@ -466,25 +469,42 @@ def _regularity_today(df: pd.DataFrame, tz: Optional[str]) -> pd.DataFrame:
 
 # --------------------------- 4) Détection d’épisodes ---------------------------
 
-def _episodes(df: pd.DataFrame, last_days: int, bin_min_hint: Optional[int] = None, min_steps_hours: int = 1) -> pd.DataFrame:
+def _episodes(
+    df: pd.DataFrame,
+    last_days: int,
+    bin_min_hint: Optional[int] = None,
+    min_steps_hours: int = 1
+) -> pd.DataFrame:
     """
     Détecte des épisodes binaires (pénurie/saturation) sur la fenêtre.
     - min_steps_hours : durée mini (heures) d’un épisode.
-    - La taille d’un pas est dérivée des données (différence médiane) si possible ; sinon on
-      utilise bin_min_hint si fourni, sinon 15 min en dernier recours.
+    - Taille d’un pas dérivée des données (diff médiane par station, > 0 uniquement).
+      Fallback sur bin_min_hint (sinon 15) si non calculable.
     """
     if last_days <= 0 or df.empty:
         return pd.DataFrame()
+
     tmax = df["ts"].max()
     tmin = tmax - pd.Timedelta(days=last_days)
-    win = df[(df["ts"] >= tmin) & (df["ts"] <= tmax)].copy().sort_values("ts")
+    win = df[(df["ts"] >= tmin) & (df["ts"] <= tmax)].copy().sort_values(["station_id", "ts"])
 
-    # Pas temporel (minutes) estimé sur la fenêtre
-    if len(win["ts"]) >= 3:
-        diffs = win["ts"].sort_values().diff().dropna().dt.total_seconds() / 60.0
-        step_min = float(np.median(diffs)) if len(diffs) else float(bin_min_hint or 15)
-    else:
+    # --- Estimation robuste du pas (minutes)
+    step_min = None
+    try:
+        diffs = (win.groupby("station_id")["ts"]
+                   .diff()
+                   .dropna()
+                   .dt.total_seconds() / 60.0)
+        diffs = diffs[(diffs > 0) & np.isfinite(diffs)]
+        if len(diffs):
+            step_min = float(np.median(diffs))
+    except Exception:
+        step_min = None
+
+    if step_min is None or not np.isfinite(step_min) or step_min <= 0:
         step_min = float(bin_min_hint or 15)
+
+    # Nombre de pas minimum pour constituer un épisode
     min_steps = max(1, int(round((min_steps_hours * 60.0) / step_min)))
 
     win["is_penury"] = pd.to_numeric(win["bikes"], errors="coerce").fillna(0.0) == 0.0
@@ -501,7 +521,6 @@ def _episodes(df: pd.DataFrame, last_days: int, bin_min_hint: Optional[int] = No
                 prev_ts = ts
             else:
                 if start is not None:
-                    # nombre de pas estimé = round((dt/min)/step_min) + 1
                     steps = int(round(((prev_ts - start).total_seconds() / 60.0) / step_min)) + 1
                     runs.append((start, prev_ts, steps))
                     start, prev_ts = None, None
@@ -514,11 +533,12 @@ def _episodes(df: pd.DataFrame, last_days: int, bin_min_hint: Optional[int] = No
     for sid, sub in win.groupby("station_id"):
         sub = sub.sort_values("ts")
         penury_runs = _detect_runs(pd.Series(sub["is_penury"].values, index=sub["ts"].values))
-        sat_runs = _detect_runs(pd.Series(sub["is_saturation"].values, index=sub["ts"].values))
+        sat_runs    = _detect_runs(pd.Series(sub["is_saturation"].values, index=sub["ts"].values))
         for a, b, k in penury_runs:
             rows.append({"station_id": sid, "type": "penury", "start": a, "end": b, "steps": k})
         for a, b, k in sat_runs:
             rows.append({"station_id": sid, "type": "saturation", "start": a, "end": b, "steps": k})
+
     out = pd.DataFrame(rows).sort_values(["station_id", "start"])
     if not out.empty:
         out["duration_min"] = out["steps"].astype(int) * step_min
@@ -705,23 +725,23 @@ def run(events_path: Path, last_days: int, tz: Optional[str], bin_min: int) -> N
     _ = _heatmap_network(df, tz=tz)
 
     # Autres visuels (profils, épisodes, zones)
-    _extra_network_views(df, tz=tz, last_days=last_days)
+    _extra_network_views(df, tz=tz, last_days=last_days, bin_min=bin_min)
 
     # Tables
     ti = _tension_index_by_station(df, last_days=last_days)
-    ti.to_csv(TABLES_DIR / "tension_by_station.csv", index=False)
+    ti.to_csv(TABLES_DIR / "tension_by_station.csv", index=False, encoding=ENC)
     print(f"[dynamics] tension_by_station: {len(ti)} rows -> {TABLES_DIR/'tension_by_station.csv'}")
 
     reg = _regularity_today(df, tz=tz)
-    reg.to_csv(TABLES_DIR / "regularity_today.csv", index=False)
+    reg.to_csv(TABLES_DIR / "regularity_today.csv", index=False, encoding=ENC)
     print(f"[dynamics] regularity_today: {len(reg)} rows -> {TABLES_DIR/'regularity_today.csv'}")
 
     epi = _episodes(df, last_days=last_days, bin_min_hint=bin_min)
-    epi.to_csv(TABLES_DIR / "episodes.csv", index=False)
+    epi.to_csv(TABLES_DIR / "episodes.csv", index=False, encoding=ENC)
     print(f"[dynamics] episodes: {len(epi)} rows -> {TABLES_DIR/'episodes.csv'}")
 
     _by = _by_zone(df, last_days=last_days)
-    _by.to_csv(TABLES_DIR / "by_zone.csv", index=False)
+    _by.to_csv(TABLES_DIR / "by_zone.csv", index=False, encoding=ENC)
     print(f"[dynamics] by_zone: {len(_by)} rows -> {TABLES_DIR/'by_zone.csv'}")
 
     _temporal_map_last_day(df, tz=tz)
