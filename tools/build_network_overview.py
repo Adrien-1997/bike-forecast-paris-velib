@@ -1,18 +1,64 @@
-# tools/build_network_overview.py
-# Génère la page "Réseau / Aperçu" avec KPIs injectés, carte Folium et figures.
+# -----------------------------------------------------------------------------
+# Projet : Bike Forecasting — Monitoring & Modèle
+# Cadence d’ingestion : 5 minutes
+# Horizon de prévision : 15 minutes
+#
+# Hypothèses / conventions
+# ------------------------
+# - Les événements (events) sont échantillonnés toutes les 5 min (UTC naïf).
+# - Les prédictions sont alignées à T et évaluées à H = 15 min (ts_target = ts + 15m).
+# - Tous les calculs de fraîcheur/complétude utilisent bin_min = 5.
+# - Timezone d’affichage par défaut : Europe/Paris (les données restent en UTC).
+#
+# Rappels CLI utiles
+# ------------------
+# Data health :
+#   python tools/build_monitoring_data_health.py \
+#     --events docs/exports/events.parquet \
+#     --current-days 7 --tz Europe/Paris \
+#     --fresh-slo-min 5 --flat-steps 6 --bin-min 5
+#
+# Drift :
+#   python tools/build_monitoring_drift.py \
+#     --events docs/exports/events.parquet \
+#     --current-days 7 --reference-days 28 --tz Europe/Paris --bin-min 5 --perf docs/exports/perf.parquet
+#
+# Performance modèle :
+#   python tools/build_model_performance.py \
+#     --perf docs/exports/perf.parquet \
+#     --last-days 14 --horizon 15 --tz Europe/Paris
+#
+# Explainability :
+#   python tools/build_model_explainability.py \
+#     --perf docs/exports/perf.parquet --last-days 7 --tz Europe/Paris
+#
+# Pipeline :
+#   python tools/build_model_pipeline.py \
+#     --events docs/exports/events.parquet \
+#     --perf docs/exports/perf.parquet --horizon 15
+#
+# Orchestrateur (tout) :
+#   python tools/build_monitoring.py --tz Europe/Paris --last-days 7 --current-days 7 --reference-days 28 \
+#     --horizon 15
+#
+# Constantes globales à garder cohérentes
+# ---------------------------------------
+# BIN_MIN       = 5   # pas temporel des events (minutes)
+# HORIZON_MIN   = 15  # horizon de prévision (minutes)
+# TIMEZONE_IANA = "Europe/Paris"
+# -----------------------------------------------------------------------------
+
 from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, Dict, List
-import branca
-import os
+from typing import Optional, Tuple, List
 import json
-import math
 import numpy as np
 import pandas as pd
 import sys
+
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -23,7 +69,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import folium
-from dateutil import tz
 
 # ------------------------- Chemins & utilitaires -------------------------
 
@@ -50,9 +95,6 @@ def rel_from_md(md_path: Path, target: Path) -> str:
     return (prefix + rel_from_docs).replace("//", "/")
 
 
-
-
-
 # -------------------------- Détection de colonnes --------------------------
 
 @dataclass
@@ -66,11 +108,13 @@ class Cols:
     lat: Optional[str] = None
     lon: Optional[str] = None
 
+
 def detect_columns(df: pd.DataFrame) -> Cols:
     lower = {c.lower(): c for c in df.columns}
     def any_of(*cands):
         for c in cands:
-            if c in lower: return lower[c]
+            if c in lower:
+                return lower[c]
         return None
     ts = any_of("ts","tbin_utc","timestamp","datetime")
     st = any_of("station_id","stationcode","id","station")
@@ -88,7 +132,7 @@ def detect_columns(df: pd.DataFrame) -> Cols:
 
 def to_local(df: pd.DataFrame, ts_col: str, tzname: str) -> pd.Series:
     s = pd.to_datetime(df[ts_col], utc=False, errors="coerce")
-    # Les exports sont "UTC naïf arrondi 15 min" -> on les traite comme UTC puis convertit
+    # Exports en UTC naïf, arrondis à 5 min -> les traiter comme UTC puis convertir
     s = s.dt.tz_localize("UTC", ambiguous="NaT", nonexistent="shift_forward").dt.tz_convert(tzname)
     return s
 
@@ -102,7 +146,8 @@ def today_bounds_local(series_local: pd.Series) -> Tuple[pd.Timestamp, pd.Timest
 # -------------------------- KPIs & helpers --------------------------
 
 def part(x: pd.Series) -> float:
-    if x.size == 0: return float("nan")
+    if x.size == 0:
+        return float("nan")
     return float((x.mean() * 100.0).round(2))
 
 def safe_ratio(n: float, d: float) -> float:
@@ -164,7 +209,8 @@ def compute_snapshot_kpis(df: pd.DataFrame, cols: Cols, tzname: str, station_uni
     return kpis, dist
 
 def compute_recent_coverage_volatility(df: pd.DataFrame, cols: Cols, tzname: str, last_days: int) -> Tuple[float, float]:
-    if last_days <= 0: return float("nan"), float("nan")
+    if last_days <= 0:
+        return float("nan"), float("nan")
     df = df.copy()
     # fenêtre récente
     ts_local = to_local(df, cols.ts, tzname)
@@ -218,16 +264,13 @@ def compute_today_vs_median_curve(df: pd.DataFrame, cols: Cols, tzname: str, ref
     today_curve = agg_part_has_bike(today)
     ref_curve = agg_part_has_bike(ref)
 
-    # Médiane par hh:mm sur la ref (série)
+    # Médiane par hh:mm sur la ref (série) — 288 créneaux de 5 min
     ref_med_series = ref_curve.groupby("_hhmm")["pct"].median()
-
-    # Reindexer sur les 96 quarts d'heure pour éviter une ligne vide
-    bins = pd.Index(pd.date_range("00:00", "23:45", freq="15min").strftime("%H:%M"))
+    bins = pd.Index(pd.date_range("00:00", "23:55", freq="5min").strftime("%H:%M"))
     ref_med_series = ref_med_series.reindex(bins)
 
-    # -> DataFrame propre avec noms robustes
+    # -> DataFrame propre
     ref_median = ref_med_series.reset_index()
-    # les deux colonnes issues de reset_index() : [index, pct] ou similaire
     c0, c1 = ref_median.columns[0], ref_median.columns[1]
     ref_median = ref_median.rename(columns={c0: "_hhmm", c1: "pct_median"})
 
@@ -235,11 +278,9 @@ def compute_today_vs_median_curve(df: pd.DataFrame, cols: Cols, tzname: str, ref
     today_curve = today_curve.merge(ref_median, on="_hhmm", how="left").sort_values("_hhmm")
     ref_median = ref_median.sort_values("_hhmm")
 
-    # Debug
     nunique_days = ref["_ts_loc"].dt.normalize().nunique()
     non_nan = int(ref_median["pct_median"].notna().sum())
-    print(f"[overview] ref jours distincts (meme weekday) = {nunique_days}, bins mediane non-NaN = {non_nan}/96")
-
+    print(f"[overview] ref jours distincts (meme weekday) = {nunique_days}, bins mediane non-NaN = {non_nan}/288")
 
     return today_curve, ref_median
 
@@ -273,7 +314,7 @@ def save_day_profile_plot(today_curve: pd.DataFrame, ref_median: pd.DataFrame, o
                      xy=(0.02, 0.92), xycoords="axes fraction", fontsize=9)
 
     plt.ylim(0, 100)
-    plt.xticks(np.linspace(0, len(x)-1, 9))
+    plt.xticks(np.linspace(0, len(x)-1, 9))  # 9 repères sur 24h
     plt.ylabel("% stations avec ≥1 vélo")
     plt.xlabel("Heure (locale)")
     plt.title("Aujourd’hui vs médiane (mêmes jours)")
@@ -299,9 +340,6 @@ def build_map(snapshot: pd.DataFrame, cols: Cols, out_html: Path) -> None:
 
     has_docks = bool(docks_col and docks_col in snapshot.columns)
 
-    pen = (bikes == 0)
-    sat = (snapshot[docks_col] == 0) if has_docks else pd.Series(False, index=snapshot.index)
-
     lat0 = float(snapshot[lat_col].median())
     lon0 = float(snapshot[lon_col].median())
 
@@ -317,42 +355,32 @@ def build_map(snapshot: pd.DataFrame, cols: Cols, out_html: Path) -> None:
         folium.CircleMarker([lat, lon], radius=4, color=color, fill=True, fill_opacity=0.7, weight=0.5,
                             popup=folium.Popup(html, max_width=250)).add_to(m)
 
-
-    # --- Légende simple (compat large) ---
+    # Légende simple
     from branca.element import Element
-
-    legend_items = []
-    legend_items.append(("<span style='background:red'></span> Pénurie (0 vélo)"))
-    if has_docks:
-        legend_items.append(("<span style='background:black'></span> Saturation (0 place)"))
-    legend_items.append(("<span style='background:blue'></span> OK / autre"))
-
-    legend_html = f"""
+    legend_html = """
     <style>
-      .map-legend {{
+      .map-legend {
         position: fixed; bottom: 24px; left: 24px; z-index: 9999;
         background: #fff; padding: 8px 10px; border: 1px solid #bbb;
         border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.1);
         font: 12px/1.3 -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif;
-      }}
-      .map-legend .row {{ display: flex; align-items: center; margin: 3px 0; }}
-      .map-legend .dot {{
+      }
+      .map-legend .row { display: flex; align-items: center; margin: 3px 0; }
+      .map-legend .dot {
         display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px;
-      }}
-      .map-legend .dot.red {{ background:red; }}
-      .map-legend .dot.black {{ background:black; }}
-      .map-legend .dot.blue {{ background:blue; }}
+      }
+      .map-legend .dot.red { background:red; }
+      .map-legend .dot.black { background:black; }
+      .map-legend .dot.blue { background:blue; }
     </style>
     <div class="map-legend">
       <div style="font-weight:600; margin-bottom:4px;">Légende</div>
       <div class="row"><span class="dot red"></span>Pénurie (0 vélo)</div>
-      {('<div class="row"><span class="dot black"></span>Saturation (0 place)</div>' if has_docks else '')}
+      <div class="row"><span class="dot black"></span>Saturation (0 place)</div>
       <div class="row"><span class="dot blue"></span>OK / autre</div>
     </div>
     """
     m.get_root().html.add_child(Element(legend_html))
-    # -------------------------------------
-
     m.save(str(out_html))
 
 
@@ -404,16 +432,14 @@ Cette page donne un **coup d’œil instantané** à la santé du réseau (snaps
 
 ---
 
-
 ## Méthodologie (résumé)
-- **Source** : `events.parquet` (timestamps **15 min** UTC naïfs, généré durant le build).  
+- **Source** : `events.parquet` (timestamps **5 min** UTC naïfs).  
 - **Snapshot** : dernier `ts` ; pénurie = `bikes == 0` ; saturation = `docks_avail == 0` (ou `capacity - bikes == 0` si `docks_avail` absent).  
 - **Couverture** : moyenne station de `#ts_observés / #ts_total` sur la fenêtre **{last_days} jours**.  
 - **Volatilité** : écart-type des vélos par station sur la **journée locale courante**, médiane des stations.  
 - **Courbe** : part(≥1 vélo) par hh:mm pour aujourd’hui vs **médiane** des mêmes **weekday** sur **{ref_days} jours**.
 
 > Limites : si `docks_avail` n’est pas disponible, les métriques “place/saturation” sont approximées via `capacity - bikes`.
-
 """
 
 # -------------------------- Main --------------------------
@@ -598,7 +624,7 @@ def main(events_path: Path, tzname: str, last_days: int, ref_days: int) -> None:
         f.write(md)
 
     print(f"[overview] OK -> {OUT_MD}")
-    print(f"[overview] figs -> {fig_path}")
+    print(f"[overview] figs -> {FIGS}")
     print(f"[overview] map  -> {map_html}")
     print(f"[overview] tables -> {TABLES}")
 

@@ -9,7 +9,7 @@
 #     - tools/build_network_stations.py
 #     - tools/build_network_dynamics.py
 #   Model
-#     - tools/build_model_performance.py        (or reuse existing build_performance.py)
+#     - tools/build_model_performance.py
 #     - tools/build_model_pipeline.py
 #     - tools/build_model_explainability.py
 #   Monitoring
@@ -62,7 +62,7 @@ def run(cmd: List[object]) -> None:
         cmd,
         capture_output=True,
         text=True,
-        encoding="utf-8",     # ← au lieu de cp1252
+        encoding="utf-8",     # robust logs on all platforms
         errors="replace"
     )
     if res.stdout:
@@ -81,7 +81,7 @@ def run_optional(cmd: List[object]) -> None:
         cmd,
         capture_output=True,
         text=True,
-        encoding="utf-8",     # ← idem ici
+        encoding="utf-8",
         errors="replace"
     )
     if res.stdout:
@@ -131,7 +131,7 @@ def main():
     ap.add_argument("--out-perf", type=Path, default=PERF)
 
     # Global params
-    ap.add_argument("--horizon", type=int, default=60, help="Forecasting horizon in minutes.")
+    ap.add_argument("--horizon", type=int, default=15, help="Forecasting horizon in minutes.")
     ap.add_argument("--lookback-days", type=int, default=14, help="History window for feature building (apply_model).")
     ap.add_argument("--last-days", type=int, default=7, help="Analysis window for most pages (days).")
     ap.add_argument("--current-days", type=int, default=7, help="Current window (drift/health).")
@@ -247,14 +247,15 @@ def main():
             "--events", args.out_events,
             "--current-days", str(args.current_days),
             "--reference-days", str(args.reference_days),
-            "--perf", args.out_perf,                 # ← ajouter
+            "--perf", args.out_perf,
+            "--bin-min", "5",                       # IMPORTANT: events at 5-minute cadence
             *(["--tz", args.tz] if args.tz else []),
         ],
         "monitoring.model_health": lambda: [
             sys.executable, TOOLS / "build_monitoring_model_health.py",
             "--perf", args.out_perf,
             "--last-days", str(args.last_days),
-            "--horizon", str(args.horizon),          # ← ajouter
+            "--horizon", str(args.horizon),
             *(["--tz", args.tz] if args.tz else []),
         ],
         # --- Data ---
@@ -271,7 +272,6 @@ def main():
             sys.executable, TOOLS / "build_data_methodology.py",
             "--events", args.out_events,
             "--perf", args.out_perf,
-            # "--horizon", str(args.horizon),      # ← retirer si non utilisé
         ],
     }
 

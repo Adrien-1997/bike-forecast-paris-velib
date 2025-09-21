@@ -1,15 +1,35 @@
 # tools/build_model_performance.py
+# -----------------------------------------------------------------------------
 # Page builder — "Modèle / Performance & baseline"
 #
-# Mesure la qualité des prévisions vs baseline (persistance) et produit :
-# - Tables: global_metrics, daily_error, error_by_station/hour/dow/(cluster si dispo), coverage
-# - Figures: lift quotidien (sparkline), histogramme des résidus, MAE par heure, obs vs préd (échantillon)
-# - Markdown: docs/model/performance.md (structure éditoriale + embeds de figures & liens CSV)
+# Rôle
+# ----
+# Mesurer la qualité des prévisions vs baseline (persistance) et produire :
+# - Tables : global_metrics, daily_error, error_by_station/hour/dow/(cluster si dispo), coverage
+# - Figures : lift quotidien (sparkline), histogramme des résidus, MAE par heure, obs vs préd (échantillon)
+# - Doc     : docs/model/performance.md (structure éditoriale + embeds de figures & liens CSV)
 #
-# CLI :
-#   python tools/build_model_performance.py \
-#       --perf docs/exports/perf.parquet --last-days 14 --horizon 60 --tz Europe/Paris
+# Entrées
+# -------
+# - docs/exports/perf.parquet
 #
+# Sorties
+# -------
+# - docs/assets/tables/model/performance/*.csv
+# - docs/assets/figs/model/performance/*.png
+# - docs/model/performance.md
+#
+# Notes
+# -----
+# - Cadence temporelle attendue : pas **5 minutes** (arrondi des timestamps).
+# - Aucune écriture destructive des exports sources.
+#
+# CLI
+# ---
+# python tools/build_model_performance.py \
+#   --perf docs/exports/perf.parquet --last-days 14 --horizon 60 --tz Europe/Paris
+# -----------------------------------------------------------------------------
+
 from __future__ import annotations
 
 import argparse
@@ -51,15 +71,16 @@ def rel_from_md(md_path: Path, target: Path) -> str:
     rel_from_docs = Path(target).resolve().relative_to(DOCS.resolve()).as_posix()
     return (prefix + rel_from_docs).replace("//", "/")
 
+
 def _read_perf(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"[performance] Introuvable: {path}")
     df = pd.read_parquet(path)
 
-    # ts (UTC naïf, arrondi 15 min)
+    # ts (UTC naïf, arrondi 5 min)
     if "ts" not in df.columns:
         raise KeyError("[performance] Colonne 'ts' manquante")
-    df["ts"] = pd.to_datetime(df["ts"], errors="coerce").dt.floor("15min")
+    df["ts"] = pd.to_datetime(df["ts"], errors="coerce").dt.floor("5min")
 
     # station_id
     sid = None
@@ -104,6 +125,7 @@ def _read_perf(path: Path) -> pd.DataFrame:
     return df[["ts", "station_id", "y_true", "y_pred", "y_pred_baseline", "horizon_min",
                *([c for c in ["ts_target", "ts_decision"] if c in df.columns])]].copy()
 
+
 def _localize(df: pd.DataFrame, tz: Optional[str]) -> pd.DataFrame:
     # Localisation sur l'axe décision "ts" pour groupages heure/jour
     if tz:
@@ -121,6 +143,7 @@ def _localize(df: pd.DataFrame, tz: Optional[str]) -> pd.DataFrame:
         )
     return df
 
+
 def _fmt_dt(ts: pd.Timestamp, tz: Optional[str]) -> str:
     if pd.isna(ts):
         return "—"
@@ -132,6 +155,7 @@ def _fmt_dt(ts: pd.Timestamp, tz: Optional[str]) -> str:
     # ISO local court
     return t.strftime("%Y-%m-%d %H:%M %Z")
 
+
 def _metrics(y_true: pd.Series, y_hat: pd.Series) -> dict:
     err = y_true - y_hat
     mae = float(np.nanmean(np.abs(err)))
@@ -139,10 +163,12 @@ def _metrics(y_true: pd.Series, y_hat: pd.Series) -> dict:
     me = float(np.nanmean(err))
     return {"mae": mae, "rmse": rmse, "me": me}
 
+
 def _lift(mae_base: float, mae_model: float) -> float:
     if mae_base is None or np.isnan(mae_base) or mae_base == 0 or mae_model is None or np.isnan(mae_model):
         return np.nan
     return float((mae_base - mae_model) / mae_base)
+
 
 def _save_fig(path: Path) -> None:
     plt.tight_layout()
@@ -192,6 +218,7 @@ def compute_global_and_daily(df: pd.DataFrame, last_days: int) -> tuple[pd.DataF
         daily = daily.sort_values("date").tail(last_days)
 
     return global_df, daily
+
 
 def compute_by_segments(df: pd.DataFrame, clusters_csv: Optional[Path] = None) -> dict[str, pd.DataFrame]:
     by = {}
@@ -266,6 +293,7 @@ def plot_daily_lift(daily: pd.DataFrame, out_png: Path) -> None:
     plt.title("Lift quotidien (positif = mieux que persistance)")
     _save_fig(out_png)
 
+
 def plot_residual_hist(df: pd.DataFrame, out_png: Path) -> None:
     mask = df["y_pred"].notna()
     if mask.any():
@@ -279,6 +307,7 @@ def plot_residual_hist(df: pd.DataFrame, out_png: Path) -> None:
     plt.ylabel("Fréquence")
     _save_fig(out_png)
 
+
 def plot_mae_by_hour(by_hour: pd.DataFrame, out_png: Path) -> None:
     plt.figure(figsize=(8, 4))
     plt.plot(by_hour["hour"], by_hour["mae_baseline"], marker="o", label="Baseline")
@@ -288,6 +317,7 @@ def plot_mae_by_hour(by_hour: pd.DataFrame, out_png: Path) -> None:
     plt.ylabel("MAE")
     plt.legend(loc="best")
     _save_fig(out_png)
+
 
 def plot_obs_vs_pred_examples(df: pd.DataFrame, stations: list[str], hours: int, out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -404,6 +434,7 @@ Mesurer la **qualité des prévisions** du modèle et la situer **par rapport à
 - Les métriques agrégées peuvent masquer des comportements **station-spécifiques** (d’où l’analyse segmentée).
 
 """
+
 
 # --------------------------- Main ---------------------------
 

@@ -21,9 +21,9 @@ def _to_utc_naive_floor_hour(x):
         return dt.dt.floor("h").dt.tz_localize(None)
     return dt.floor("h").tz_localize(None)
 
-def occupancy_15min(with_weather: bool = True) -> pd.DataFrame:
+def occupancy_5min(with_weather: bool = True) -> pd.DataFrame:
     """
-    Agrégat unique au pas 15 min (par station), avec jointure météo horaire.
+    Agrégat unique au pas 5 min (par station), avec jointure météo horaire.
     Colonnes clés: tbin_utc, hour_utc, stationcode, nb_velos_bin, nb_bornes_bin,
                    capacity_bin, occ_ratio_bin, temp_C, precip_mm, wind_mps, lat, lon.
     """
@@ -60,7 +60,7 @@ def occupancy_15min(with_weather: bool = True) -> pd.DataFrame:
         make_timestamp(
           year(ts_utc), month(ts_utc), day(ts_utc),
           hour(ts_utc),
-          CAST(15 * floor(minute(ts_utc) / 15.0) AS INTEGER),
+          CAST(5 * floor(minute(ts_utc) / 5.0) AS INTEGER),
           0
         )                                        AS tbin_utc,
         stationcode,
@@ -135,8 +135,8 @@ if __name__ == "__main__":
     os.makedirs(DOCS_EXPORTS, exist_ok=True)
     parquet_path = os.path.join(DOCS_EXPORTS, "velib.parquet")
 
-    # --- agrégat 15 min + météo ---
-    new = occupancy_15min(with_weather=True)
+    # --- agrégat 5 min + météo ---
+    new = occupancy_5min(with_weather=True)
     if new.empty:
         print("[aggregate] Aucun nouveau point à agréger.")
         raise SystemExit(0)
@@ -165,7 +165,7 @@ if __name__ == "__main__":
     # --- fenêtre glissante (90 jours) pour contenir la taille ---
     try:
         tmax = df["tbin_utc"].max()
-        cutoff = (tmax - pd.Timedelta(days=90)).floor("15min")
+        cutoff = (tmax - pd.Timedelta(days=90)).floor("5min")
         df = df[df["tbin_utc"] >= cutoff].copy()
     except Exception:
         pass
@@ -179,4 +179,3 @@ if __name__ == "__main__":
         duckdb.sql(f"COPY out_tbl TO '{parquet_path}' (FORMAT PARQUET);")
 
     print(f"[aggregate] OK → {parquet_path} (rows={len(df)})")
-

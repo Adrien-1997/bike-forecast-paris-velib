@@ -29,7 +29,9 @@
 #   docs/monitoring/model-health.md
 #
 # CLI:
-#   python tools/build_monitoring_model_health.py --perf docs/exports/perf.parquet --last-days 30 --tz Europe/Paris [--horizon 60]
+#   python tools/build_monitoring_model_health.py \
+#       --perf docs/exports/perf.parquet \
+#       --last-days 30 --tz Europe/Paris --horizon 15 --bin-min 5
 #
 from __future__ import annotations
 
@@ -44,12 +46,11 @@ import matplotlib.pyplot as plt
 # Optional for maps
 try:
     import folium
-    from branca.element import Element  # ⬅️ pour injecter la légende HTML
+    from branca.element import Element  # pour injecter la légende HTML
     HAS_FOLIUM = True
 except Exception:
     HAS_FOLIUM = False
     Element = None
-
 
 
 # --------------------------- Paths ---------------------------
@@ -81,7 +82,6 @@ def _load_any_station_coords() -> Optional[pd.DataFrame]:
             if "station_id" in {k.lower() for k in df.columns} and \
                "lat" in {k.lower() for k in df.columns} and \
                "lon" in {k.lower() for k in df.columns}:
-                # Normalise les noms
                 sid = cols.get("station_id", "station_id")
                 lat = cols.get("lat", "lat")
                 lon = cols.get("lon", "lon")
@@ -89,7 +89,7 @@ def _load_any_station_coords() -> Optional[pd.DataFrame]:
                 out["station_id"] = out["station_id"].astype(str)
                 out["lat"] = pd.to_numeric(out["lat"], errors="coerce")
                 out["lon"] = pd.to_numeric(out["lon"], errors="coerce")
-                return out.dropna(subset=["lat","lon"])
+                return out.dropna(subset=["lat", "lon"])
         except Exception:
             continue
     return None
@@ -105,7 +105,7 @@ def _ensure_latlon(perf: pd.DataFrame) -> pd.DataFrame:
         return perf
     reg = _load_any_station_coords()
     if reg is None or reg.empty:
-        return perf  # on laissera la carte se désactiver proprement
+        return perf
     return perf.merge(reg, on="station_id", how="left")
 
 
@@ -121,7 +121,7 @@ def _save_fig(path: Path) -> None:
     plt.savefig(path, dpi=150)
     plt.close()
 
-def _read_perf(path: Path) -> pd.DataFrame:
+def _read_perf(path: Path, bin_min: int = 5) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"[model-health] Not found: {path}")
     df = pd.read_parquet(path)
@@ -129,7 +129,7 @@ def _read_perf(path: Path) -> pd.DataFrame:
     # ts
     if "ts" not in df.columns:
         raise KeyError("[model-health] Missing 'ts' column")
-    df["ts"] = pd.to_datetime(df["ts"], errors="coerce").dt.floor("15min")
+    df["ts"] = pd.to_datetime(df["ts"], errors="coerce").dt.floor(f"{int(bin_min)}min")
 
     # station_id
     sid = None
@@ -149,7 +149,7 @@ def _read_perf(path: Path) -> pd.DataFrame:
     if "y_pred_baseline" in df.columns:
         df["y_pred_baseline"] = pd.to_numeric(df["y_pred_baseline"], errors="coerce")
     else:
-        # fallback: baseline = y_true (lift will be NaN instead of div-by-zero)
+        # fallback: baseline = y_true (lift sera NaN si base==model)
         df["y_pred_baseline"] = df["y_true"]
 
     # optional meta
@@ -364,11 +364,11 @@ def coverage_recent(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame([{"coverage_j1_pct": cov_j1, "coverage_7d_pct": cov7, "coverage_28d_pct": cov28,
                           "last_day": str(last_day)}])
 
-def residuals_acf(df: pd.DataFrame, nlags_steps: int = 48) -> pd.DataFrame:
+def residuals_acf(df: pd.DataFrame, nlags_steps: int = 48, bin_min: int = 5) -> pd.DataFrame:
     mask = df["y_pred"].notna()
     e = (df.loc[mask].groupby("ts").apply(lambda g: float((g["y_true"] - g["y_pred"]).mean()))).sort_index()
     ac = _acf(e, nlags=nlags_steps)
-    return pd.DataFrame({"lag_15min": list(range(len(ac))), "acf": ac})
+    return pd.DataFrame({f"lag_{int(bin_min)}min": list(range(len(ac))), "acf": ac})
 
 def top_degrading_stations(df: pd.DataFrame, top_n: int = 20) -> pd.DataFrame:
     seg = segments_7d(df)
@@ -475,13 +475,16 @@ def plot_calibration_by_hour(cal_hour: pd.DataFrame) -> None:
     plt.legend(loc="best")
     _save_fig(FIGS_DIR / "calibration_beta_by_hour_7d.png")
 
-def plot_acf(acf_df: pd.DataFrame) -> None:
+def plot_acf(acf_df: pd.DataFrame, bin_min: int = 5) -> None:
     if acf_df.empty:
         return
     plt.figure(figsize=(8, 3.0))
-    plt.bar(acf_df["lag_15min"], acf_df["acf"])
-    plt.title("ACF of mean residuals (up to 12h)")
-    plt.xlabel("Lag (15-min steps)"); plt.ylabel("Autocorr.")
+    lag_col = f"lag_{int(bin_min)}min"
+    if lag_col not in acf_df.columns:  # garde-fou
+        lag_col = acf_df.columns[0]
+    plt.bar(acf_df[lag_col], acf_df["acf"])
+    plt.title("ACF of mean residuals")
+    plt.xlabel(f"Lag ({int(bin_min)}-min steps)"); plt.ylabel("Autocorr.")
     _save_fig(FIGS_DIR / "residuals_acf.png")
 
 def plot_top_degrading(df: pd.DataFrame) -> None:
@@ -569,8 +572,6 @@ def map_error_by_station_7d(df: pd.DataFrame) -> None:
     out_path = MAPS_DIR / "model_error_by_station_7d.html"
     m.save(str(out_path))
     print(f"[model-health/map] Carte → {out_path}")
-
-
 
 
 # --------------------------- Markdown rendering ---------------------------
@@ -667,6 +668,7 @@ def _write_markdown(
     alerts: pd.DataFrame,
     have_cluster: bool,
     have_zone: bool,
+    bin_min: int,   # réservé si besoin d'afficher le pas plus tard
 ) -> None:
     # Chemins relatifs depuis la page MD
     fig_mae   = _rel_from_md(OUT_MD, FIGS_DIR / "mae_rmse_daily.png")
@@ -733,7 +735,6 @@ def _write_markdown(
         win_csv=win_csv, daily_csv=daily_csv,
         seg_st_csv=seg_st_csv, seg_hr_csv=seg_hr_csv, seg_cl_csv=seg_cl_csv, seg_zo_csv=seg_zo_csv,
         cal_glob_csv=cal_glob_csv, cal_hr_csv=cal_hr_csv, cov_csv=cov_csv, acf_csv=acf_csv, topdeg_csv=topdeg_csv, alerts_csv=alerts_csv,
-        # ⬇️ le paramètre manquant qui causait KeyError
         map_block=map_block,
     )
 
@@ -743,11 +744,11 @@ def _write_markdown(
 
 # --------------------------- Main ---------------------------
 
-def main(perf_path: Path, last_days: int, tz: Optional[str], horizon: Optional[int]) -> None:
+def main(perf_path: Path, last_days: int, tz: Optional[str], horizon: Optional[int], bin_min: int) -> None:
     _mkdirs()
 
     # Load & prepare
-    perf = _read_perf(perf_path)
+    perf = _read_perf(perf_path, bin_min=bin_min)
 
     # Optional horizon filter (prefer 'horizon_min', else 'horizon' if present)
     if horizon is not None:
@@ -789,7 +790,7 @@ def main(perf_path: Path, last_days: int, tz: Optional[str], horizon: Optional[i
     kov.to_csv(TABLES_DIR / "coverage_j1_j7_j28.csv", index=False)
 
     # Residual stability (ACF)
-    acf_df = residuals_acf(perf, nlags_steps=48)
+    acf_df = residuals_acf(perf, nlags_steps=48, bin_min=bin_min)
     if not acf_df.empty:
         acf_df.to_csv(TABLES_DIR / "residuals_acf.csv", index=False)
 
@@ -812,7 +813,7 @@ def main(perf_path: Path, last_days: int, tz: Optional[str], horizon: Optional[i
     # Figures
     plot_daily_series(daily)
     plot_calibration_by_hour(cal_hour if not cal_hour.empty else pd.DataFrame())
-    plot_acf(acf_df if not acf_df.empty else pd.DataFrame())
+    plot_acf(acf_df if not acf_df.empty else pd.DataFrame(), bin_min=bin_min)
     plot_top_degrading(top_deg if not top_deg.empty else pd.DataFrame())
 
     # Map (optional)
@@ -821,7 +822,7 @@ def main(perf_path: Path, last_days: int, tz: Optional[str], horizon: Optional[i
     # Markdown page
     _write_markdown(tz=tz, horizon=horizon, last_days=last_days,
                     win7=win7 or {}, win28=win28 or {}, alerts=alerts,
-                    have_cluster=have_cluster, have_zone=have_zone)
+                    have_cluster=have_cluster, have_zone=have_zone, bin_min=bin_min)
 
     print("[monitoring/model-health] Done.")
     print(f"[monitoring/model-health] Daily metrics → {TABLES_DIR / 'daily_metrics.csv'}")
@@ -833,6 +834,8 @@ if __name__ == "__main__":
     ap.add_argument("--last-days", type=int, default=30, help="Length of the daily series to export")
     ap.add_argument("--tz", type=str, default=None, help="Timezone for hour/day aggregations (e.g. Europe/Paris)")
     ap.add_argument("--horizon", type=int, default=None, help="Optional horizon (minutes) to filter on, if present")
+    ap.add_argument("--bin-min", type=int, default=5, help="Ingestion step (minutes) for ts flooring & ACF labeling")
     args = ap.parse_args()
 
-    main(perf_path=args.perf, last_days=args.last_days, tz=args.tz, horizon=args.horizon)
+    main(perf_path=args.perf, last_days=args.last_days, tz=args.tz,
+         horizon=args.horizon, bin_min=args.bin_min)

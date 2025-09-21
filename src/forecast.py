@@ -8,16 +8,17 @@ import numpy as np
 from lightgbm import LGBMRegressor
 import lightgbm as lgb
 
-from src.features import build_training_frame, _load_base_15min
+from src.features import build_training_frame, _load_base_5min  # <- pas 5 min
 
-# Emplacement unique du modèle (aligné avec train.yml)
+# Dossier modèles (inchangé)
 MODELS_DIR = Path("models")
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
-MODEL_PATH = MODELS_DIR / "lgb_nbvelos_T+60min.joblib"
+# Valeur héritée (non utilisée directement, on sauvegarde désormais en fonction de l'horizon)
+MODEL_PATH = MODELS_DIR / "lgb_nbvelos_T+15min.joblib"
 
 
 def _print_dataset_span():
-    df = _load_base_15min()
+    df = _load_base_5min()
     tmin = pd.to_datetime(df["tbin_utc"]).min()
     tmax = pd.to_datetime(df["tbin_utc"]).max()
     nrow = len(df)
@@ -35,9 +36,9 @@ def _try_build(horizon_minutes: int, lookback_days: int):
         return pd.DataFrame(), []
 
 
-def train(horizon_minutes: int = 60, lookback_days: int = 30):
+def train(horizon_minutes: int = 15, lookback_days: int = 30):
     """
-    Entraîne LGBM pour prédire nb vélos à T+60 min (bins 15 min).
+    Entraîne LGBM pour prédire nb vélos à T+horizon_minutes (bins de 5 min).
     Stratégie robuste : essaie plusieurs fenêtres si la première est vide.
     """
     _print_dataset_span()
@@ -97,27 +98,28 @@ def train(horizon_minutes: int = 60, lookback_days: int = 30):
         ],
     )
 
-    # Évaluation rapide (NumPy pur pour compat scikit-learn)
+    # Évaluation rapide
     y_true = y_va.values if hasattr(y_va, "values") else np.asarray(y_va)
     y_pred = np.asarray(model.predict(X_va))
     mae  = float(np.mean(np.abs(y_true - y_pred)))
     rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
     print(f"[train] MAE={mae:.3f} | RMSE={rmse:.3f} on {len(y_true)} samples")
 
-    # Sauvegarde artefact (unique) + vérif
+    # Sauvegarde artefact dépendant de l'horizon (ex: T+15min)
+    out_path = MODELS_DIR / f"lgb_nbvelos_T+{horizon_minutes}min.joblib"
     joblib.dump(
         {"model": model, "feat_cols": feat_cols, "horizon_minutes": horizon_minutes},
-        MODEL_PATH
+        out_path
     )
-    if (not MODEL_PATH.exists()) or (MODEL_PATH.stat().st_size == 0):
-        raise RuntimeError(f"[train] Échec sauvegarde modèle → {MODEL_PATH}")
+    if (not out_path.exists()) or (out_path.stat().st_size == 0):
+        raise RuntimeError(f"[train] Échec sauvegarde modèle → {out_path}")
 
-    print(f"[train] saved → {MODEL_PATH.resolve()}")
+    print(f"[train] saved → {out_path.resolve()}")
 
-    return {"mae": mae, "rmse": rmse, "n_valid": int(len(y_true)), "model_path": str(MODEL_PATH)}
+    return {"mae": mae, "rmse": rmse, "n_valid": int(len(y_true)), "model_path": str(out_path)}
 
 # --- Model loader for app ---------------------------------------------------
-def load_model_bundle(horizon_minutes: int = 60, model_dir: str | Path = MODELS_DIR):
+def load_model_bundle(horizon_minutes: int = 15, model_dir: str | Path = MODELS_DIR):
     """
     Charge le bundle (model, feat_cols, horizon_minutes) depuis models/.
     Retourne (model, feat_cols).

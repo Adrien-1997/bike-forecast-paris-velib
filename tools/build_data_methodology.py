@@ -1,16 +1,40 @@
 # tools/build_data_methodology.py
-# Page builder — "Data / Méthodologie & licences"
+# -----------------------------------------------------------------------------
+# Données — Page "Data / Méthodologie & licences"
 #
-# Ce script matérialise la méthodologie et produit :
-# - Tables CSV/JSON de vérifications
-# - Figures (dataflow, scores d'horizon, barres d'alignement)
-# - La page Markdown complète: docs/data/methodology.md
+# Rôle
+# ----
+# Matérialiser la **méthodologie de fabrication** des exports et produire :
+# - Tables : contrôles de normalisation, versionnage, licences, synthèse
+# - Figures : dataflow, scores d’horizon, barres d’alignement
+# - Doc     : `docs/data/methodology.md`
 #
-# Entrées: docs/exports/events.parquet, docs/exports/perf.parquet
-# Sorties:
-#   docs/assets/tables/data/methodology/*.csv|json
-#   docs/assets/figs/data/methodology/*.png
-#   docs/data/methodology.md
+# Entrées
+# -------
+# - `docs/exports/events.parquet`
+# - `docs/exports/perf.parquet`
+#
+# Sorties
+# -------
+# - `docs/assets/tables/data/methodology/*.csv|json`
+# - `docs/assets/figs/data/methodology/*.png`
+# - `docs/data/methodology.md`
+#
+# Notes
+# -----
+# - Cadence temporelle actuelle : pas **5 minutes** (arrondi des timestamps).
+# - Peut **inférer l’horizon** si `horizon_min` est absent, via égalité
+#   `y_true(T) ≈ events.bikes(T+h)`.
+#
+# CLI
+# ---
+# python tools/build_data_methodology.py \
+#   --events docs/exports/events.parquet \
+#   --perf docs/exports/perf.parquet \
+#   --tz Europe/Paris \
+#   --data-license LICENSE_DATA.txt \
+#   --code-license LICENSE
+# -----------------------------------------------------------------------------
 
 from __future__ import annotations
 
@@ -82,12 +106,15 @@ def _read_parquet(path: Path) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
-def _coerce_ts_15(df: pd.DataFrame, col: str = "ts") -> pd.DataFrame:
+def _coerce_ts_5(df: pd.DataFrame, col: str = "ts") -> pd.DataFrame:
+    """
+    Aligne la colonne temporelle sur un pas de 5 minutes (UTC aware).
+    """
     if col not in df.columns:
         return df
     out = df.copy()
     out[col] = pd.to_datetime(out[col], utc=True, errors="coerce")
-    out[col] = out[col].dt.floor("15min")
+    out[col] = out[col].dt.floor("5min")
     return out
 
 
@@ -178,9 +205,9 @@ def normalization_report(events: pd.DataFrame, perf: pd.DataFrame) -> pd.DataFra
 def _best_horizon_from_events(perf: pd.DataFrame, events: pd.DataFrame) -> Tuple[Optional[int], Dict[int, float]]:
     """
     Si perf.horizon_min absent, on infère l’horizon qui rend y_true ≈ events.bikes(ts+h).
-    On teste une grille et on prend le max du % d’égalité.
+    On teste une grille (multiples de 5) et on prend le max du % d’égalité.
     """
-    candidates = [15, 30, 45, 60, 90, 120, 150, 180]
+    candidates = [5, 10, 15, 20, 30, 45, 60, 90, 120, 150, 180]
     scores = {}
     for h in candidates:
         ev = events[["ts", "station_id", "bikes"]].copy()
@@ -352,7 +379,7 @@ def plot_dataflow(out_png: Path) -> None:
     box(0.05, 0.30, 0.25, 0.2, "Construction perf\n(ts, station_id,\ny_true @T+h, baseline,\ny_pred?, horizon_min)")
     arrow((0.175, 0.65), (0.175, 0.52)); arrow((0.175, 0.30), (0.175, 0.17))
 
-    box(0.40, 0.60, 0.28, 0.22, "Contrôles\n(schéma, types,\narrondi 15min)")
+    box(0.40, 0.60, 0.28, 0.22, "Contrôles\n(schéma, types,\narrondi 5min)")
     box(0.40, 0.25, 0.28, 0.22, "Cible & baseline\n(alignements,\nhorizon)")
     arrow((0.30, 0.70), (0.40, 0.70)); arrow((0.30, 0.35), (0.40, 0.35))
 
@@ -360,7 +387,7 @@ def plot_dataflow(out_png: Path) -> None:
     box(0.75, 0.25, 0.20, 0.22, "Licences\n(code & data)")
     arrow((0.68, 0.70), (0.75, 0.70)); arrow((0.68, 0.35), (0.75, 0.35))
 
-    ax.text(0.5, 0.03, "Dataflow — Méthodologie", ha="center", fontsize=11)
+    ax.text(0.5, 0.03, "Dataflow — Méthodologie (5 min)", ha="center", fontsize=11)
     _save_fig(out_png)
 
 
@@ -374,11 +401,11 @@ Cette page documente **comment** les exports sont produits et **dans quel cadre*
 
 ## 1) Méthodologie de fabrication (vue d’ensemble)
 
-- **Normalisation** : renommage des colonnes source → **schéma canonique**, arrondi des timestamps à 15 min, harmonisation des types.  
+- **Normalisation** : renommage des colonnes source → **schéma canonique**, arrondi des timestamps à 5 min, harmonisation des types.  
 - **Séparation** en deux vues :  
   - **`events.parquet`** (état instantané) ;  
   - **`perf.parquet`** (vérité à T+h ramenée à T, baseline, et prédictions si injectées).  
-- **Cible & baseline** : `y_true` = `bikes` à **T+h** par station ; `y_pred_baseline` = persistance (`bikes` à **T**).  
+- **Cible & baseline** : `y_true` = `bikes` à **T+h** par station ; `y_pred_baseline` = persistance (`bikes` à **T`).  
 - **Injection modèle** : `y_pred` est ajoutée après normalisation, en garantissant l’alignement sur **T** et le **mapping station** robuste (nom/lat/lon → `station_id`).
 
 ![Dataflow]({dataflow_rel})
@@ -460,9 +487,9 @@ def main(
     horizon_override: Optional[int] = None,
 ) -> None:
 
-    # Charger & normaliser
-    events = _ensure_station_id(_coerce_ts_15(_read_parquet(events_path), "ts"))
-    perf = _ensure_station_id(_coerce_ts_15(_read_parquet(perf_path), "ts"))
+    # Charger & normaliser (5 minutes)
+    events = _ensure_station_id(_coerce_ts_5(_read_parquet(events_path), "ts"))
+    perf = _ensure_station_id(_coerce_ts_5(_read_parquet(perf_path), "ts"))
 
     # Schémas effectifs
     events_schema_csv = TABLES_DIR / "events_schema_actual.csv"

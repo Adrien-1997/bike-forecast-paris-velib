@@ -2,8 +2,8 @@ name: velib-ingest
 
 on:
   schedule:
-    # Quarts d’heure précis en UTC → 01,16,31,46
-    - cron: "1,16,31,46 * * * *"
+    # Toutes les 5 minutes en UTC, décalées +1 min pour laisser le temps à la source de publier
+    - cron: "1-59/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -38,7 +38,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: python -m src.ingest
 
-      - name: Aggregate 15min + weather → docs/exports/
+      - name: Aggregate 5min + weather → docs/exports/
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: python -m src.aggregate
@@ -101,7 +101,7 @@ jobs:
 
           cd hf-ds
           git add -A
-          git commit -m "Update velib exports from ingest (15min)" || echo "Nothing to commit"
+          git commit -m "Update velib exports from ingest (5min)" || echo "Nothing to commit"
 
           # --- inject token dans le remote pour le push https ---
           HF_USER="${HF_DATASET%%/*}"

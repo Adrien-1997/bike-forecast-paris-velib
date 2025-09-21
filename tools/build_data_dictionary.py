@@ -1,38 +1,39 @@
 # tools/build_data_dictionary.py
-# Page builder — "Data / Dictionnaire & schéma"
+# -----------------------------------------------------------------------------
+# Données — Page "Data / Dictionnaire & schéma"
 #
-# But
+# Rôle
 # ----
-# Générer un dictionnaire de données formel (par fichier), aligné avec le
-# contrat décrit dans `dictionary.md`, et produire :
-#   - Dictionnaires canoniques : noms, types attendus (pandas/SQL), unités/domaines,
-#     description, caractère obligatoire, valeur par défaut, exemples.
-#   - Schémas *réels* lus dans les exports (types pandas détectés).
-#   - Vérifications de cohérence (règles) et rapport pass/warn/fail.
+# Produire un **dictionnaire formel** (noms, types pandas/SQL, unités/domaines,
+# description, obligatoire, défaut, exemples), comparer aux **schémas réels**,
+# exécuter des **règles de validation** et générer la page Markdown.
 #
-# Sorties (docs/assets/*)
-# ----------------------
-# tables/data/dictionary/
-#   - dictionary_events.csv
-#   - dictionary_perf.csv
-#   - schema_events_actual.csv
-#   - schema_perf_actual.csv
-#   - validation_rules.csv
-#   - validation_report_events.csv
-#   - validation_report_perf.csv
-#   - keys_uniqueness_report.csv
-#   - examples_events.csv
-#   - examples_perf.csv
-#   - build_info.json
+# Entrées
+# -------
+# - `docs/exports/events.parquet`
+# - `docs/exports/perf.parquet` (optionnel)
+#
+# Sorties
+# -------
+# - `docs/assets/tables/data/dictionary/*.csv|json`
+# - `docs/assets/figs/data/dictionary/*.png`
+# - `docs/data/dictionary.md`
+#
+# Notes
+# -----
+# - Cadence temporelle : pas **5 minutes** (arrondi des timestamps).
+# - Clé primaire attendue : `(ts, station_id)` unique dans les deux exports.
 #
 # CLI
 # ---
 # python tools/build_data_dictionary.py \
-#   --events docs/exports/events.parquet \
-#   --perf docs/exports/perf.parquet \
-#   --occ-tol 0.05
-#
-# Page builder — "Data / Dictionnaire & schéma" + page Markdown (docs/data/dictionary.md)
+#   --exports-dir docs/exports --occ-tol 0.05 --ts-mode aware
+# # ou
+# python tools/build_data_dictionary.py \
+#   --events docs/exports/events.parquet --perf docs/exports/perf.parquet \
+#   --occ-tol 0.05 --ts-mode aware
+# -----------------------------------------------------------------------------
+
 from __future__ import annotations
 
 import argparse
@@ -70,14 +71,14 @@ def _read_parquet_safe(path: Path) -> pd.DataFrame:
         raise FileNotFoundError(f"[dictionary] Fichier introuvable: {path}")
     return pd.read_parquet(path)
 
-def _coerce_ts_15m(df: pd.DataFrame, col: str, ts_mode: str) -> pd.DataFrame:
-    """Normalise la colonne temporelle au pas 15 min.
+def _coerce_ts_5m(df: pd.DataFrame, col: str, ts_mode: str) -> pd.DataFrame:
+    """Normalise la colonne temporelle au pas 5 min.
        - ts_mode='aware'  → datetime64[ns, UTC]
        - ts_mode='naive'  → datetime64[ns] (UTC implicite)"""
     if col not in df.columns:
         return df
     df = df.copy()
-    s = pd.to_datetime(df[col], errors="coerce", utc=True).dt.floor("15min")
+    s = pd.to_datetime(df[col], errors="coerce", utc=True).dt.floor("5min")
     if ts_mode == "naive":
         s = s.dt.tz_convert("UTC").dt.tz_localize(None)
     df[col] = s
@@ -133,8 +134,8 @@ def _dictionary_events(ts_mode: str) -> pd.DataFrame:
     ts_pandas, ts_sql = _ts_desc(ts_mode)
     rows = [
         ("ts", ts_pandas, ts_sql,
-         "UTC, pas 15 min (xx:00, :15, :30, :45)",
-         f"Horodatage du *bin source* ({'UTC naïf' if ts_mode=='naive' else 'UTC tz-aware'}), arrondi 15 min.",
+         "UTC, pas 5 min (xx:00, :05, :10, …)",
+         f"Horodatage du *bin source* ({'UTC naïf' if ts_mode=='naive' else 'UTC tz-aware'}), arrondi 5 min.",
          True, None, "2025-01-02 08:15"),
         ("station_id", "string", "text",
          "Identifiant station stable", "Identifiant canonique de la station (chaîne).",
@@ -162,7 +163,7 @@ def _dictionary_perf(ts_mode: str) -> pd.DataFrame:
     ts_pandas, ts_sql = _ts_desc(ts_mode)
     rows = [
         ("ts", ts_pandas, ts_sql,
-         "UTC, pas 15 min (xx:00, :15, :30, :45)",
+         "UTC, pas 5 min (xx:00, :05, :10, …)",
          f"Horodatage *T* (même bin que events, {'UTC naïf' if ts_mode=='naive' else 'UTC tz-aware'}).",
          True, None, "2025-01-02 08:15"),
         ("station_id", "string", "text",
@@ -174,7 +175,7 @@ def _dictionary_perf(ts_mode: str) -> pd.DataFrame:
         ("y_pred", "float64", "double precision",
          "≥ 0", "Prédiction du modèle alignée sur T (optionnelle).", False, None, "8.4"),
         ("horizon_min", "int64", "bigint",
-         "> 0", "Horizon en minutes (ex. 60).", False, None, "60"),
+         "> 0", "Horizon en minutes (ex. 15).", False, None, "15"),
     ]
     return pd.DataFrame(rows, columns=[
         "name","type_pandas","type_sql","unit_or_domain",
@@ -195,7 +196,7 @@ def _validation_rules(ts_mode: str) -> pd.DataFrame:
         ("E_RANGE_CAP","events","soft","capacity>=0 (si présent)","capacity non négatif"),
         ("E_OCC_FORMULA","events","soft","median(|occ-(bikes/capacity)|) <= tol (95% lignes avec capacity>0)","occ≈bikes/capacity (tolérance)"),
         ("E_KEY_UNIQ","events","hard","unique(ts,station_id)","Clé (ts,station_id) unique"),
-        ("E_STEP_15M","events","soft","ts minute%15==0","Horodatages alignés (pas 15 min)"),
+        ("E_STEP_5M","events","soft","ts minute%5==0","Horodatages alignés (pas 5 min)"),
 
         ("P_COL_TS","perf","hard","column_exists(ts)","Colonne ts présente"),
         ("P_COL_STID","perf","hard","column_exists(station_id)","Colonne station_id présente"),
@@ -205,7 +206,7 @@ def _validation_rules(ts_mode: str) -> pd.DataFrame:
         ("P_NUM_NONNEG","perf","soft","y_true,y_pred_baseline,y_pred >= 0 (si présents)","Non négatifs"),
         ("P_HORIZON_GT0","perf","soft","horizon_min>0 (si présent)","Horizon positif"),
         ("P_KEY_UNIQ","perf","hard","unique(ts,station_id)","Clé (ts,station_id) unique"),
-        ("P_STEP_15M","perf","soft","ts minute%15==0","Horodatages alignés (pas 15 min)"),
+        ("P_STEP_5M","perf","soft","ts minute%5==0","Horodatages alignés (pas 5 min)"),
     ]
     return pd.DataFrame(rows, columns=["id","applies_to","severity","rule","description"])
 
@@ -221,8 +222,8 @@ def _validate_events(df: pd.DataFrame, occ_tol: float, ts_mode: str) -> pd.DataF
         tz = getattr(df["ts"].dt.tz, "zone", None)
         ok_ts = (tz is None) if ts_mode=="naive" else (tz is not None)
         add("E_TYPE_TS", "pass" if ok_ts else "fail", detail=("tz-aware" if tz else "tz-naive"))
-        mis = (df["ts"].dt.minute % 15 != 0).mean() * 100.0
-        add("E_STEP_15M", "pass" if mis == 0 else "warn", detail=f"misaligned_pct={mis:.3f}%")
+        mis = (df["ts"].dt.minute % 5 != 0).mean() * 100.0
+        add("E_STEP_5M", "pass" if mis == 0 else "warn", detail=f"misaligned_pct={mis:.3f}%")
     else:
         add("E_TYPE_TS","fail","non-datetime")
 
@@ -275,8 +276,8 @@ def _validate_perf(df: pd.DataFrame, ts_mode: str) -> pd.DataFrame:
         tz = getattr(df["ts"].dt.tz, "zone", None)
         ok_ts = (tz is None) if ts_mode=="naive" else (tz is not None)
         add("P_TYPE_TS", "pass" if ok_ts else "fail", detail=("tz-aware" if tz else "tz-naive"))
-        mis = (df["ts"].dt.minute % 15 != 0).mean() * 100.0
-        add("P_STEP_15M", "pass" if mis == 0 else "warn", detail=f"misaligned_pct={mis:.3f}%")
+        mis = (df["ts"].dt.minute % 5 != 0).mean() * 100.0
+        add("P_STEP_5M", "pass" if mis == 0 else "warn", detail=f"misaligned_pct={mis:.3f}%")
     else:
         add("P_TYPE_TS","fail","non-datetime")
 
@@ -353,7 +354,7 @@ Chaque table documente : **Nom** · **Type (pandas/SQL)** · **Unité/domaine** 
 - `bikes >= 0`, `capacity >= 0`, `0 ≤ occ ≤ 1`.  
 - Si `capacity` connue, alors `occ ≈ bikes / capacity` (tolérance).  
 - `y_true`, `y_pred`, `y_pred_baseline` **non négatifs** ; `horizon_min > 0`.  
-- **Horodatage** : `ts` en {ts_human}, arrondi *:00, :15, :30, :45*.
+- **Horodatage** : `ts` en {ts_human}, arrondi *:00, :05, :10, …*.
 
 Règles listées : {validation_rules_rel} — Rapport d’exécution : {validation_report_events_rel} · {validation_report_perf_rel}
 
@@ -397,9 +398,9 @@ def main(events_path: Path, perf_path: Path, occ_tol: float, ts_mode: str) -> No
     dict_perf.to_csv(TABLES_DIR / "dictionary_perf.csv", index=False)
 
     # 2) Charger exports & normaliser
-    events = _ensure_station_str(_coerce_ts_15m(_read_parquet_safe(events_path), "ts", ts_mode))
+    events = _ensure_station_str(_coerce_ts_5m(_read_parquet_safe(events_path), "ts", ts_mode))
     if perf_path.exists():
-        perf = _ensure_station_str(_coerce_ts_15m(_read_parquet_safe(perf_path), "ts", ts_mode))
+        perf = _ensure_station_str(_coerce_ts_5m(_read_parquet_safe(perf_path), "ts", ts_mode))
     else:
         perf = pd.DataFrame(columns=["ts","station_id"])
 
@@ -451,15 +452,15 @@ def main(events_path: Path, perf_path: Path, occ_tol: float, ts_mode: str) -> No
                         "perf": {"ts_min": pf_stats["ts_min"], "ts_max": pf_stats["ts_max"]}},
         "tolerances": {"occ_abs_tolerance": occ_tol, "occ_share_within_tol_min_pct": 95.0},
         "primary_key": ["ts","station_id"],
-        "timestamp_granularity": f"15min ({'UTC naïf' if ts_mode=='naive' else 'UTC tz-aware'})"
+        "timestamp_granularity": f"5min ({'UTC naïf' if ts_mode=='naive' else 'UTC tz-aware'})"
     }
     (TABLES_DIR / "build_info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # 9) Petites jauges visuelles
     dup_events = events.duplicated(subset=["ts","station_id"]).mean()*100.0 if set(("ts","station_id")).issubset(events.columns) else 100.0
-    mis_events = (events["ts"].dt.minute % 15 != 0).mean()*100.0 if "ts" in events.columns and len(events) else 100.0
+    mis_events = (events["ts"].dt.minute % 5 != 0).mean()*100.0 if "ts" in events.columns and len(events) else 100.0
     _bar(dup_events, "Duplication clés (events) %", "dup_pct.png")
-    _bar(mis_events, "Misaligned 15min (events) %", "misaligned_pct.png")
+    _bar(mis_events, "Misaligned 5min (events) %", "misaligned_pct.png")
 
     # 10) Page Markdown
     md = _render_md(ev_stats, pf_stats, ts_mode)

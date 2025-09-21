@@ -1,10 +1,60 @@
-# tools/build_network_dynamics.py
+# -----------------------------------------------------------------------------
+# Projet : Bike Forecasting — Réseau / Dynamiques spatio-temporelles
+# Cadence d’ingestion : 5 minutes
+# Horizon de prévision (référence projet) : 15 minutes  (non utilisé ici)
+#
+# Objet du script
+# ---------------
+# - Génère la page `docs/network/dynamics.md` et ses artefacts.
+# - Analyses : heatmaps h×j, profils intra-semaine, épisodes (pénurie/saturation),
+#   agrégations par zone, carte temporelle de la dernière journée.
+#
+# Hypothèses & conventions
+# ------------------------
+# - Les événements (events) sont échantillonnés à un pas `bin_min` (par défaut 5 min).
+# - Le timestamp `ts` est en UTC (naïf), arrondi au pas `bin_min`.
+# - Les colonnes attendues sont auto-détectées : ts|tbin_utc|timestamp,
+#   station_id|stationcode|id, bikes, docks_avail (optionnel), capacity_src (optionnel),
+#   lat/lon (optionnels pour cartes/zones).
+#
+# CLI (exemples)
+# --------------
+#   python tools/build_network_dynamics.py \
+#     --events docs/exports/events.parquet \
+#     --last-days 7 \
+#     --tz Europe/Paris \
+#     --bin-min 5
+#
+# Sorties (docs/assets/*)
+# -----------------------
+# Figures : assets/figs/network/dynamics/
+#   - heatmap_occ.png
+#   - heatmap_tension.png
+#   - profile_occ_by_dow.png
+#   - hourly_pen_sat.png
+#   - episodes_hist.png
+#   - byzone_tension_top.png
+# Tables  : assets/tables/network/dynamics/
+#   - tension_by_station.csv
+#   - regularity_today.csv
+#   - episodes.csv
+#   - by_zone.csv
+# Cartes  : assets/maps/
+#   - network_lastday.html (si Folium disponible)
+# Page MD : docs/network/dynamics.md
+#
+# Paramètres clés (cohérence projet)
+# ----------------------------------
+# BIN_MIN        = 5    # pas temporel des events (minutes)
+# LAST_DAYS_DEF  = 7    # fenêtre récente pour certains indicateurs
+# TIMEZONE_IANA  = "Europe/Paris"
+# -----------------------------------------------------------------------------
 from __future__ import annotations
 
-import argparse, sys, math, json
+import argparse, sys, math, json, os, locale
 from pathlib import Path
 from typing import Optional, List, Tuple
-import os
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -16,11 +66,6 @@ try:
 except Exception:
     HAS_FOLIUM = False
 
-import os, locale
-
-ENC = "utf-8"
-
-
 # --------------------------- Paths & constants ---------------------------
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,14 +75,19 @@ FIGS_DIR = ASSETS / "figs" / "network" / "dynamics"
 TABLES_DIR = ASSETS / "tables" / "network" / "dynamics"
 MAPS_DIR = ASSETS / "maps"
 
+# Fenêtres & pas
 PROFILE_LONG_DAYS = 90        # fenêtre pour la journée-type
-EPISODE_MIN_STEPS = 4         # séquence mini (4 pas = 1h) pour déclarer un épisode
 FRAME_STEP_MIN = 60           # pas de temps (minutes) pour l’animation (1 point par heure)
+
+# Encodage d’écriture (préférences système → fallback utf-8)
+try:
+    ENC = locale.getpreferredencoding(False) or "utf-8"
+except Exception:
+    ENC = "utf-8"
 
 # --- Markdown output (page 1) ---
 OUT_MD = DOCS / "network" / "dynamics.md"
 OUT_MD.parent.mkdir(parents=True, exist_ok=True)
-
 
 # --------------------------- Utils ---------------------------
 
@@ -46,61 +96,56 @@ def _mkdirs() -> None:
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
     MAPS_DIR.mkdir(parents=True, exist_ok=True)
 
-def _read_events(path: Path) -> pd.DataFrame:
+def _read_events(path: Path, bin_min: int) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"[dynamics] Introuvable: {path}")
     df = pd.read_parquet(path)
 
     # ts
-    for tc in ("ts", "tbin_utc"):
+    tcol = None
+    for tc in ("ts", "tbin_utc", "timestamp"):
         if tc in df.columns:
-            df["ts"] = pd.to_datetime(df[tc], errors="coerce")
-            break
-    if "ts" not in df.columns:
-        raise KeyError("[dynamics] Colonne temporelle manquante (ts/tbin_utc)")
-    df["ts"] = df["ts"].dt.floor("15min")
+            tcol = tc; break
+    if tcol is None:
+        raise KeyError("[dynamics] Colonne temporelle manquante (ts/tbin_utc/timestamp)")
+    df["ts"] = pd.to_datetime(df[tcol], errors="coerce").dt.floor(f"{int(bin_min)}min")
 
     # station_id
     sid = None
-    for c in ("station_id", "stationcode", "stationCode", "id"):
+    for c in ("station_id", "stationcode", "stationCode", "id", "station"):
         if c in df.columns:
-            sid = c
-            break
+            sid = c; break
     if sid is None:
         raise KeyError("[dynamics] Identifiant station manquant (station_id/stationcode)")
     df["station_id"] = df[sid].astype(str)
 
     # bikes
     bikes_col = None
-    for c in ("bikes", "nb_velos_bin", "velos_disponibles", "numBikesAvailable", "n_bikes"):
+    for c in ("bikes", "nb_velos_bin", "velos_disponibles", "num_bikes_available", "numBikesAvailable", "n_bikes", "available_bikes"):
         if c in df.columns:
-            bikes_col = c
-            break
+            bikes_col = c; break
     if bikes_col is None:
-        raise KeyError("[dynamics] Colonne vélos manquante (bikes/nb_velos_bin/velos_disponibles)")
+        raise KeyError("[dynamics] Colonne vélos manquante (bikes/num_bikes_available/...)")
     df["bikes"] = pd.to_numeric(df[bikes_col], errors="coerce")
 
     # docks + capacity (optionnels)
     docks_col = None
-    for c in ("docks", "docks_disponibles", "numDocksAvailable", "places_disponibles"):
+    for c in ("docks_avail", "docks", "docks_disponibles", "num_docks_available", "numDocksAvailable", "available_docks"):
         if c in df.columns:
-            docks_col = c
-            break
+            docks_col = c; break
     df["docks_avail"] = pd.to_numeric(df.get(docks_col, np.nan), errors="coerce")
 
     cap_col = None
-    for c in ("capacity", "cap", "dock_count", "n_docks_total"):
+    for c in ("capacity_src", "capacity", "cap", "dock_count", "n_docks_total", "capacity_est"):
         if c in df.columns:
-            cap_col = c
-            break
+            cap_col = c; break
     df["capacity_src"] = pd.to_numeric(df.get(cap_col, np.nan), errors="coerce")
 
     # meta
     name_col = None
     for c in ("name", "station_name", "label"):
         if c in df.columns:
-            name_col = c
-            break
+            name_col = c; break
     df["name"] = df.get(name_col, df["station_id"]).astype(str)
     df["lat"]  = pd.to_numeric(df.get("lat", np.nan), errors="coerce")
     df["lon"]  = pd.to_numeric(df.get("lon", np.nan), errors="coerce")
@@ -124,7 +169,7 @@ def _placeholder_fig(path: Path, message: str) -> None:
 
 def _write_json(path: Path, obj: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
+    with path.open("w", encoding=ENC) as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
 def rel_from_md(md_path: Path, target: Path) -> str:
@@ -140,28 +185,26 @@ def _estimate_capacity(win: pd.DataFrame) -> pd.Series:
     """Capacité estimée par station (priorité: capacity_src ; sinon q98(bikes+docks) ; sinon q98(bikes))."""
     def est(g: pd.DataFrame) -> float:
         cap_src = pd.to_numeric(g["capacity_src"], errors="coerce")
-        cap = cap_src.max()  # peut être NaN/pd.NA
+        cap = cap_src.max()
         if pd.notna(cap) and float(cap) > 0:
             return float(cap)
-        if g["docks_avail"].notna().any():
-            s = (g["bikes"].clip(lower=0) + g["docks_avail"].clip(lower=0)).dropna()
+        if "docks_avail" in g.columns and g["docks_avail"].notna().any():
+            s = (pd.to_numeric(g["bikes"], errors="coerce").clip(lower=0) +
+                 pd.to_numeric(g["docks_avail"], errors="coerce").clip(lower=0)).dropna()
             if len(s):
                 return float(s.quantile(0.98))
-        b = g["bikes"].clip(lower=0).dropna()
+        b = pd.to_numeric(g["bikes"], errors="coerce").clip(lower=0).dropna()
         return float(b.quantile(0.98)) if len(b) else np.nan
 
-    cols = ["capacity_src", "docks_avail", "bikes"]  # évite FutureWarning
+    cols = ["capacity_src", "docks_avail", "bikes"]
     return win.groupby("station_id")[cols].apply(est).rename("capacity_est")
 
-
 def _attach_cap_est(frame: pd.DataFrame, cap_s: pd.Series) -> pd.DataFrame:
-    """Ajoute la colonne 'cap_est' en joignant une Series indexée par station_id."""
     cap_df = cap_s.rename("cap_est").to_frame()
     out = frame.merge(cap_df, left_on="station_id", right_index=True, how="left")
     if "cap_est" not in out.columns:
         out["cap_est"] = np.nan
     return out
-
 
 # --------------------------- 1) Heatmaps h×j réseau ---------------------------
 
@@ -229,13 +272,9 @@ def _heatmap_network(df: pd.DataFrame, tz: Optional[str]) -> pd.DataFrame:
     plt.colorbar()
     _save_fig(FIGS_DIR / "heatmap_tension.png")
 
-    # Retourne ce qu'il faut pour d'autres vues
     pivot_pen.name = "penury_rate"
     pivot_sat.name = "saturation_rate"
-    return pd.concat(
-        {"occ": pivot_occ, "pen": pivot_pen, "sat": pivot_sat},
-        axis=1
-    )
+    return pd.concat({"occ": pivot_occ, "pen": pivot_pen, "sat": pivot_sat}, axis=1)
 
 # --------------------------- 1bis) Profils & autres visuels ---------------------------
 
@@ -291,13 +330,13 @@ def _extra_network_views(df: pd.DataFrame, tz: Optional[str], last_days: int) ->
     _save_fig(FIGS_DIR / "hourly_pen_sat.png")
 
     # ---- Histogramme des épisodes (7 j par défaut)
-    epi = _episodes(df, last_days=last_days)
+    epi = _episodes(df, last_days=last_days, bin_min_hint=15)  # hint uniquement pour l'étiquette (voir _episodes)
     if len(epi):
         epi = epi.copy()
-        epi["duration_min"] = epi["steps"].astype(int) * 15
-        bins = list(range(60, 16*60 + 1, 60))  # 1h -> 16h, pas 1h
+        # duration_min déjà calculée dans _episodes
+        # Bins par heure complète, de 1h à 16h
+        bins = list(range(60, 16*60 + 1, 60))
 
-        # Ne tracer que s'il y a au moins une série non vide
         has_any = False
         plt.figure(figsize=(10, 3.8))
         for typ, label in (("penury", "Pénurie"), ("saturation", "Saturation")):
@@ -330,7 +369,6 @@ def _extra_network_views(df: pd.DataFrame, tz: Optional[str], last_days: int) ->
     else:
         _placeholder_fig(FIGS_DIR / "byzone_tension_top.png", f"Pas de zones calculées ({last_days} j)")
 
-
 # --------------------------- 2) Indice de tension par station ---------------------------
 
 def _tension_index_by_station(df: pd.DataFrame, last_days: int) -> pd.DataFrame:
@@ -362,7 +400,6 @@ def _tension_index_by_station(df: pd.DataFrame, last_days: int) -> pd.DataFrame:
     res["tension_index"] = res["penury_rate"] + res["saturation_rate"]
     res.sort_values("tension_index", ascending=False, inplace=True)
     return res
-
 
 # --------------------------- 3) Régularité "aujourd’hui" ---------------------------
 
@@ -427,15 +464,28 @@ def _regularity_today(df: pd.DataFrame, tz: Optional[str]) -> pd.DataFrame:
         rows.append({"station_id": sid, "regularity_corr_today_vs_typical": corr})
     return pd.DataFrame(rows)
 
-
 # --------------------------- 4) Détection d’épisodes ---------------------------
 
-def _episodes(df: pd.DataFrame, last_days: int, min_steps: int = EPISODE_MIN_STEPS) -> pd.DataFrame:
+def _episodes(df: pd.DataFrame, last_days: int, bin_min_hint: Optional[int] = None, min_steps_hours: int = 1) -> pd.DataFrame:
+    """
+    Détecte des épisodes binaires (pénurie/saturation) sur la fenêtre.
+    - min_steps_hours : durée mini (heures) d’un épisode.
+    - La taille d’un pas est dérivée des données (différence médiane) si possible ; sinon on
+      utilise bin_min_hint si fourni, sinon 15 min en dernier recours.
+    """
     if last_days <= 0 or df.empty:
         return pd.DataFrame()
     tmax = df["ts"].max()
     tmin = tmax - pd.Timedelta(days=last_days)
-    win = df[(df["ts"] >= tmin) & (df["ts"] <= tmax)].copy()
+    win = df[(df["ts"] >= tmin) & (df["ts"] <= tmax)].copy().sort_values("ts")
+
+    # Pas temporel (minutes) estimé sur la fenêtre
+    if len(win["ts"]) >= 3:
+        diffs = win["ts"].sort_values().diff().dropna().dt.total_seconds() / 60.0
+        step_min = float(np.median(diffs)) if len(diffs) else float(bin_min_hint or 15)
+    else:
+        step_min = float(bin_min_hint or 15)
+    min_steps = max(1, int(round((min_steps_hours * 60.0) / step_min)))
 
     win["is_penury"] = pd.to_numeric(win["bikes"], errors="coerce").fillna(0.0) == 0.0
     win["is_saturation"] = pd.to_numeric(win["docks_avail"], errors="coerce").fillna(0.0) == 0.0
@@ -451,10 +501,13 @@ def _episodes(df: pd.DataFrame, last_days: int, min_steps: int = EPISODE_MIN_STE
                 prev_ts = ts
             else:
                 if start is not None:
-                    runs.append((start, prev_ts, int((prev_ts - start).total_seconds() / 60 / 15) + 1))
+                    # nombre de pas estimé = round((dt/min)/step_min) + 1
+                    steps = int(round(((prev_ts - start).total_seconds() / 60.0) / step_min)) + 1
+                    runs.append((start, prev_ts, steps))
                     start, prev_ts = None, None
         if start is not None:
-            runs.append((start, prev_ts, int((prev_ts - start).total_seconds() / 60 / 15) + 1))
+            steps = int(round(((prev_ts - start).total_seconds() / 60.0) / step_min)) + 1
+            runs.append((start, prev_ts, steps))
         return [r for r in runs if r[2] >= min_steps]
 
     rows = []
@@ -466,8 +519,10 @@ def _episodes(df: pd.DataFrame, last_days: int, min_steps: int = EPISODE_MIN_STE
             rows.append({"station_id": sid, "type": "penury", "start": a, "end": b, "steps": k})
         for a, b, k in sat_runs:
             rows.append({"station_id": sid, "type": "saturation", "start": a, "end": b, "steps": k})
-    return pd.DataFrame(rows).sort_values(["station_id", "start"])
-
+    out = pd.DataFrame(rows).sort_values(["station_id", "start"])
+    if not out.empty:
+        out["duration_min"] = out["steps"].astype(int) * step_min
+    return out
 
 # --------------------------- 5) Agrégations spatiales ---------------------------
 
@@ -483,7 +538,6 @@ def _by_zone(df: pd.DataFrame, last_days: int) -> pd.DataFrame:
             return "NA"
         return f"{round(lat, 3)}|{round(lon, 3)}"
 
-    # Prépare la zone
     df = df.copy()
     df["zone"] = [zone_label(a, b) for a, b in zip(df.get("lat"), df.get("lon"))]
 
@@ -506,7 +560,6 @@ def _by_zone(df: pd.DataFrame, last_days: int) -> pd.DataFrame:
     occ = np.where((~np.isnan(cap_num)) & (cap_num > 0), np.clip(occ, 0.0, 1.0), np.nan)
     win["occ"] = occ
 
-    # Agrégations par zone
     agg = win.groupby("zone", dropna=False).agg(
         occ_mean=("occ", "mean"),
         penury_rate=("bikes", lambda s: float((pd.to_numeric(s, errors="coerce").fillna(0.0) == 0.0).mean())),
@@ -516,8 +569,6 @@ def _by_zone(df: pd.DataFrame, last_days: int) -> pd.DataFrame:
     ).reset_index()
 
     return agg.sort_values("occ_mean", ascending=True)
-
-
 
 # --------------------------- 6) Carte temporelle (animation last 24h) ---------------------------
 
@@ -569,7 +620,6 @@ def _temporal_map_last_day(df: pd.DataFrame, tz: Optional[str]) -> None:
         TimestampedGeoJson(gj, period="PT1H", add_last_point=True, duration="PT10M").add_to(m)
         MAPS_DIR.mkdir(parents=True, exist_ok=True)
         m.save(str(MAPS_DIR / "network_lastday.html"))
-
 
 # --------------------------- Markdown template ---------------------------
 
@@ -642,19 +692,17 @@ Mettre en évidence les **rythmes** et **déplacements de pression** dans la vil
 - Les **clusters** aident à comparer *des stations comparables* entre elles.
 """
 
-
 # --------------------------- Orchestrateur ---------------------------
 
-def run(events_path: Path, last_days: int, tz: Optional[str]) -> None:
+def run(events_path: Path, last_days: int, tz: Optional[str], bin_min: int) -> None:
     _mkdirs()
-    df = _read_events(events_path)
+    df = _read_events(events_path, bin_min=bin_min)
     msg = (f"[dynamics] events: {len(df):,} rows, stations={df['station_id'].nunique()}  "
-        f"span=({df['ts'].min()} -> {df['ts'].max()})")
+           f"span=({df['ts'].min()} -> {df['ts'].max()})  bin={bin_min}min")
     print(msg)
 
-
     # Heatmaps + pivots h×j
-    pivots = _heatmap_network(df, tz=tz)
+    _ = _heatmap_network(df, tz=tz)
 
     # Autres visuels (profils, épisodes, zones)
     _extra_network_views(df, tz=tz, last_days=last_days)
@@ -668,7 +716,7 @@ def run(events_path: Path, last_days: int, tz: Optional[str]) -> None:
     reg.to_csv(TABLES_DIR / "regularity_today.csv", index=False)
     print(f"[dynamics] regularity_today: {len(reg)} rows -> {TABLES_DIR/'regularity_today.csv'}")
 
-    epi = _episodes(df, last_days=last_days)
+    epi = _episodes(df, last_days=last_days, bin_min_hint=bin_min)
     epi.to_csv(TABLES_DIR / "episodes.csv", index=False)
     print(f"[dynamics] episodes: {len(epi)} rows -> {TABLES_DIR/'episodes.csv'}")
 
@@ -679,7 +727,6 @@ def run(events_path: Path, last_days: int, tz: Optional[str]) -> None:
     _temporal_map_last_day(df, tz=tz)
     if HAS_FOLIUM:
         print(f"[dynamics] map -> {MAPS_DIR/'network_lastday.html'}")
-
 
     # --- Render Markdown page (page 1) ---
     md = MD_TEMPLATE.format(
@@ -696,14 +743,12 @@ def run(events_path: Path, last_days: int, tz: Optional[str]) -> None:
         episodes_csv_rel=rel_from_md(OUT_MD, TABLES_DIR / "episodes.csv"),
         byzone_csv_rel=rel_from_md(OUT_MD, TABLES_DIR / "by_zone.csv"),
     )
-    with open(OUT_MD, "w", encoding=ENC, newline="\n") as f:  # plus de "utf-8" forcé
+    with open(OUT_MD, "w", encoding=ENC, newline="\n") as f:
         f.write(md)
     print(f"[dynamics] md  -> {OUT_MD} (encoding={ENC})")
 
-
-def main(events_path: str, last_days: int, tz: Optional[str]) -> None:
-    run(Path(events_path), last_days=last_days, tz=tz)
-
+def main(events_path: str, last_days: int, tz: Optional[str], bin_min: int) -> None:
+    run(Path(events_path), last_days=last_days, tz=tz, bin_min=bin_min)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -711,6 +756,7 @@ if __name__ == "__main__":
                         help="Chemin local vers events.parquet (généré par tools/datasets.py dans ce run)")
     parser.add_argument("--last-days", type=int, default=7, help="Fenêtre récente pour certains indicateurs")
     parser.add_argument("--tz", type=str, default=None, help="Timezone ex: Europe/Paris")
+    parser.add_argument("--bin-min", type=int, default=5, help="Pas temporel des events (minutes)")
     args = parser.parse_args()
 
-    sys.exit(main(events_path=args.events, last_days=args.last_days, tz=args.tz))
+    sys.exit(main(events_path=args.events, last_days=args.last_days, tz=args.tz, bin_min=args.bin_min))
