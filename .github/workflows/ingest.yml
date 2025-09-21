@@ -2,9 +2,9 @@ name: velib-ingest
 
 on:
   schedule:
-    # Toutes les 5 minutes (UTC). On décale de 60s dans le job pour laisser la source publier.
+    # Toutes les 5 minutes (UTC)
     - cron: "*/5 * * * *"
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -17,24 +17,58 @@ jobs:
   ingest_aggregate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      TZ: Europe/Paris
+      MPLBACKEND: Agg
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_INPUT: "1"
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install pipeline deps
+      - name: Heartbeat (log trigger times)
+        shell: bash
         run: |
-          python -m pip install -U pip
-          pip install -r requirements-pipeline.txt
+          set -euo pipefail
+          echo "event=${{ github.event_name }}"
+          echo "ref=${{ github.ref }}"
+          echo "sha=${{ github.sha }}"
+          date -u "+UTC   %Y-%m-%d %H:%M:%S"
+          date    "+PARIS %Y-%m-%d %H:%M:%S %Z"
 
-      # Petit tampon pour laisser l'OpenData publier (équiv. à ton 1-59/5)
-      - name: Offset start by ~60s
+      - name: Decide mode (push every 15 min)
+        shell: bash
+        run: |
+          set -euo pipefail
+          MINUTE=$(date -u +%M)
+          MOD=$((10#$MINUTE % 15))
+          if [ "$MOD" = "1" ]; then
+            echo "DO_HF_PUSH=true" >> "$GITHUB_ENV"
+            echo "[mode] This tick WILL push to Hugging Face (minute=$MINUTE, mod15=$MOD)"
+          else
+            echo "DO_HF_PUSH=false" >> "$GITHUB_ENV"
+            echo "[mode] This tick is ingest+aggregate only (minute=$MINUTE, mod15=$MOD)"
+          fi
+
+      - name: Install pipeline deps (prefer wheels)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -U pip
+          pip install -r requirements-pipeline.txt --prefer-binary --no-build-isolation
+
+      # Tampon pour laisser l'OpenData publier
+      - name: Offset start (~60s)
+        shell: bash
         run: sleep 60
 
       - name: Ingest snapshot (OpenData → DuckDB)
@@ -42,49 +76,61 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: python -m src.ingest
 
+      # ✅ Aggregate à chaque tick → fraîcheur 5 min pour l'app
       - name: Aggregate 5min + weather → docs/exports/
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: python -m src.aggregate
 
-      - name: Inspect exports
+      - name: Inspect exports (quick sanity checks)
         shell: bash
         run: |
-          echo "=== Exports present? ==="
+          set -euo pipefail
+          echo "=== Listing docs/exports ==="
           ls -lh docs/exports || true
-          python -c "import pathlib, pandas as pd; p=pathlib.Path('docs/exports/velib.parquet'); print('[ingest] file exists:', p.exists()); \
-                     (print('[ingest] rows:', len(pd.read_parquet(p)), 'stations:', pd.read_parquet(p)['stationcode'].nunique()) if p.exists() else None)"
+          python - <<'PY'
+          import pathlib, pandas as pd
+          p = pathlib.Path('docs/exports/velib.parquet')
+          print('[ingest] velib.parquet exists:', p.exists())
+          if p.exists():
+              df = pd.read_parquet(p)
+              print('[ingest] rows:', len(df), 'unique stations:', df['stationcode'].nunique() if 'stationcode' in df else 'n/a')
+          PY
 
-      # ------------ Hugging Face ------------
+      # -------- Push Hugging Face toutes les 15 min --------
       - name: Install Hugging Face CLI
+        if: env.DO_HF_PUSH == 'true'
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install -U huggingface_hub
           git lfs install
 
       - name: Login to Hugging Face
+        if: env.DO_HF_PUSH == 'true'
         shell: bash
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
           if [[ -z "${HF_TOKEN:-}" ]]; then
-            echo "HF_TOKEN is empty or not set. Define repository secret HF_TOKEN."
+            echo "HF_TOKEN is empty or not set. Add it in repo Settings > Secrets and variables > Actions."
             exit 1
           fi
           huggingface-cli login --token "${HF_TOKEN}" --add-to-git-credential
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
 
-      - name: Push velib exports (parquet/csv) to HF dataset
+      - name: Push velib exports to HF dataset
+        if: env.DO_HF_PUSH == 'true'
         shell: bash
         env:
           HF_DATASET: ${{ vars.HF_DATASET }}   # ex: "adrien/velib-paris-exports"
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
-
           if [[ -z "${HF_DATASET:-}" || -z "${HF_TOKEN:-}" ]]; then
-            echo "HF_DATASET or HF_TOKEN missing"
+            echo "HF_DATASET (repo variable) or HF_TOKEN (secret) missing."
             exit 1
           fi
 
@@ -97,9 +143,8 @@ jobs:
 
           cd hf-ds
           git add -A
-          git commit -m "Update velib exports from ingest (5min)" || echo "Nothing to commit"
+          git commit -m "Update velib exports (5-min ingest/aggregate, 15-min HF push)" || echo "Nothing to commit"
 
           HF_USER="${HF_DATASET%%/*}"
           git remote set-url origin "https://${HF_USER}:${HF_TOKEN}@huggingface.co/datasets/${HF_DATASET}"
-
           git push origin main
