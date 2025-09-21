@@ -2,8 +2,7 @@ name: velib-ingest
 
 on:
   schedule:
-    # Toutes les 5 minutes (UTC)
-    - cron: "*/5 * * * *"
+    - cron: "*/20 * * * *"   # un démarrage toutes les 20 min
   workflow_dispatch: {}
 
 permissions:
@@ -14,137 +13,104 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ingest_aggregate:
+  looped_ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     env:
       TZ: Europe/Paris
-      MPLBACKEND: Agg
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_INPUT: "1"
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Heartbeat (log trigger times)
-        shell: bash
+      - name: Install deps
         run: |
-          set -euo pipefail
-          echo "event=${{ github.event_name }}"
-          echo "ref=${{ github.ref }}"
-          echo "sha=${{ github.sha }}"
-          date -u "+UTC   %Y-%m-%d %H:%M:%S"
-          date    "+PARIS %Y-%m-%d %H:%M:%S %Z"
-
-      - name: Decide mode (push every 15 min)
-        shell: bash
-        run: |
-          set -euo pipefail
-          MINUTE=$(date -u +%M)
-          MOD=$((10#$MINUTE % 15))
-          if [ "$MOD" = "1" ]; then
-            echo "DO_HF_PUSH=true" >> "$GITHUB_ENV"
-            echo "[mode] This tick WILL push to Hugging Face (minute=$MINUTE, mod15=$MOD)"
-          else
-            echo "DO_HF_PUSH=false" >> "$GITHUB_ENV"
-            echo "[mode] This tick is ingest+aggregate only (minute=$MINUTE, mod15=$MOD)"
-          fi
-
-      - name: Install pipeline deps (prefer wheels)
-        shell: bash
-        run: |
-          set -euo pipefail
           python -m pip install -U pip
           pip install -r requirements-pipeline.txt --prefer-binary --no-build-isolation
+          pip install -U huggingface_hub
 
-      # Tampon pour laisser l'OpenData publier
-      - name: Offset start (~60s)
-        shell: bash
-        run: sleep 60
-
-      - name: Ingest snapshot (OpenData → DuckDB)
-        env:
-          PYTHONPATH: ${{ github.workspace }}
-        run: python -m src.ingest
-
-      # ✅ Aggregate à chaque tick → fraîcheur 5 min pour l'app
-      - name: Aggregate 5min + weather → docs/exports/
-        env:
-          PYTHONPATH: ${{ github.workspace }}
-        run: python -m src.aggregate
-
-      - name: Inspect exports (quick sanity checks)
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "=== Listing docs/exports ==="
-          ls -lh docs/exports || true
-          python - <<'PY'
-          import pathlib, pandas as pd
-          p = pathlib.Path('docs/exports/velib.parquet')
-          print('[ingest] velib.parquet exists:', p.exists())
-          if p.exists():
-              df = pd.read_parquet(p)
-              print('[ingest] rows:', len(df), 'unique stations:', df['stationcode'].nunique() if 'stationcode' in df else 'n/a')
-          PY
-
-      # -------- Push Hugging Face toutes les 15 min --------
-      - name: Install Hugging Face CLI
-        if: env.DO_HF_PUSH == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install -U huggingface_hub
-          git lfs install
-
-      - name: Login to Hugging Face
-        if: env.DO_HF_PUSH == 'true'
+      - name: Run 4 cycles (every ~5 min) with boundary alignment
         shell: bash
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET: ${{ vars.HF_DATASET }}
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          if [[ -z "${HF_TOKEN:-}" ]]; then
-            echo "HF_TOKEN is empty or not set. Add it in repo Settings > Secrets and variables > Actions."
-            exit 1
-          fi
-          huggingface-cli login --token "${HF_TOKEN}" --add-to-git-credential
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
 
-      - name: Push velib exports to HF dataset
-        if: env.DO_HF_PUSH == 'true'
-        shell: bash
-        env:
-          HF_DATASET: ${{ vars.HF_DATASET }}   # ex: "adrien/velib-paris-exports"
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${HF_DATASET:-}" || -z "${HF_TOKEN:-}" ]]; then
-            echo "HF_DATASET (repo variable) or HF_TOKEN (secret) missing."
-            exit 1
-          fi
+          align_5min() {
+            # Aligne sur le prochain multiple de 300s (frontière 5 min) en UTC
+            now=$(date -u +%s)
+            wait=$(( ( (now/300 + 1)*300 ) - now ))
+            printf "[align] sleeping %ss to next 5-min boundary\n" "$wait"
+            sleep "$wait"
+          }
 
-          rm -rf hf-ds
-          git clone "https://huggingface.co/datasets/${HF_DATASET}" hf-ds
+          do_cycle() {
+            echo "----- cycle start: $(date -u '+UTC %F %T') -----"
+            # petit tampon pour laisser OpenData publier
+            sleep 45
 
-          mkdir -p hf-ds/exports
-          [[ -f docs/exports/velib.parquet ]] && cp -v docs/exports/velib.parquet hf-ds/exports/velib.parquet || true
-          [[ -f docs/exports/velib.csv     ]] && cp -v docs/exports/velib.csv     hf-ds/exports/velib.csv     || true
+            python -m src.ingest
+            python -m src.aggregate
 
-          cd hf-ds
-          git add -A
-          git commit -m "Update velib exports (5-min ingest/aggregate, 15-min HF push)" || echo "Nothing to commit"
+            # build snapshot (dernier bin)
+            python - <<'PY'
+            import pathlib, pandas as pd, datetime as dt
+            DOCS = pathlib.Path('docs'); p = DOCS/'exports'/'velib.parquet'
+            if not p.exists(): raise SystemExit("no velib.parquet")
+            df = pd.read_parquet(p)
+            ts_col = next((c for c in ('tbin_utc','timestamp','ts','time') if c in df.columns), None)
+            if ts_col is None: raise SystemExit("no ts column")
+            last_ts = df[ts_col].max()
+            snap = df[df[ts_col]==last_ts].copy()
+            if pd.api.types.is_datetime64_any_dtype(snap[ts_col]):
+                ts_utc = pd.to_datetime(last_ts, utc=True)
+                ts_str = ts_utc.strftime('%Y%m%d_%H%M')
+            else:
+                ts_str = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d_%H%M')
+            out_dir = DOCS/'exports'/'snapshots'; out_dir.mkdir(parents=True, exist_ok=True)
+            out = out_dir/f'velib_{ts_str}.parquet'
+            snap.to_parquet(out, index=False)
+            print('[snapshot] built', out)
+            PY
 
-          HF_USER="${HF_DATASET%%/*}"
-          git remote set-url origin "https://${HF_USER}:${HF_TOKEN}@huggingface.co/datasets/${HF_DATASET}"
-          git push origin main
+            # upload snapshot to HF (API)
+            python - <<'PY'
+            import os, pathlib, re
+            from huggingface_hub import HfApi
+            repo_id = os.environ['HF_DATASET']; token = os.environ['HF_TOKEN']
+            api = HfApi(token=token)
+            snaps = sorted(pathlib.Path('docs/exports/snapshots').glob('velib_*.parquet'))
+            if not snaps: raise SystemExit("no snapshot")
+            path = snaps[-1]
+            m = re.match(r'velib_(\d{8})_(\d{4})\.parquet$', path.name)
+            if m:
+                y, mo, d = m.group(1)[:4], m.group(1)[4:6], m.group(1)[6:8]
+                dest = f'snapshots/{y}/{mo}/{d}/{path.name}'
+            else:
+                dest = f'snapshots/{path.name}'
+            api.upload_file(path_or_fileobj=str(path), path_in_repo=dest,
+                            repo_id=repo_id, repo_type="dataset",
+                            commit_message=f"Add snapshot {path.name}")
+            print("[upload] snapshot ->", dest)
+            PY
+
+            echo "----- cycle end: $(date -u '+UTC %F %T') -----"
+          }
+
+          # aligne au début
+          align_5min
+          # 4 cycles (≈ 20 min)
+          for i in 1 2 3 4; do
+            do_cycle
+            # aligne avant le cycle suivant
+            [ "$i" -lt 4 ] && align_5min
+          done
