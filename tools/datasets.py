@@ -1,20 +1,20 @@
 # tools/datasets.py
 # Normalise les données Vélib' en deux jeux :
-#   - events.parquet : ts (UTC, 15 min), station_id, bikes, capacity, occ[, lat, lon, name, meteo...]
-#   - perf.parquet   : ts (UTC, 15 min, temps de décision T), station_id,
+#   - events.parquet : ts (UTC, 5 min), station_id, bikes, capacity, occ[, lat, lon, name, meteo...]
+#   - perf.parquet   : ts (UTC, 5 min, temps de décision T), station_id,
 #                      y_true (observé à T+h), y_pred (optionnel, injecté plus tard),
-#                      y_pred_baseline (persistance à T), horizon_min,
-#                      ts_decision (= T), ts_target (= T+h)  ← ajouté pour éviter tout décalage visuel.
+#                      y_pred_baseline (persistance à T), horizon_min=15,
+#                      ts_decision (= T), ts_target (= T+h)  ← pour éviter tout décalage visuel.
 #
 # Usage principal (appelé par build_monitoring.py) :
-#   python tools/datasets.py --input docs/exports/velib.parquet --horizon 60 \
+#   python tools/datasets.py --input docs/exports/velib.parquet --horizon 15 \
 #          --out-events docs/exports/events.parquet --out-perf docs/exports/perf.parquet --lag-steps 0
 #
 # Notes :
 # - On ne produit PAS de y_pred modèle ici (il sera injecté par tools/apply_model.py).
 # - y_true est calculé comme bikes(T+steps) via shift(-steps) par station.
 # - y_pred_baseline = bikes(T) (persistance).
-# - ts est conservé en UTC et arrondi au pas 15 minutes.
+# - ts est conservé en UTC et arrondi au pas 5 minutes.
 # - --lag-steps permet de décaler une éventuelle colonne y_pred déjà présente (rare).
 
 from __future__ import annotations
@@ -87,35 +87,35 @@ def _write_any(df: pd.DataFrame, path: Path) -> None:
 
 # --------------------------- Helpers temps / pas ---------------------------
 
-def _coerce_ts_utc_15min(s: pd.Series) -> pd.Series:
-    """Convertit en datetime (UTC) puis floor 15 minutes."""
+def _coerce_ts_utc_5min(s: pd.Series) -> pd.Series:
+    """Convertit en datetime (UTC) puis floor 5 minutes."""
     ts = pd.to_datetime(s, utc=True, errors="coerce")
     # si déjà timezone-naive mais censé être UTC, on le localise en UTC
     if ts.dt.tz is None:
         ts = ts.dt.tz_localize("UTC")
-    return ts.dt.floor("15min").dt.tz_convert("UTC").dt.tz_localize(None)
+    return ts.dt.floor("5min").dt.tz_convert("UTC").dt.tz_localize(None)
 
 
 def _infer_step_minutes(ts: pd.Series) -> int:
-    """Détecte (grossièrement) le pas dominant en minutes (par ex. 15)."""
+    """Détecte (grossièrement) le pas dominant en minutes (par ex. 5)."""
     t = pd.to_datetime(ts, utc=False, errors="coerce").sort_values().dropna()
     if len(t) < 3:
-        return 15
+        return 5
     diffs = (t.diff().dropna().value_counts(normalize=True).index)
     if len(diffs) == 0:
-        return 15
+        return 5
     # on prend la différence la plus fréquente
     step = int(round(diffs[0] / np.timedelta64(1, "m")))
     # clamp raisonnable
     if step <= 0 or step > 120:
-        return 15
+        return 5
     return step
 
 
 # --------------------------- Normalisation ---------------------------
 
 def load_normalized(input_path: Path,
-                    horizon_minutes: int = 60,
+                    horizon_minutes: int = 15,
                     last_days: Optional[int] = None
                     ) -> Tuple[pd.DataFrame, pd.DataFrame, int, Dict[str, Any], Dict[str, str]]:
     """
@@ -129,10 +129,10 @@ def load_normalized(input_path: Path,
 
     df = raw.rename(columns={v: k for k, v in mapping.items()}).copy()
 
-    # ts en UTC, floor pas 15 min
+    # ts en UTC, floor pas 5 min
     if "ts" not in df.columns:
         raise KeyError("[datasets] La colonne temporelle 'ts' (ex. tbin_utc) est absente de la source.")
-    df["ts"] = _coerce_ts_utc_15min(df["ts"])
+    df["ts"] = _coerce_ts_utc_5min(df["ts"])
 
     # filtre fenêtre récente si demandé
     if last_days and last_days > 0:
@@ -183,8 +183,8 @@ def load_normalized(input_path: Path,
     perf["horizon_min"] = int(horizon_minutes)
 
     # --- Axes explicites (pour affichage/analyses sans décalage visuel) ---
-    # ts = T (temps de décision) — on conserve la clé telle quelle,
-    # ts_target = T+h (où vit réellement y_true et où s'évaluent les prédictions)
+    # ts = T (temps de décision)
+    # ts_target = T+h (où vit y_true et où s'évaluent les prédictions)
     perf["ts_decision"] = perf["ts"]
     perf["ts_target"]   = perf["ts"] + pd.to_timedelta(int(horizon_minutes), unit="m")
 
@@ -208,14 +208,14 @@ def load_normalized(input_path: Path,
 # --------------------------- CLI ---------------------------
 
 def main():
-    ap = argparse.ArgumentParser(description="Normalise la source Vélib' en events/perf (UTC, 15min).")
+    ap = argparse.ArgumentParser(description="Normalise la source Vélib' en events/perf (UTC, 5min).")
     ap.add_argument("--input", type=str, required=False, default=None,
                     help="Chemin source parquet/csv. Si omis, lecture via local→HF de 'velib.parquet'.")
-    ap.add_argument("--horizon", type=int, default=60, help="Horizon en minutes (ex. 60).")
+    ap.add_argument("--horizon", type=int, default=15, help="Horizon en minutes (ex. 15).")
     ap.add_argument("--last-days", type=int, default=None, help="Filtrer sur N derniers jours (optionnel).")
     ap.add_argument("--out-events", type=Path, default=EXPORTS / "events.parquet")
     ap.add_argument("--out-perf", type=Path, default=EXPORTS / "perf.parquet")
-    ap.add_argument("--lag-steps", type=int, default=0, help="Décalage à appliquer à y_pred si présent (ex. -4).")
+    ap.add_argument("--lag-steps", type=int, default=0, help="Décalage à appliquer à y_pred si présent (ex. -3 pour 15 min à pas 5).")
     ap.add_argument("--as-csv", action="store_true", help="Écrit en CSV au lieu de parquet.")
     args = ap.parse_args()
 

@@ -1,11 +1,46 @@
 # tools/build_data_exports.py
-# Page builder — "Data / Exports" + page Markdown visuelle (docs/data/exports.md)
+# -----------------------------------------------------------------------------
+# Données — Page "Data / Exports"
+#
+# Rôle
+# ----
+# Inventorier les exports, vérifier un **contrat minimal** (schéma, types,
+# clé, alignement 5 min) et générer :
+# - Tables : schémas, rapports de contrat, catalog & build info
+# - Figures : jauges (fraîcheur, volumes)
+# - Doc     : `docs/data/exports.md`
+#
+# Entrées
+# -------
+# - `docs/exports/events.parquet`
+# - `docs/exports/perf.parquet` (peut ne pas exister)
+#
+# Sorties
+# -------
+# - `docs/assets/tables/exports/*.csv|json`
+# - `docs/assets/figs/data/export/*.png`
+# - `docs/data/exports.md`
+#
+# Notes
+# -----
+# - Cadence temporelle : pas **5 minutes** (arrondi des timestamps).
+# - Le script **ne modifie pas** les exports sources.
+#
+# CLI
+# ---
+# python tools/build_data_exports.py \
+#   --exports-dir docs/exports
+# # ou
+# python tools/build_data_exports.py \
+#   --events docs/exports/events.parquet --perf docs/exports/perf.parquet
+# -----------------------------------------------------------------------------
+
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 
 import numpy as np
 import pandas as pd
@@ -53,8 +88,8 @@ def _align_ts(df: pd.DataFrame, ts_col: str = "ts") -> pd.DataFrame:
     if ts_col not in df.columns:
         raise KeyError(f"[exports] Colonne '{ts_col}' manquante")
     df = df.copy()
-    # Parse in UTC and keep timezone-aware timestamps; align to 15-minute grid
-    df[ts_col] = pd.to_datetime(df[ts_col], errors="coerce", utc=True).dt.floor("15min")
+    # Parse in UTC and keep timezone-aware timestamps; align to 5-minute grid
+    df[ts_col] = pd.to_datetime(df[ts_col], errors="coerce", utc=True).dt.floor("5min")
     return df
 
 def rel_from_md(md_path: Path, target: Path) -> str:
@@ -111,13 +146,13 @@ def _events_contract(df: pd.DataFrame) -> pd.DataFrame:
         else:
             add("rule:occ≈bikes/capacity", "n/a", level="info", detail="données insuffisantes")
 
-    # Unicité & pas 15 min
+    # Unicité & pas 5 min
     if set(("ts", "station_id")).issubset(df.columns) and is_datetime64_any_dtype(df["ts"]):
         dup_pct = df.duplicated(subset=["ts", "station_id"]).mean() * 100.0
         add("key:(ts,station_id):unique", "pass" if dup_pct == 0 else "fail",
             detail=f"duplicated_pct={dup_pct:.3f}%")
-        mis = (df["ts"].dt.minute % 15 != 0).mean() * 100.0
-        add("time:aligned_15min", "pass" if mis == 0 else "warn", level="soft",
+        mis = (df["ts"].dt.minute % 5 != 0).mean() * 100.0
+        add("time:aligned_5min", "pass" if mis == 0 else "warn", level="soft",
             detail=f"misaligned_pct={mis:.3f}%")
 
     return pd.DataFrame(checks)
@@ -142,13 +177,13 @@ def _perf_contract(df: pd.DataFrame) -> pd.DataFrame:
         if c in df.columns:
             add(f"type:{c}:numeric", "pass" if pd.api.types.is_numeric_dtype(df[c]) else "fail")
 
-    # Unicité & pas 15 min
+    # Unicité & pas 5 min
     if set(("ts", "station_id")).issubset(df.columns) and is_datetime64_any_dtype(df["ts"]):
         dup_pct = df.duplicated(subset=["ts", "station_id"]).mean() * 100.0
         add("key:(ts,station_id):unique", "pass" if dup_pct == 0 else "fail",
             detail=f"duplicated_pct={dup_pct:.3f}%")
-        mis = (df["ts"].dt.minute % 15 != 0).mean() * 100.0
-        add("time:aligned_15min", "pass" if mis == 0 else "warn", level="soft",
+        mis = (df["ts"].dt.minute % 5 != 0).mean() * 100.0
+        add("time:aligned_5min", "pass" if mis == 0 else "warn", level="soft",
             detail=f"misaligned_pct={mis:.3f}%")
 
     return pd.DataFrame(checks)
@@ -194,6 +229,11 @@ def _plot_gauges(events_stats: Dict[str, object], perf_stats: Dict[str, object])
 
 MD_TEMPLATE = """# Exports
 
+!!! info "En-tête"
+    - **Granularité temporelle** : **5 min** (UTC, aligné :00, :05, :10, …)
+    - **Horizon(s) dans `perf.parquet`** : {horizons_text}
+    - **Cadence d’ingestion** : snapshot toutes **5 min** · agrégats & pages rebuild réguliers
+
 Cette page liste **tout ce qui est publié** (fichiers de données et tables dérivées) et rappelle le **contrat minimal** pour les consommer sans surprise.
 
 > **Build (UTC)** : `{build_utc}`  
@@ -211,7 +251,7 @@ Cette page liste **tout ce qui est publié** (fichiers de données et tables dé
 - **`docs/exports/events.parquet`**  
   - **Clé** : `(ts, station_id)` unique.  
   - **Colonnes canoniques (si présentes)** :  
-    - `ts` *(UTC, 15 min)* — horodatage du **bin source**.  
+    - `ts` *(UTC, 5 min)* — horodatage du **bin source**.  
     - `station_id` *(str)* — identifiant station stable.  
     - `bikes` *(int ≥ 0)* — vélos disponibles.  
     - `capacity` *(int ≥ 0)* — capacité estimée du dock.  
@@ -221,12 +261,12 @@ Cette page liste **tout ce qui est publié** (fichiers de données et tables dé
 - **`docs/exports/perf.parquet`**  
   - **Clé** : `(ts, station_id)` unique.  
   - **Colonnes canoniques** :  
-    - `ts` *(UTC, 15 min)* — **même bin source T** que `events`.  
+    - `ts` *(UTC, 5 min)* — **même bin source T** que `events`.  
     - `station_id` *(str)*.  
     - `y_true` *(float/int ≥ 0)* — cible observée à **T+h** (ramenée à T via `shift(-steps)`).  
     - `y_pred_baseline` *(float ≥ 0)* — **persistance** (valeur observée à T).  
     - `y_pred` *(float ≥ 0, optionnel)* — prédiction **modèle** alignée sur T (injectée après coup).  
-    - `horizon_min` *(int > 0, ex. 60)* — horizon en minutes.
+    - `horizon_min` *(int > 0, ex. 15)* — horizon en minutes.
 
 ---
 
@@ -239,7 +279,7 @@ Exportées sous `docs/assets/tables/exports/` :
 ---
 
 ## Cadence & fraîcheur
-- Ingestion et normalisation **toutes les 15 minutes** (ou au rythme de la source).  
+- Ingestion et normalisation **toutes les 5 minutes** (ou au rythme de la source).  
 - Les assets analytiques (tables/figures) sont régénérés **plusieurs fois par jour**.  
 - Cette page précise **la date/heure du dernier build** et la **fenêtre couverte**.
 
@@ -248,10 +288,10 @@ Exportées sous `docs/assets/tables/exports/` :
 ## Garanties minimales
 - Pas de **fusion en avance** (aucune fuite de futur) ; `perf.parquet` est strictement aligné **à T**.  
 - **Aucune imputation lourde** dans les exports (ni interpolation) : les trous reflètent l’état réel de l’ingestion.  
-- Clés `(ts, station_id)` **sans doublons** ; horodatages **arrondis 15 min**.
+- Clés `(ts, station_id)` **sans doublons** ; horodatages **arrondis 5 min**.
 """
 
-def _render_md(ev_stats: Dict[str, object], pf_stats: Dict[str, object]) -> str:
+def _render_md(ev_stats: Dict[str, object], pf_stats: Dict[str, object], horizons_text: str) -> str:
     return MD_TEMPLATE.format(
         build_utc=_now_iso(),
         ev_ts_min=ev_stats.get("ts_min"),
@@ -261,6 +301,8 @@ def _render_md(ev_stats: Dict[str, object], pf_stats: Dict[str, object]) -> str:
         pf_ts_min=pf_stats.get("ts_min"),
         pf_ts_max=pf_stats.get("ts_max"),
         pf_rows=pf_stats.get("rows", 0),
+
+        horizons_text=horizons_text,
 
         gauge_fresh_rel=rel_from_md(OUT_MD, FIGS_DIR / "gauge_freshness.png"),
         gauge_rows_rel=rel_from_md(OUT_MD, FIGS_DIR / "gauge_rows.png"),
@@ -299,8 +341,14 @@ def main(events_path: Path, perf_path: Path) -> None:
                     break
         perf = _align_ts(perf, "ts")
         perf["station_id"] = perf["station_id"].astype(str)
+        # Horizons détectés
+        if "horizon_min" in perf.columns:
+            horizons = sorted(pd.to_numeric(perf["horizon_min"], errors="coerce").dropna().unique().tolist())
+        else:
+            horizons = []
     else:
         perf = pd.DataFrame(columns=["ts", "station_id", "y_true", "y_pred_baseline"])
+        horizons = []
 
     # Schémas
     _schema(events).to_csv(TABLES_DIR / "schema_events.csv", index=False)
@@ -326,14 +374,19 @@ def main(events_path: Path, perf_path: Path) -> None:
         "build_utc": _now_iso(),
         "events": {"path": str(events_path), "ts_min": ev_stats["ts_min"], "ts_max": ev_stats["ts_max"], "rows": ev_stats["rows"]},
         "perf": {"path": str(perf_path), "ts_min": pf_stats["ts_min"], "ts_max": pf_stats["ts_max"], "rows": pf_stats["rows"]},
+        "granularity_min": 5,
+        "horizons_min": horizons,
     }
     (TABLES_DIR / "build_info.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
 
     # Jauges
     _plot_gauges(ev_stats, pf_stats)
 
+    # En-tête horizons pour Markdown
+    horizons_text = ", ".join(str(int(h)) for h in horizons) if horizons else "n/a"
+
     # Page Markdown
-    md = _render_md(ev_stats, pf_stats)
+    md = _render_md(ev_stats, pf_stats, horizons_text=horizons_text)
     with open(OUT_MD, "w", encoding="utf-8", newline="\n") as f:
         f.write(md)
 

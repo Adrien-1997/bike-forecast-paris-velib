@@ -1,11 +1,55 @@
-# tools/build_monitoring_drift.py
-# Génère tables/figures de dérive + la page Markdown "docs/monitoring/drift.md" (avec carte statique + lien interactif)
+# -----------------------------------------------------------------------------
+# Projet : Bike Forecasting — Monitoring & Modèle
+# Cadence d’ingestion : 5 minutes
+# Horizon de prévision : 15 minutes
+#
+# Contexte
+# --------
+# - Les données brutes (events) arrivent toutes les 5 minutes.
+# - Les évaluations/perfs comparent des prédictions à H=15 min (ts_target = ts + 15m).
+# - Tous les calculs de fraîcheur/complétude/trous utilisent un pas 'bin_min=5'.
+#
+# Rappels CLI (exemples)
+# ----------------------
+# Data health :
+#   python tools/build_monitoring_data_health.py \
+#     --events docs/exports/events.parquet \
+#     --current-days 7 --tz Europe/Paris \
+#     --fresh-slo-min 5 --flat-steps 6 --bin-min 5
+#
+# Drift :
+#   python tools/build_monitoring_drift.py \
+#     --events docs/exports/events.parquet \
+#     --current-days 7 --reference-days 28 --tz Europe/Paris
+#
+# Performance :
+#   python tools/build_model_performance.py \
+#     --perf docs/exports/perf.parquet \
+#     --last-days 14 --horizon 15 --tz Europe/Paris
+#
+# Explainability :
+#   python tools/build_model_explainability.py \
+#     --perf docs/exports/perf.parquet --last-days 7 --tz Europe/Paris
+#
+# Pipeline :
+#   python tools/build_model_pipeline.py \
+#     --events docs/exports/events.parquet \
+#     --perf docs/exports/perf.parquet --horizon 15
+#
+# Constantes (à garder cohérentes)
+# --------------------------------
+# BIN_MIN       = 5   # taille du pas (minutes) pour data health / drift
+# HORIZON_MIN   = 15  # horizon de prévision (minutes) pour perf/explain
+# TIMEZONE_IANA = "Europe/Paris"
+# -----------------------------------------------------------------------------
+
 from __future__ import annotations
 
-import argparse, os, json
+import argparse
+import json
 from pathlib import Path
 from typing import Optional, Dict
-import os
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -34,7 +78,7 @@ for d in (TABLES_DIR, FIGS_DIR, MAPS_DIR, OUT_MD.parent):
 def rel_from_md(md_path: Path, target: Path) -> str:
     """
     Construit un lien relatif depuis la page Markdown md_path vers target.
-    Compatibles:
+    Compatible :
       - MkDocs (use_directory_urls: true)  -> pages rendues comme dossiers (/monitoring/drift/)
       - GitHub (lecture directe du .md)
     Règle: on part de /docs/<...>.md vers /docs/<cible>.
@@ -48,10 +92,10 @@ def rel_from_md(md_path: Path, target: Path) -> str:
     rel_from_docs = Path(target).resolve().relative_to(DOCS.resolve()).as_posix()
     return (prefix + rel_from_docs).replace("//", "/")
 
+
 def _rel_from_md(target: Path) -> str:
     # utilitaire si tu veux appeler sans passer OUT_MD à chaque fois
     return rel_from_md(OUT_MD, target)
-
 
 
 # --------------------------- IO ---------------------------
@@ -65,7 +109,12 @@ def _read_parquet(path: str | Path) -> pd.DataFrame:
 
 # --------------------------- Helpers colonnes ---------------------------
 
-def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
+def _floor_series(s: pd.Series, bin_min: int) -> pd.Series:
+    """Floor + UTC → UTC naïf, pas configurable."""
+    return pd.to_datetime(s, errors="coerce", utc=True).dt.floor(f"{int(bin_min)}min").dt.tz_localize(None)
+
+
+def _ensure_columns(df: pd.DataFrame, bin_min: int) -> pd.DataFrame:
     """Colonnes attendues : ts, station_id, lat, lon, bikes, docks_avail, capacity_src, occ_ratio."""
     if df.empty:
         return df
@@ -74,39 +123,46 @@ def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     tcol = None
     for c in ("ts", "tbin_utc", "timestamp"):
         if c in df.columns:
-            tcol = c; break
+            tcol = c
+            break
     if tcol is None:
         raise KeyError("[drift] Missing time column (ts/tbin_utc/timestamp)")
-    df["ts"] = pd.to_datetime(df[tcol], errors="coerce").dt.floor("15min")
+    df["ts"] = _floor_series(df[tcol], bin_min)
 
     # station_id
     sid = None
-    for c in ("station_id", "stationcode", "stationCode", "id"):
+    for c in ("station_id", "stationcode", "stationCode", "id", "station"):
         if c in df.columns:
-            sid = c; break
+            sid = c
+            break
     if sid is None:
         raise KeyError("[drift] Missing station_id/stationcode")
     df["station_id"] = df[sid].astype(str)
 
     # bikes / docks_avail / capacity_src (création NaN si absent)
     if "bikes" not in df.columns:
-        for c in ("num_bikes_available", "n_bikes", "available_bikes"):
+        for c in ("num_bikes_available", "n_bikes", "available_bikes", "nb_velos_bin", "velos_disponibles"):
             if c in df.columns:
-                df["bikes"] = pd.to_numeric(df[c], errors="coerce"); break
+                df["bikes"] = pd.to_numeric(df[c], errors="coerce")
+                break
     if "bikes" not in df.columns:
         df["bikes"] = np.nan
+    else:
+        df["bikes"] = pd.to_numeric(df["bikes"], errors="coerce")
 
     if "docks_avail" not in df.columns:
-        for c in ("num_docks_available", "n_docks", "available_docks"):
+        for c in ("num_docks_available", "n_docks", "available_docks", "nb_docks_bin"):
             if c in df.columns:
-                df["docks_avail"] = pd.to_numeric(df[c], errors="coerce"); break
+                df["docks_avail"] = pd.to_numeric(df[c], errors="coerce")
+                break
     if "docks_avail" not in df.columns:
         df["docks_avail"] = np.nan
 
     if "capacity_src" not in df.columns:
         for c in ("capacity", "capacity_est", "cap"):
             if c in df.columns:
-                df["capacity_src"] = pd.to_numeric(df[c], errors="coerce"); break
+                df["capacity_src"] = pd.to_numeric(df[c], errors="coerce")
+                break
     if "capacity_src" not in df.columns:
         df["capacity_src"] = np.nan
 
@@ -281,20 +337,21 @@ def _split_windows(df: pd.DataFrame, current_days: int, reference_days: int) -> 
 # --------------------------- Calcul Drift ---------------------------
 
 def compute_drift(events: pd.DataFrame, current_days: int, reference_days: int, tz: Optional[str]) -> dict:
-    df = _ensure_columns(events)
-    df = _to_local(df, tz)
+    # events doit déjà être normalisé (_ensure_columns + bin_min) par l'appelant
+    df = _to_local(events, tz)
 
     ref, cur, bounds = _split_windows(df, current_days=current_days, reference_days=reference_days)
 
     def agg(df_):
         return (df_.groupby(["date_local", "station_id"])
-                  .agg(occ_ratio=("occ_ratio", "mean"),
-                       bikes=("bikes", "mean"),
-                       docks_avail=("docks_avail", "mean"),
-                       lat=("lat", "median"),
-                       lon=("lon", "median"))
-                  .reset_index())
-    ref = agg(ref); cur = agg(cur)
+                .agg(occ_ratio=("occ_ratio", "mean"),
+                     bikes=("bikes", "mean"),
+                     docks_avail=("docks_avail", "mean"),
+                     lat=("lat", "median"),
+                     lon=("lon", "median"))
+                .reset_index())
+    ref = agg(ref)
+    cur = agg(cur)
 
     # ---- Metrics (PSI / KS / Δ) ----
     feats = ["occ_ratio", "bikes", "docks_avail"]
@@ -308,9 +365,9 @@ def compute_drift(events: pd.DataFrame, current_days: int, reference_days: int, 
     ks_df = pd.DataFrame(rows_ks)
     d_df = pd.DataFrame(rows_delta)
 
-    # ---- PSI global journalier (proxy via occ_ratio) + EMA ----
+    # ---- "PSI" global journalier proxy = moyenne quotidienne d'occ_ratio + EMA ----
     by_day = (df.groupby("date_local")["occ_ratio"]
-                .apply(lambda s: float(np.nanmean(s))).reset_index())
+              .apply(lambda s: float(np.nanmean(s))).reset_index())
     by_day = by_day.sort_values("date_local")
     alpha = 2 / (7 + 1.0)
     ema, last = [], None
@@ -338,9 +395,8 @@ def compute_drift(events: pd.DataFrame, current_days: int, reference_days: int, 
     }])
 
     # ---- Carte zones (interactive + PNG + placeholder anti-404) ----
-    # ⚠️ Assure-toi que MAPS_DIR = ASSETS / "maps" pour éviter les 404 dans ton site.
     map_html_path = MAPS_DIR / "drift_by_zone.html"
-    map_png_path  = FIGS_DIR / "drift_by_zone.png"
+    map_png_path = FIGS_DIR / "drift_by_zone.png"
     map_png_created = False
 
     # 1) Calcul PSI par zone (+ centroïdes)
@@ -362,7 +418,7 @@ def compute_drift(events: pd.DataFrame, current_days: int, reference_days: int, 
 
         pz = psi_zone(ref, cur)
         cent = (ref.dropna(subset=["lat", "lon"])
-                  .groupby("zone")[["lat", "lon"]].median().reset_index())
+                .groupby("zone")[["lat", "lon"]].median().reset_index())
         pz = pz.merge(cent, on="zone", how="left").dropna(subset=["lat", "lon"])
     except Exception as e:
         print(f"[drift] zone PSI failed: {e}")
@@ -422,21 +478,34 @@ def compute_drift(events: pd.DataFrame, current_days: int, reference_days: int, 
     }
 
 
-
 # --------------------------- Figures & exports ---------------------------
 
 def _plot_top_features(psi_df: pd.DataFrame, out: Path, top_n: int = 10):
-    if psi_df is None or psi_df.empty: return
+    if psi_df is None or psi_df.empty:
+        return
     d = psi_df.sort_values("psi", ascending=False).head(top_n)
-    plt.figure(figsize=(8, 4.5)); plt.bar(d["feature"], d["psi"])
-    plt.title("Top features dérivées (PSI)"); plt.ylabel("PSI")
-    plt.xticks(rotation=30, ha="right"); plt.tight_layout(); plt.savefig(out, dpi=160); plt.close()
+    plt.figure(figsize=(8, 4.5))
+    plt.bar(d["feature"], d["psi"])
+    plt.title("Top features dérivées (PSI)")
+    plt.ylabel("PSI")
+    plt.xticks(rotation=30, ha="right")
+    plt.tight_layout()
+    plt.savefig(out, dpi=160)
+    plt.close()
 
-def _plot_psi_ema(ema_df: pd.DataFrame, out: Path):
-    if ema_df is None or ema_df.empty: return
-    plt.figure(figsize=(8, 3.8)); plt.plot(pd.to_datetime(ema_df["date_local"]), ema_df["psi_ema"])
-    plt.title("PSI global (EMA)"); plt.ylabel("EMA(occ_ratio)"); plt.xlabel("Date")
-    plt.tight_layout(); plt.savefig(out, dpi=160); plt.close()
+
+def _plot_occ_ratio_ema(ema_df: pd.DataFrame, out: Path):
+    if ema_df is None or ema_df.empty:
+        return
+    plt.figure(figsize=(8, 3.8))
+    plt.plot(pd.to_datetime(ema_df["date_local"]), ema_df["psi_ema"])
+    plt.title("occ_ratio moyen (EMA)")
+    plt.ylabel("EMA(occ_ratio)")
+    plt.xlabel("Date")
+    plt.tight_layout()
+    plt.savefig(out, dpi=160)
+    plt.close()
+
 
 def _export_tables(res: dict):
     res["psi_df"].to_csv(TABLES_DIR / "psi_by_feature.csv", index=False)
@@ -447,9 +516,10 @@ def _export_tables(res: dict):
     with open(TABLES_DIR / "alerts.json", "w", encoding="utf-8") as f:
         json.dump(res.get("alerts", []), f, ensure_ascii=False, indent=2)
 
+
 def _export_figs(res: dict):
     _plot_top_features(res["psi_df"], FIGS_DIR / "psi_top_features.png")
-    _plot_psi_ema(res["psi_daily_ema"], FIGS_DIR / "psi_global_ema.png")
+    _plot_occ_ratio_ema(res["psi_daily_ema"], FIGS_DIR / "psi_global_ema.png")
 
 
 # --------------------------- Rendu Markdown ---------------------------
@@ -488,8 +558,8 @@ MD_TEMPLATE = """# 2) Drift des données
 ### Top dérives (PSI)
 ![Top PSI]({psi_top_fig})
 
-### Tendance du drift (EMA, occ_ratio)
-![PSI global EMA]({psi_ema_fig})
+### Tendance (occ_ratio moyen, EMA)
+![occ_ratio EMA]({psi_ema_fig})
 
 ### Carte — drift agrégé par zone
 ![Carte statique]({map_png})
@@ -507,7 +577,7 @@ MD_TEMPLATE = """# 2) Drift des données
 - PSI par variable : `{psi_csv}`  
 - K–S par variable : `{ks_csv}`  
 - Δ moyenne/variance : `{delta_csv}`  
-- PSI global journalier (EMA) : `{psi_ema_csv}`  
+- Proxy "drift" global journalier (EMA sur occ_ratio) : `{psi_ema_csv}`  
 - Résumé & alertes : `{summary_csv}`, `{alerts_json}`  
 - Drift de cible : `{target_csv}` (*si généré avec `--perf`*)
 
@@ -528,46 +598,45 @@ MD_TEMPLATE = """# 2) Drift des données
 - **Stabilité** : lissage **EMA** pour éviter les sur-réactions au bruit.
 
 **Artefacts & source**  
-- Source : `docs/exports/events.parquet` (pas de 15 min, timestamps UTC naïfs).  
+- Source : `docs/exports/events.parquet` (pas de {bin_min} min, timestamps UTC naïfs).  
 - Figures : `{figs_dir_rel}` · Tables : `{tables_dir_rel}` · Carte : `{map_rel}`
 """
 
-def _render_markdown(res: dict, cur_days: int, ref_days: int, perf_used: bool) -> None:
+def _render_markdown(res: dict, cur_days: int, ref_days: int, perf_used: bool, bin_min: int) -> None:
     bounds = res.get("bounds", {})
     def fmt(ts):
-        if ts is None: return "—"
+        if ts is None:
+            return "—"
         try:
             return pd.to_datetime(ts).strftime("%Y-%m-%d %H:%M")
         except Exception:
             return str(ts)
 
     ref_start = fmt(bounds.get("t_ref_start"))
-    ref_end   = fmt(bounds.get("t_ref_end"))
+    ref_end = fmt(bounds.get("t_ref_end"))
     cur_start = fmt(bounds.get("t_cur_start"))
-    tmax      = fmt(bounds.get("tmax"))
+    tmax = fmt(bounds.get("tmax"))
 
     summary = res.get("summary", pd.DataFrame())
     psi_global = np.nan
-    top_feature = "—"; top_feature_psi = np.nan
+    top_feature = "—"
+    top_feature_psi = np.nan
     if not summary.empty:
         psi_global = summary["psi_global"].iloc[0]
         top_feature = summary["top_feature"].iloc[0] if pd.notna(summary["top_feature"].iloc[0]) else "—"
         top_feature_psi = summary["top_feature_psi"].iloc[0]
 
-    psi_top_fig = _rel_from_md(FIGS_DIR / "psi_top_features.png")
-    psi_ema_fig = _rel_from_md(FIGS_DIR / "psi_global_ema.png")
-    map_rel    = rel_from_md(OUT_MD, res["map_html"])
-    map_png    = rel_from_md(OUT_MD, res["map_png"]) if res.get("map_png") else "(non disponible)"
+    map_rel = rel_from_md(OUT_MD, res["map_html"])
+    map_png = rel_from_md(OUT_MD, res["map_png"]) if res.get("map_png") else "(non disponible)"
     psi_top_fig = rel_from_md(OUT_MD, FIGS_DIR / "psi_top_features.png")
     psi_ema_fig = rel_from_md(OUT_MD, FIGS_DIR / "psi_global_ema.png")
-    psi_csv     = rel_from_md(OUT_MD, TABLES_DIR / "psi_by_feature.csv")
-    ks_csv      = rel_from_md(OUT_MD, TABLES_DIR / "ks_by_feature.csv")
-    delta_csv   = rel_from_md(OUT_MD, TABLES_DIR / "deltas_by_feature.csv")
+    psi_csv = rel_from_md(OUT_MD, TABLES_DIR / "psi_by_feature.csv")
+    ks_csv = rel_from_md(OUT_MD, TABLES_DIR / "ks_by_feature.csv")
+    delta_csv = rel_from_md(OUT_MD, TABLES_DIR / "deltas_by_feature.csv")
     psi_ema_csv = rel_from_md(OUT_MD, TABLES_DIR / "psi_global_daily_ema.csv")
     summary_csv = rel_from_md(OUT_MD, TABLES_DIR / "drift_summary.csv")
     alerts_json = rel_from_md(OUT_MD, TABLES_DIR / "alerts.json")
-    target_csv  = rel_from_md(OUT_MD, TABLES_DIR / "target_drift.csv") if perf_used else "(non généré)"
-
+    target_csv = rel_from_md(OUT_MD, TABLES_DIR / "target_drift.csv") if perf_used else "(non généré)"
 
     md = MD_TEMPLATE.format(
         ref_start=ref_start, ref_end=ref_end, cur_start=cur_start, tmax=tmax,
@@ -578,7 +647,7 @@ def _render_markdown(res: dict, cur_days: int, ref_days: int, perf_used: bool) -
         map_rel=map_rel, map_png=map_png,
         psi_csv=psi_csv, ks_csv=ks_csv, delta_csv=delta_csv, psi_ema_csv=psi_ema_csv,
         summary_csv=summary_csv, alerts_json=alerts_json, target_csv=target_csv,
-        ref_days=ref_days, cur_days=cur_days,
+        ref_days=ref_days, cur_days=cur_days, bin_min=bin_min,
         figs_dir_rel=_rel_from_md(FIGS_DIR),
         tables_dir_rel=_rel_from_md(TABLES_DIR),
     )
@@ -594,8 +663,10 @@ def compute_target_drift(perf: pd.DataFrame, current_days: int, reference_days: 
         return None
     perf = perf.copy()
     if "ts" not in perf.columns:
-        for c in ("ts","tbin_utc","timestamp"):
-            if c in perf.columns: perf.rename(columns={c:"ts"}, inplace=True); break
+        for c in ("ts", "tbin_utc", "timestamp"):
+            if c in perf.columns:
+                perf.rename(columns={c: "ts"}, inplace=True)
+                break
     perf["ts"] = pd.to_datetime(perf["ts"], errors="coerce")
     tmax = perf["ts"].max()
     t_cur_start = tmax - pd.Timedelta(days=current_days)
@@ -604,17 +675,23 @@ def compute_target_drift(perf: pd.DataFrame, current_days: int, reference_days: 
     ref = perf[(perf["ts"] >= t_ref_start) & (perf["ts"] < t_ref_end)].copy()
     cur = perf[(perf["ts"] >= t_cur_start) & (perf["ts"] <= tmax)].copy()
 
-    def _ks(a,b):
-        a = pd.to_numeric(a, errors="coerce").dropna(); b = pd.to_numeric(b, errors="coerce").dropna()
-        if a.empty or b.empty: return np.nan
+    def _ks(a, b):
+        a = pd.to_numeric(a, errors="coerce").dropna()
+        b = pd.to_numeric(b, errors="coerce").dropna()
+        if a.empty or b.empty:
+            return np.nan
         q = np.unique(np.nanquantile(pd.concat([a, b]), np.linspace(0, 1, 201)))
-        ca,_ = np.histogram(a, bins=q); cb,_ = np.histogram(b, bins=q)
-        cdfa = np.cumsum(ca)/max(1, ca.sum()); cdfb = np.cumsum(cb)/max(1, cb.sum())
+        ca, _ = np.histogram(a, bins=q)
+        cb, _ = np.histogram(b, bins=q)
+        cdfa = np.cumsum(ca) / max(1, ca.sum())
+        cdfb = np.cumsum(cb) / max(1, cb.sum())
         return float(np.max(np.abs(cdfa - cdfb)))
 
-    def _dmv(a,b):
-        a = pd.to_numeric(a, errors="coerce").dropna(); b = pd.to_numeric(b, errors="coerce").dropna()
-        if a.empty or b.empty: return (np.nan, np.nan)
+    def _dmv(a, b):
+        a = pd.to_numeric(a, errors="coerce").dropna()
+        b = pd.to_numeric(b, errors="coerce").dropna()
+        if a.empty or b.empty:
+            return (np.nan, np.nan)
         dm = (b.mean() - a.mean()) / (a.std(ddof=1) + 1e-9)
         dv = (b.var(ddof=1) - a.var(ddof=1)) / (a.var(ddof=1) + 1e-9)
         return float(dm), float(dv)
@@ -632,9 +709,10 @@ def main(
     reference_days: int,
     tz: Optional[str],
     perf_path: Optional[str] = None,
+    bin_min: int = 5,
 ):
     events = _read_parquet(events_path)
-    events = _ensure_columns(events)
+    events = _ensure_columns(events, bin_min=bin_min)
 
     # calculs
     res = compute_drift(events, current_days=current_days, reference_days=reference_days, tz=tz)
@@ -656,7 +734,7 @@ def main(
             print(f"[drift] target drift skipped: {e}")
 
     # page md
-    _render_markdown(res, current_days, reference_days, perf_used)
+    _render_markdown(res, current_days, reference_days, perf_used, bin_min)
 
     print("[drift] Done.")
     print(f"[drift] Markdown -> {OUT_MD}")
@@ -673,6 +751,7 @@ if __name__ == "__main__":
     ap.add_argument("--reference-days", type=int, default=28)
     ap.add_argument("--tz", default="Europe/Paris")
     ap.add_argument("--perf", default=None, help="docs/exports/perf.parquet (optional)")
+    ap.add_argument("--bin-min", type=int, default=5, help="Pas temporel des events (minutes)")
     args = ap.parse_args()
 
     main(
@@ -681,4 +760,5 @@ if __name__ == "__main__":
         reference_days=args.reference_days,
         tz=args.tz,
         perf_path=args.perf,
+        bin_min=args.bin_min,
     )

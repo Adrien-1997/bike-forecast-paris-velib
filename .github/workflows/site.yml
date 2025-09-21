@@ -64,7 +64,7 @@ jobs:
         run: |
           python tools/build_monitoring.py \
             --tz Europe/Paris \
-            --horizon 60 \
+            --horizon 15 \
             --last-days 14 \
             --current-days 7 \
             --reference-days 28
@@ -139,11 +139,11 @@ jobs:
           cp -v hf-ds/exports/velib.csv     docs/exports/velib.csv     || true
           ls -lh docs/exports || true
 
-      - name: Retrain LightGBM (T+60)
+      - name: Retrain LightGBM (T+15)
         run: |
           python - << 'PY'
           from src.forecast import train
-          res = train(horizon_minutes=60, lookback_days=30)
+          res = train(horizon_minutes=15, lookback_days=30)
           print(res)
           import json, pathlib
           p = pathlib.Path("docs/exports"); p.mkdir(parents=True, exist_ok=True)
@@ -170,7 +170,7 @@ jobs:
         run: |
           python tools/build_monitoring.py \
             --tz Europe/Paris \
-            --horizon 60 \
+            --horizon 15 \
             --last-days 14 \
             --current-days 7 \
             --reference-days 28

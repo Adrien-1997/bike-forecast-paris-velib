@@ -1,16 +1,51 @@
 # tools/build_model_pipeline.py
-# Page builder — "Modèle / Pipeline d’entraînement & features"
+# -----------------------------------------------------------------------------
+# Modèle — Pipeline d’entraînement & features
 #
-# Produit des artefacts décrivant le pipeline :
-# - schemas des fichiers d’entrée (events/perf)
-# - résumé pipeline (JSON) : fenêtres, horizon, bornes temporelles, nb stations
-# - inventaire des features attendues par le modèle (si dispo) + classification par familles
-# - figures simples : diagramme du dataflow, histogramme des familles de features
+# Rôle
+# ----
+# Documenter le **pipeline** de modélisation et produire :
+# - Schémas effectifs des fichiers d’entrée (events/perf)
+# - Résumé JSON (fenêtres, horizon, bornes temporelles, nb de stations)
+# - Inventaire des **features** attendues par le modèle (si dispo) + familles
+# - Figures : architecture du pipeline, rolling origin, couverture daily, dataflow
+# - Page Markdown : `docs/model/pipeline.md`
 #
-# CLI :
-#   python tools/build_model_pipeline.py --events docs/exports/events.parquet --perf docs/exports/perf.parquet --horizon 60
+# Entrées
+# -------
+# - `docs/exports/events.parquet`
+# - `docs/exports/perf.parquet`
+# - (optionnel) bundle modèle via `src.forecast.load_model_bundle(...)`
+#   ou `src.features.feature_cols` pour récupérer la liste des features
 #
-#!/usr/bin/env python3
+# Sorties
+# -------
+# - `docs/assets/tables/model/pipeline/` :
+#     - `schema_events.csv`, `schema_perf.csv`
+#     - `pipeline_overview.json`
+#     - `features_contract.csv`, `features_by_family.csv`
+# - `docs/assets/figs/model/pipeline/` :
+#     - `pipeline_architecture.png`, `rolling_origin.png`,
+#       `events_coverage_daily.png`, `features_by_family.png`, `dataflow.png`
+# - `docs/model/pipeline.md`
+#
+# Notes
+# -----
+# - Le script **décrit** les données, il ne modifie ni n’aligne les timestamps
+#   (cadence opérationnelle : **pas 5 minutes** ; l’arrondi est fait ailleurs).
+# - La détection des features est **opportuniste** :
+#     1) `src.forecast.load_model_bundle(horizon_minutes=...)`
+#     2) `model.feature_names_in_`
+#     3) `src.features.feature_cols`
+#
+# CLI
+# ---
+# python tools/build_model_pipeline.py \
+#   --events docs/exports/events.parquet \
+#   --perf   docs/exports/perf.parquet \
+#   --horizon 15
+# -----------------------------------------------------------------------------
+
 from __future__ import annotations
 
 import argparse
@@ -324,7 +359,7 @@ Décrire précisément **d’où viennent les données**, **comment on fabrique 
 - **Géographie légère** (optionnelle) : arrondissement/quartier, altitude, distance centre.
 
 ### Construction des features (exemples typiques)
-- **Retards (lags)** : valeurs H−15, −30, −45, −60… (pas d’info future).  
+- **Retards (lags)** : valeurs H−5, −10, −15, −60… (pas d’info future).  
 - **Fenêtres glissantes** : moyennes/medians/écarts-types sur 1–6 h, indicateurs de volatilité.  
 - **Saisonnalité** : heure **sin/cos**, jour de semaine encodé, période scolaire.  
 - **Interactions légères** : lags × heure, météo × heure (si pertinent).  
@@ -551,4 +586,3 @@ if __name__ == "__main__":
     except Exception as e:
         _log(f"ERROR: {type(e).__name__}: {e}")
         raise
-

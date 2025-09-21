@@ -10,11 +10,6 @@ import requests
 import folium
 from folium.plugins import MarkerCluster
 import streamlit as st
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from src.utils_io import get_export_path
 
 # -----------------------------------------------------------------------------
 # BOOTSTRAP
@@ -22,7 +17,8 @@ from src.utils_io import get_export_path
 st.set_page_config(page_title="Prévisions Vélib’ Paris", page_icon="🚲", layout="wide")
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))  # permet d'importer src.*
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))  # permet d'importer src.*
 
 from src.forecast import load_model_bundle
 from src.cal_features import add_calendar_features
@@ -30,6 +26,11 @@ from src.utils_io import get_export_path
 
 MODELS_DIR = ROOT / "models"
 DEBUG = False
+
+# Cadence & horizon
+BIN_STR = "5min"          # cadence temporelle
+HORIZ_MIN = 15            # horizon de prévision en minutes (=> 3 bins)
+REFRESH_AGE_MIN = 10      # si parquet "vieux" de plus de 10 min → refresh HF
 
 st.session_state.setdefault("map_center", (48.8566, 2.3522))
 st.session_state.setdefault("map_zoom", 15)
@@ -48,7 +49,7 @@ h2, h3 { margin-top: 1rem !important; margin-bottom: .6rem !important; }
   border:1px solid var(--border-color); background:var(--badge-bg); color:var(--text-strong); }
 .kpi-row { margin: 1rem 0 !important; }
 .kpi-card { background: var(--background-color); border: 1px solid var(--border-color); border-radius: 12px;
-  padding: 1rem 1.2rem; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  padding: 1rem 1.2rem; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0/.08); }
 .kpi-title { color: var(--text-muted); font-size: .85rem; margin-bottom: .35rem; }
 .kpi-value { font-size: 1.35rem; font-weight: 700; color: var(--text-strong); }
 .finder-card [data-testid="column"]{ display:flex; align-items:flex-end; gap:.5rem; }
@@ -78,17 +79,15 @@ TITLE = "🚲 Prévisions Vélib’ Paris"
 # -----------------------------------------------------------------------------
 # RÉSOLUTIONS (HF + OpenData)
 # -----------------------------------------------------------------------------
-# --- remplace ta fonction _velib_local_path par celle-ci
 def _velib_local_path(force_hf: bool = False) -> str:
     """
     Retourne le chemin local du parquet.
-    - Appel simple sans mot-clé si force_hf=False
-    - Si force_hf=True, tente plusieurs signatures courantes : force, force_download, refresh
+    - force_hf=False : appel simple
+    - force_hf=True  : tente plusieurs signatures pour forcer un refresh local depuis HF
     """
     try:
         if not force_hf:
-            return str(get_export_path("velib.parquet"))  # appel simple
-        # force_hf=True : tester différentes signatures
+            return str(get_export_path("velib.parquet"))
         try:
             return str(get_export_path("velib.parquet", force=True))
         except TypeError:
@@ -101,16 +100,14 @@ def _velib_local_path(force_hf: bool = False) -> str:
             return str(get_export_path("velib.parquet", refresh=True))
         except TypeError:
             pass
-        # Dernier recours : appel simple (sans forcer)
         return str(get_export_path("velib.parquet"))
     except Exception as e:
         st.error(f"get_export_path a échoué : {e}")
-        # Fallback très conservateur si ta fonction n'est pas dispo : chemin attendu en repo
         return "docs/exports/velib.parquet"
 
 def _gentle_refresh_from_hf() -> str | None:
     try:
-        path = _velib_local_path(force_hf=True)   # ← force via multi-signatures
+        path = _velib_local_path(force_hf=True)
         st.session_state["cache_buster"] += 1
         st.toast("Parquet rafraîchi depuis Hugging Face ✅")
         return path
@@ -135,7 +132,6 @@ def weather_badges_from_parquet(parquet_path: str) -> str:
         temp = sub.get("temp_C", pd.Series([np.nan])).mean()
         rain = sub.get("precip_mm", pd.Series([np.nan])).mean()
         wind = sub.get("wind_mps", pd.Series([np.nan])).mean()
-        # NB: wind_mps → km/h visuel
         wind_kmh = None if pd.isna(wind) else float(wind) * 3.6
         parts = [
             _format_badge(temp, "°C", "🌡️"),
@@ -238,53 +234,57 @@ def _parquet_age_minutes(path: str) -> int | None:
         ts = pd.to_datetime(ts_col, errors="coerce").max()
         if pd.isna(ts): return None
         if ts.tzinfo is None: ts = ts.tz_localize("UTC")
-        now_paris = pd.Timestamp.now(tz="Europe/Paris").floor("15min")
-        ts_paris = ts.tz_convert("Europe/Paris").floor("15min")
+        now_paris = pd.Timestamp.now(tz="Europe/Paris").floor(BIN_STR)
+        ts_paris = ts.tz_convert("Europe/Paris").floor(BIN_STR)
         return int((now_paris - ts_paris).total_seconds() // 60)
     except Exception:
         return None
 
-def _gentle_refresh_from_hf() -> str | None:
-    """Télécharge depuis HF (force=True), invalide cache ciblé, retourne le chemin local."""
-    try:
-        path = _velib_local_path(force_hf=True)  # HF → local (écrase)
-        st.session_state["cache_buster"] += 1    # invalider _read_parquet_cached
-        st.toast("Parquet rafraîchi depuis Hugging Face ✅")
-        return path
-    except Exception as e:
-        st.error(f"Échec du rafraîchissement HF : {e}")
-        return None
-
 # -----------------------------------------------------------------------------
-# FEATURES LIVE (depuis velib.parquet)
+# FEATURES LIVE (depuis velib.parquet) — cohérence stricte avec entraînement
 # -----------------------------------------------------------------------------
 def _load_recent_bins(parquet_path: str) -> pd.DataFrame:
     df = _read_parquet_cached(parquet_path, st.session_state["cache_buster"])
     if df.empty: return df
-    cutoff = pd.Timestamp.utcnow().floor("15min") - pd.Timedelta(days=2)
+    cutoff = pd.Timestamp.utcnow().floor(BIN_STR) - pd.Timedelta(days=2)
     return df[pd.to_datetime(df["tbin_utc"]) >= cutoff.tz_localize(None)].copy()
 
-def _add_lags_rollings(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty: return df
+def _add_lags_rollings_coherent(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    IMPORTANT: Doit reproduire les features de src/features.py::build_training_frame
+    Lags: (1,3,6,12,24,48)
+    Rollings: (12,24)
+    Trends: 12 bins
+    """
+    if df is None or df.empty: 
+        return df
+
     req_cols = ["tbin_utc", "nb_velos_bin", "occ_ratio_bin"]
     for c in req_cols:
-        if c not in df.columns: df[c] = np.nan
+        if c not in df.columns: 
+            df[c] = np.nan
+
     gdf = df.copy()
     gdf["tbin_utc"] = pd.to_datetime(gdf["tbin_utc"], utc=True, errors="coerce").dt.tz_localize(None)
     gdf["nb_velos_bin"] = pd.to_numeric(gdf["nb_velos_bin"], errors="coerce")
     gdf["occ_ratio_bin"] = pd.to_numeric(gdf["occ_ratio_bin"], errors="coerce")
 
+    lag_bins = (1, 3, 6, 12, 24, 48)
+
     def _per_station(g: pd.DataFrame) -> pd.DataFrame:
         g = g.sort_values("tbin_utc").copy()
-        for b in (1, 2, 3, 4, 8, 16):
+        # Lags
+        for b in lag_bins:
             g[f"lag_nb_{b}b"]  = g["nb_velos_bin"].shift(b)
             g[f"lag_occ_{b}b"] = g["occ_ratio_bin"].shift(b)
-        g["roll_nb_4b"]  = g["nb_velos_bin"].rolling(window=4,  min_periods=1).mean()
-        g["roll_nb_8b"]  = g["nb_velos_bin"].rolling(window=8,  min_periods=1).mean()
-        g["roll_occ_4b"] = g["occ_ratio_bin"].rolling(window=4,  min_periods=1).mean()
-        g["roll_occ_8b"] = g["occ_ratio_bin"].rolling(window=8,  min_periods=1).mean()
-        g["trend_nb_4b"]  = (g["nb_velos_bin"]  - g["nb_velos_bin"].shift(4))  / 4.0
-        g["trend_occ_4b"] = (g["occ_ratio_bin"] - g["occ_ratio_bin"].shift(4)) / 4.0
+        # Rollings (12b=1h, 24b=2h)
+        g["roll_nb_12b"]  = g["nb_velos_bin"].rolling(12,  min_periods=1).mean()
+        g["roll_nb_24b"]  = g["nb_velos_bin"].rolling(24,  min_periods=1).mean()
+        g["roll_occ_12b"] = g["occ_ratio_bin"].rolling(12, min_periods=1).mean()
+        g["roll_occ_24b"] = g["occ_ratio_bin"].rolling(24, min_periods=1).mean()
+        # Trends (12 bins = 60 min)
+        g["trend_nb_12b"]  = (g["nb_velos_bin"]  - g["nb_velos_bin"].shift(12)) / 12.0
+        g["trend_occ_12b"] = (g["occ_ratio_bin"] - g["occ_ratio_bin"].shift(12)) / 12.0
         return g
 
     try:
@@ -296,22 +296,36 @@ def _add_lags_rollings(df: pd.DataFrame) -> pd.DataFrame:
         out = out.join(gdf[["stationcode"]])
 
     float_cols = out.select_dtypes(include=["float64"]).columns
-    if len(float_cols): out[float_cols] = out[float_cols].astype("float32", copy=False)
+    if len(float_cols):
+        out[float_cols] = out[float_cols].astype("float32", copy=False)
     return out
 
 def build_live_feature_frame(parquet_path: str, feat_cols: List[str]) -> pd.DataFrame:
     base = _load_recent_bins(parquet_path)
     if base is None or base.empty:
         return pd.DataFrame(columns=feat_cols)
+
     base["tbin_utc"] = pd.to_datetime(base["tbin_utc"], utc=True).dt.tz_localize(None)
-    base["hour_utc"] = pd.to_datetime(base["hour_utc"], utc=True).dt.tz_localize(None)
-    base = _add_lags_rollings(base)
+    if "hour_utc" in base.columns:
+        base["hour_utc"] = pd.to_datetime(base["hour_utc"], utc=True).dt.tz_localize(None)
+    else:
+        # fallback sûr si manquant (reconstruit à l'heure)
+        base["hour_utc"] = base["tbin_utc"].dt.floor("h")
+
+    # Lags/Rollings/Trends cohérents avec l'entraînement
+    base = _add_lags_rollings_coherent(base)
+
+    # Features calendaires (inclut minute/min5_idx/tod_* si tbin_utc présent)
     base = add_calendar_features(base, tz="Europe/Paris")
+
+    # On garde la dernière observation par station (prediction "now → now+15")
     base = base.sort_values(["stationcode","tbin_utc"]).groupby("stationcode", as_index=False).tail(1)
 
+    # Construire X avec TOUTES les colonnes attendues par le modèle (feat_cols)
     X = base.copy()
     for c in feat_cols:
-        if c not in X.columns: X[c] = 0.0
+        if c not in X.columns:
+            X[c] = 0.0
     X = X[feat_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).astype("float32")
     X["stationcode"] = base["stationcode"].astype(str).values
     return X
@@ -324,9 +338,9 @@ def _load_model_cached_minutes(h_minutes: int):
     model, feats = load_model_bundle(horizon_minutes=h_minutes, model_dir=str(MODELS_DIR))
     return model, feats
 
-def predict_nbvelos_t1h(df_now: pd.DataFrame, parquet_path: str) -> pd.DataFrame:
+def predict_nbvelos_t15m(df_now: pd.DataFrame, parquet_path: str) -> pd.DataFrame:
     try:
-        model, feat_cols = _load_model_cached_minutes(60)
+        model, feat_cols = _load_model_cached_minutes(HORIZ_MIN)  # 15 min
         X = build_live_feature_frame(parquet_path, feat_cols)
         if X.empty:
             raise RuntimeError("No live features available (empty X)")
@@ -363,13 +377,13 @@ except Exception:
 # --- contrôle fraicheur parquet & gentle refresh (sans reboot global)
 parquet_path = _velib_local_path(force_hf=False)
 _age = _parquet_age_minutes(parquet_path)
-if _age is not None and _age > 15:
+if _age is not None and _age > REFRESH_AGE_MIN:
     st.warning(f"⏱️ Parquet âgé de {_age} min → rafraîchissement depuis HF…")
     p2 = _gentle_refresh_from_hf()
     if p2: parquet_path = p2
 
-# --- prédiction
-pred_df = predict_nbvelos_t1h(df_now, parquet_path)
+# --- prédiction T+15
+pred_df = predict_nbvelos_t15m(df_now, parquet_path)
 df_with_pred = df_now.merge(pred_df, on="stationcode", how="left")
 if "capacity" in df_with_pred:
     cap = pd.to_numeric(df_with_pred["capacity"], errors="coerce").fillna(0).astype(int)
@@ -399,12 +413,12 @@ def parquet_freshness_badge(path: str) -> str:
         ts = pd.to_datetime(ts_col, errors="coerce").max()
         if pd.isna(ts): return "<span class='badge'>Parquet: invalide</span>"
         if ts.tzinfo is None: ts = ts.tz_localize("UTC")
-        now_paris = pd.Timestamp.now(tz="Europe/Paris").floor("15min")
-        ts_paris = ts.tz_convert("Europe/Paris").floor("15min")
+        now_paris = pd.Timestamp.now(tz="Europe/Paris").floor(BIN_STR)
+        ts_paris  = ts.tz_convert("Europe/Paris").floor(BIN_STR)
         delta_min = int((now_paris - ts_paris).total_seconds() // 60)
-        if delta_min <= 15:
+        if delta_min <= 5:
             color = "#dcfce7; color:#166534"
-        elif delta_min <= 60:
+        elif delta_min <= 15:
             color = "#fef9c3; color:#854d0e"
         else:
             color = "#fee2e2; color:#991b1b"
@@ -433,16 +447,16 @@ if PAGE == "Carte":
 
     try:
         display_mode = st.segmented_control("Mode d'affichage",
-            options=["Actuel", "Prévision T+1h"],
+            options=["Actuel", "Prévision T+15 min"],
             selection_mode="single", default="Actuel", label_visibility="collapsed")
     except Exception:
-        display_mode = st.radio("Mode d'affichage", ["Actuel", "Prévision T+1h"], index=0, horizontal=True, label_visibility="collapsed")
-    display_pred = (display_mode == "Prévision T+1h")
+        display_mode = st.radio("Mode d'affichage", ["Actuel", "Prévision T+15 min"], index=0, horizontal=True, label_visibility="collapsed")
+    display_pred = (display_mode == "Prévision T+15 min")
 
     wx_badges = weather_badges_from_parquet(parquet_path)
     pf_badge = parquet_freshness_badge(parquet_path)
     render_badges(
-        f"<span class='badge'>Mode : <b>{'Prévision T+1h' if display_pred else 'Actuel'}</b></span>"
+        f"<span class='badge'>Mode : <b>{'Prévision T+15 min' if display_pred else 'Actuel'}</b></span>"
         + wx_badges
         + pf_badge
     )
@@ -577,7 +591,7 @@ if PAGE == "Carte":
                 f"<div style='color:#6b7280;margin-bottom:.35rem'>#{code}</div>"
                 f"<div style='display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.35rem'>"
                 f"<span style='padding:.2rem .5rem;border-radius:8px;background:#f3f4f6'>Actuel&nbsp;: <b>{nb_act}</b> / {cap}</span>"
-                f"<span style='padding:.2rem .5rem;border-radius:8px;background:#eef2ff'>Prévision T+1h&nbsp;: <b>{nb_pred}</b></span>"
+                f"<span style='padding:.2rem .5rem;border-radius:8px;background:#eef2ff'>Prévision T+15&nbsp;min&nbsp;: <b>{nb_pred}</b></span>"
                 f"{_delta_badge(nb_act, nb_pred, cap)}</div></div>"
             )
             folium.Marker((lat, lon), icon=icon, tooltip=f"{name} (#{code})",
@@ -596,7 +610,7 @@ if PAGE == "Carte":
         open_popup=bool(highlight_code), display_prediction=bool(display_pred),
     )
     st.components.v1.html(m.get_root().render(), height=560)
-    st.markdown("<div style='color:#999;font-size:12px;margin-top:8px;'>OpenData en cache 5 min • Parquet rafraîchi automatiquement si >15 min (HF).</div>", unsafe_allow_html=True)
+    st.markdown("<div style='color:#999;font-size:12px;margin-top:8px;'>OpenData en cache 5 min • Parquet rafraîchi automatiquement si >10 min (HF).</div>", unsafe_allow_html=True)
 
 else:
     st.markdown("### 📊 Monitoring réseau")
@@ -605,7 +619,7 @@ else:
     pf_badge = parquet_freshness_badge(parquet_path)
 
     render_badges(
-        "<span class='badge'>Prévision : <b>T+1h</b></span>"
+        "<span class='badge'>Prévision : <b>T+15 min</b></span>"
         + wx_badges
         + pf_badge
     )
@@ -642,7 +656,7 @@ else:
 
     # ------------------------ Contrôles ------------------------
     st.divider()
-    st.subheader("Stations critiques (T+1h)")
+    st.subheader("Stations critiques (T+15 min)")
 
     cc1, cc2, cc3, cc4 = st.columns([1.1, 1, 1, 1.2])
     with cc1:

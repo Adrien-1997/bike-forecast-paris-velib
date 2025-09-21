@@ -1,12 +1,35 @@
-﻿# tools/build_network_stations.py
-# Page builder — "Réseau / Stations & profils"
-# - Produit une table exploratoire (pénurie/saturation 7 & 30 j, volatilité, couverture, capacité estimée, distance centre)
-# - Calcule un PROFIL 24 h par station (médiane par quart d'heure, sur ~28 j), normalise, CLUSTERS (K-Means par défaut)
-# - Génère les figures (centroïdes 24 h, PCA 2D) et, si folium dispo, une carte des stations colorées par cluster
+﻿# -----------------------------------------------------------------------------
+# Projet : Bike Forecasting — Réseau / Stations & Profils
+# Cadence d’ingestion : 5 minutes
+# Horizon de prévision : 15 minutes
 #
-# CLI :
-#   python tools/build_network_stations.py --events docs/exports/events.parquet --last-days 7 --clusters 6 --hours 48 --select 12 --by volatility --tz Europe/Paris
+# Conventions
+# -----------
+# - Les events sont échantillonnés toutes les 5 minutes (UTC naïf).
+# - Les évaluations modèle sont faites à H = 15 min (ts_target = ts + 15m).
+# - Tous les calculs “réseau” utilisent des pas de 5 min et des profils 24 h
+#   en quarts d’heure (96 points), l’affichage pouvant être en Europe/Paris.
 #
+# Rappel CLI
+# ----------
+#   python tools/build_network_stations.py \
+#     --events docs/exports/events.parquet \
+#     --last-days 7 --clusters 4 --hours 48 --select 12 --by volatility \
+#     --tz Europe/Paris
+#
+# Autres commandes utiles
+# -----------------------
+#   python tools/build_monitoring.py --tz Europe/Paris \
+#     --last-days 7 --current-days 7 --reference-days 28 --horizon 15
+#
+# Constantes (à garder cohérentes)
+# --------------------------------
+# BIN_MIN       = 5     # pas temporel des events (minutes)
+# HORIZON_MIN   = 15    # horizon de prévision (minutes)
+# PROFILE_WINDOW_DAYS = 28  # fenêtre pour profil 24 h (médiane)
+# TIMEZONE_IANA = "Europe/Paris"
+# -----------------------------------------------------------------------------
+
 from __future__ import annotations
 
 import argparse
@@ -160,10 +183,10 @@ Chaque station peut avoir une fiche dédiée (optionnel) :
 ---
 
 ## 8) Mémo technique
-- **Source** : `events.parquet` (timestamps 15 min UTC naïfs, généré durant le build).  
+- **Source** : `events.parquet` (timestamps **5 min** UTC naïfs, généré durant le build).  
 - **Capacité estimée** : priorité à `capacity_src`, sinon quantile 0.98 de `(bikes + docks_avail)` si dispo, sinon 0.98 de `bikes`.  
 - **Pénurie / Saturation** : `bikes == 0` / (`docks_avail == 0` ou `capacity - bikes == 0`).  
-- **Couverture** : `#bins observés / #bins attendus` sur {last_days} j.  
+- **Couverture** : `#bins observés / #bins attendus` sur {last_days} j (attendu en pas **5 min**).  
 - **Volatilité** : σ des vélos par station sur la journée locale, médiane des stations.
 
 """
@@ -227,7 +250,8 @@ def _estimate_capacity(win: pd.DataFrame) -> pd.Series:
     except TypeError:
         return gb.apply(est)
 
-def _expected_bins(tmin: pd.Timestamp, tmax: pd.Timestamp, freq: str = "15min") -> int:
+def _expected_bins(tmin: pd.Timestamp, tmax: pd.Timestamp, freq: str = "5min") -> int:
+    """Nombre de bins attendus entre tmin et tmax inclus, pour une cadence donnée (par défaut 5 min)."""
     if pd.isna(tmin) or pd.isna(tmax):
         return 0
     tmin = pd.to_datetime(tmin, utc=True)
@@ -262,7 +286,7 @@ def _station_stats(df: pd.DataFrame, days: int = 7) -> pd.DataFrame:
         saturation=("occ", lambda s: float(np.mean((1 - s).fillna(0) <= 0))),
     ).reset_index()
 
-    out["coverage"] = out.apply(lambda r: r["n_bins"] / max(_expected_bins(r["min_ts"], r["max_ts"]), 1), axis=1)
+    out["coverage"] = out.apply(lambda r: r["n_bins"] / max(_expected_bins(r["min_ts"], r["max_ts"], freq="5min"), 1), axis=1)
     out["dist_centre_km"] = out.apply(lambda r: _haversine_km(PARIS_LAT, PARIS_LON, r["lat"], r["lon"]) if pd.notna(r["lat"]) and pd.notna(r["lon"]) else np.nan, axis=1)
     return out[["station_id","name","lat","lon","capacity_est","penury","saturation","bikes_std","coverage","dist_centre_km","n_bins"]]
 
@@ -278,6 +302,7 @@ def _write_json(path: Path, data: dict) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 def _build_24h_profile(df: pd.DataFrame, days: int = PROFILE_WINDOW_DAYS) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Construit un profil 24 h en quarts d’heure (96 points) à partir d’events 5 min (agrégation floor->15min)."""
     tmax = df["ts"].max()
     tmin = tmax - pd.Timedelta(days=days)
     sub = df[(df["ts"] >= tmin) & (df["ts"] <= tmax)].copy()
@@ -296,12 +321,21 @@ def _build_24h_profile(df: pd.DataFrame, days: int = PROFILE_WINDOW_DAYS) -> Tup
     meta["capacity_est"] = meta["capacity_est_y"].fillna(meta["capacity_est_x"])
     meta = meta.drop(columns=[c for c in ["capacity_est_x","capacity_est_y"] if c in meta.columns])
 
-    # occ par quart d'heure (médiane)
+    # occ par quart d'heure (médiane) — agrégation 5→15 min
     sub["local"] = pd.to_datetime(sub["ts"], utc=True, errors="coerce").dt.tz_convert("Europe/Paris")
-    sub["hhmm"] = sub["local"].dt.strftime("%H:%M")
+    sub["local15"] = sub["local"].dt.floor("15min")
+    sub["hhmm"] = sub["local15"].dt.strftime("%H:%M")
+
     occ = sub.merge(cap.rename("capacity_est"), left_on="station_id", right_index=True, how="left")
     occ["occ"] = occ["bikes"] / occ["capacity_est"].replace({0: np.nan})
-    prof = occ.groupby(["station_id","hhmm"])["occ"].median().unstack().reindex(columns=[f"{h:02d}:{m:02d}" for h in range(24) for m in (0,15,30,45)], fill_value=np.nan)
+
+    # grille 96 points
+    qh_cols = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0,15,30,45)]
+    prof = (
+        occ.groupby(["station_id","hhmm"])["occ"].median()  # median sur les 3 bins 5min du quart d'heure si présents
+           .unstack()
+           .reindex(columns=qh_cols, fill_value=np.nan)
+    )
 
     return prof, meta
 
@@ -580,7 +614,7 @@ def _map_clusters(meta: pd.DataFrame, labels: pd.Series | pd.DataFrame, out_html
     df = df[df["lat"].between(-90, 90) & df["lon"].between(-180, 180)]
     dropped = n0 - len(df)
     if dropped:
-        print(f"[map] Skipped {dropped} station(s) without valid lat/lon.")
+        print(f"[map] Skipped {dropped} station(s) without valid lat/lon).")
     if df.empty:
         print("[map] No stations with valid coordinates; skipping map export.")
         return
@@ -736,7 +770,7 @@ def main(events_path: Path, last_days: int, k: int, hours: int, select: int, by:
         OUT_MD.parent.mkdir(parents=True, exist_ok=True)
         centroids_png = FIGS_DIR / "centroids_24h.png"
         pca_png = FIGS_DIR / "clusters_pca.png"
-        pca_circle_png = FIGS_DIR / "clusters_pca_circle.png"   # <-- ajoute
+        pca_circle_png = FIGS_DIR / "clusters_pca_circle.png"
         map_html = MAPS_DIR / "network_stations_clusters.html"
         stats7 = TABLES_DIR / "station_stats_7d.csv"
         stats30 = TABLES_DIR / "station_stats_30d.csv"

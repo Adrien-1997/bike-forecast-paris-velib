@@ -1,3 +1,46 @@
+# -----------------------------------------------------------------------------
+# Projet : Bike Forecasting — Check Retrain (erreur & dérive)
+# Cadence d’ingestion : 5 minutes
+# Horizon de prévision : 15 minutes
+#
+# Rôle
+# ----
+# Décider s’il faut (re)entraîner le modèle selon :
+#  - la dérive d’erreur : MAE récent vs MAE de référence,
+#  - la dérive de population : PSI sur quelques features (si dispo).
+#
+# Données utilisées (priorité)
+# ---------------------------
+# 1) docs/assets/tables/daily_error.csv   (généré par build_monitoring.py)
+# 2) docs/assets/tables/psi_features.csv  (généré par build_monitoring.py)
+# -> À défaut, calcul direct depuis docs/exports/perf.parquet
+#
+# Conventions
+# -----------
+# - Les events/perf sont échantillonnés toutes les 5 minutes (UTC naïf).
+# - Les évaluations modèle sont faites à H = 15 min (ts_target = ts + 15m).
+# - Le MAE quotidien est agrégé par date (à partir de ts).
+#
+# Heuristiques & seuils (défaut)
+# ------------------------------
+# - Dégradation relative du MAE (lift) : 0.15  (soit +15%)
+# - PSI max (Population Stability Index)       : 0.20
+#   Rappels usuels : ~0.1 faible, ~0.2 moyen, ≥0.3 fort.
+#
+# Sortie
+# ------
+# - Imprime les métriques + la décision binaire : RETRAIN = yes/no
+# - Termine par une ligne JSON compacte (pour CI : `... | tee check.json`)
+#
+# Usage
+# -----
+#   python tools/check_retrain.py \
+#       --perf docs/exports/perf.parquet \
+#       --last-days 14 \
+#       --mae-lift-th 0.15 \
+#       --psi-th 0.2
+# -----------------------------------------------------------------------------
+
 # tools/check_retrain.py
 # Décide s'il faut (re)entraîner le modèle en se basant sur :
 #  - la dérive d'erreur (MAE récent vs MAE de référence),

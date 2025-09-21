@@ -91,7 +91,7 @@ jobs:
           print("[train] timespan:", df['tbin_utc'].min(), "->", df['tbin_utc'].max())
           PY
 
-      - name: Train LGBM (T+60) and verify model file
+      - name: Train LGBM (T+15) and verify model file
         shell: bash
         env:
           PYTHONPATH: ${{ github.workspace }}
@@ -99,7 +99,7 @@ jobs:
           set -euxo pipefail
           python - <<'PY'
           from src.forecast import train
-          out = train(horizon_minutes=60, lookback_days=30)
+          out = train(horizon_minutes=15, lookback_days=30)
           print("[train] OUT:", out)
           PY
 
@@ -107,13 +107,13 @@ jobs:
           ls -lah models || true
 
           echo "=== Check model presence ==="
-          test -f models/lgb_nbvelos_T+60min.joblib || { echo "[CI] modèle introuvable après entraînement"; exit 1; }
+          test -f models/lgb_nbvelos_T+15min.joblib || { echo "[CI] modèle introuvable après entraînement"; exit 1; }
 
       - name: Upload model bundle (artifact)
         uses: actions/upload-artifact@v4
         with:
-          name: model-lgbm-T+60min
-          path: models/lgb_nbvelos_T+60min.joblib
+          name: model-lgbm-T+15min
+          path: models/lgb_nbvelos_T+15min.joblib
           retention-days: 14
 
       - name: Commit model into repo
@@ -122,10 +122,10 @@ jobs:
           set -euxo pipefail
           git config user.name  "github-actions"
           git config user.email "actions@users.noreply.github.com"
-          git add -f models/lgb_nbvelos_T+60min.joblib
+          git add -f models/lgb_nbvelos_T+15min.joblib
           if git diff --cached --quiet; then
             echo "No model change to commit."
           else
-            git commit -m "ci(train): update model lgb_nbvelos_T+60min.joblib"
+            git commit -m "ci(train): update model lgb_nbvelos_T+15min.joblib"
             git push
           fi

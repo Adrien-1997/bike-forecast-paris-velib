@@ -13,7 +13,7 @@
 #
 # CLI :
 #   python tools/build_monitoring_data_health.py --events docs/exports/events.parquet \
-#       --current-days 7 --tz Europe/Paris --fresh-slo-min 5 --flat-steps 8
+#       --current-days 7 --tz Europe/Paris --fresh-slo-min 5 --flat-steps 6 --bin-min 5
 #
 # Hypothèses colonnes (souples) :
 # - ts | tbin_utc | timestamp     → horodatage (sera converti UTC naïf)
@@ -26,11 +26,11 @@
 
 from __future__ import annotations
 
-import os, math
+import math
 from pathlib import Path
 import argparse
 import json
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -95,72 +95,51 @@ def _save_fig(path: Path) -> None:
     plt.savefig(path, dpi=150)
     plt.close()
 
-def _now_utc_floor15() -> pd.Timestamp:
+def _now_utc_floor(bin_min: int) -> pd.Timestamp:
     # UTC → drop tz ⇒ UTC naïf (compatibles avec df["ts"])
-    return pd.Timestamp.now(tz="UTC").floor("15min").tz_localize(None)
+    rule = f"{int(bin_min)}min"
+    return pd.Timestamp.now(tz="UTC").floor(rule).tz_localize(None)
 
-def _expected_bins(tmin: pd.Timestamp, tmax: pd.Timestamp) -> int:
-    return max(1, math.ceil((tmax - tmin).total_seconds() / 60 / 15.0) + 1)
+def _expected_bins(tmin: pd.Timestamp, tmax: pd.Timestamp, bin_min: int) -> int:
+    return max(1, math.ceil((tmax - tmin).total_seconds() / 60 / float(bin_min)) + 1)
 
-def _read_events(path: Path) -> pd.DataFrame:
+def _floor_series(s: pd.Series, bin_min: int) -> pd.Series:
+    return pd.to_datetime(s, errors="coerce", utc=True).dt.floor(f"{int(bin_min)}min").dt.tz_localize(None)
+
+def _read_events(path: Path, bin_min: int) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"[data-health] Introuvable: {path}")
     df = pd.read_parquet(path)
 
     # ts → UTC naïf
-    tcol = None
-    for c in ("ts", "tbin_utc", "timestamp"):
-        if c in df.columns:
-            tcol = c
-            break
+    tcol = next((c for c in ("ts", "tbin_utc", "timestamp") if c in df.columns), None)
     if tcol is None:
         raise KeyError("[data-health] Colonne temporelle manquante (ts/tbin_utc/timestamp)")
-    df["ts"] = (
-        pd.to_datetime(df[tcol], errors="coerce", utc=True)
-          .dt.floor("15min")
-          .dt.tz_localize(None)
-    )
+    df["ts"] = _floor_series(df[tcol], bin_min)
 
     # station_id
-    sid = None
-    for c in ("station_id", "stationcode", "station"):
-        if c in df.columns:
-            sid = c
-            break
+    sid = next((c for c in ("station_id", "stationcode", "station") if c in df.columns), None)
     if sid is None:
         raise KeyError("[data-health] Identifiant station manquant (station_id/stationcode)")
     df["station_id"] = df[sid].astype(str)
 
     # core numeric
-    bikes_col = None
-    for c in ("bikes", "nb_velos_bin", "velos_disponibles", "numBikesAvailable"):
-        if c in df.columns:
-            bikes_col = c; break
+    bikes_col = next((c for c in ("bikes", "nb_velos_bin", "velos_disponibles", "numBikesAvailable") if c in df.columns), None)
     if bikes_col is None:
         raise KeyError("[data-health] Colonne vélos manquante (bikes/nb_velos_bin/velos_disponibles)")
     df["bikes"] = pd.to_numeric(df[bikes_col], errors="coerce")
 
-    docks_col = None
-    for c in ("docks_avail", "nb_docks_bin", "numDocksAvailable"):
-        if c in df.columns:
-            docks_col = c; break
+    docks_col = next((c for c in ("docks_avail", "nb_docks_bin", "numDocksAvailable") if c in df.columns), None)
     df["docks_avail"] = pd.to_numeric(df.get(docks_col, np.nan), errors="coerce")
 
-    cap_col = "capacity" if "capacity" in df.columns else None
-    df["capacity"] = pd.to_numeric(df.get(cap_col, np.nan), errors="coerce")
+    df["capacity"] = pd.to_numeric(df.get("capacity", np.nan), errors="coerce")
 
-    # ingestion timestamp (optionnel) → si absent, série de NaT
-    ing_col = None
-    for c in ("ingested_at", "ingest_ts", "ingest_time", "received_at", "created_at", "etl_ts", "load_ts"):
-        if c in df.columns:
-            ing_col = c; break
+    # ingestion timestamp (optionnel)
+    ing_col = next((c for c in ("ingested_at", "ingest_ts", "ingest_time", "received_at", "created_at", "etl_ts", "load_ts") if c in df.columns), None)
     if ing_col is None:
         df["ingested_at"] = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
     else:
-        df["ingested_at"] = (
-            pd.to_datetime(df[ing_col], errors="coerce", utc=True)
-              .dt.tz_localize(None)
-        )
+        df["ingested_at"] = pd.to_datetime(df[ing_col], errors="coerce", utc=True).dt.tz_localize(None)
 
     # coords (optionnelles)
     if "lat" in df.columns: df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
@@ -173,9 +152,9 @@ def _read_events(path: Path) -> pd.DataFrame:
 
 # --------------------------- KPIs ---------------------------
 
-def kpi_freshness(df: pd.DataFrame, slo_min: int) -> dict:
+def kpi_freshness(df: pd.DataFrame, slo_min: int, bin_min: int) -> dict:
     """Âge du dernier point par station, puis P50/P95 (minutes) vs SLO."""
-    now = _now_utc_floor15()
+    now = _now_utc_floor(bin_min)
     last_ts = df.groupby("station_id")["ts"].max().reset_index(name="last_ts")
     last_ts["age_min"] = (now - last_ts["last_ts"]).dt.total_seconds() / 60.0
     p50 = float(np.nanpercentile(last_ts["age_min"], 50)) if len(last_ts) else np.nan
@@ -186,21 +165,27 @@ def kpi_freshness(df: pd.DataFrame, slo_min: int) -> dict:
         "freshness_age_p50_min": round(p50, 2),
         "freshness_age_p95_min": round(p95, 2),
         "freshness_slo_min": float(slo_min),
+        "bin_min": int(bin_min),
         "freshness_p95_ok": (p95 <= slo_min) if np.isfinite(p95) else None
     }
 
-def kpi_completeness(df: pd.DataFrame, current_days: int) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
-    """Complétude globale & par station sur fenêtre récente; heatmap station×jour."""
+def kpi_completeness(
+    df: pd.DataFrame,
+    current_days: int,
+    bin_min: int,
+    tz: Optional[str]
+) -> Tuple[dict, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Complétude globale & par station sur fenêtre récente; heatmap station×jour; couverture par heure."""
     if current_days <= 0 or df.empty:
-        return {"coverage_global_pct": np.nan}, pd.DataFrame(), pd.DataFrame()
+        return {"coverage_global_pct": np.nan}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     tmax = df["ts"].max()
     tmin = tmax - pd.Timedelta(days=current_days)
     win = df[(df["ts"] > tmin) & (df["ts"] <= tmax)].copy()
     if win.empty:
-        return {"coverage_global_pct": np.nan}, pd.DataFrame(), pd.DataFrame()
+        return {"coverage_global_pct": np.nan}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    exp = _expected_bins(tmin, tmax)
+    exp = _expected_bins(tmin, tmax, bin_min)
     per_station = (win.groupby("station_id")["ts"].nunique()
                       .clip(upper=exp)
                       .rename_axis("station_id").reset_index(name="obs"))
@@ -209,12 +194,17 @@ def kpi_completeness(df: pd.DataFrame, current_days: int) -> tuple[dict, pd.Data
     coverage_global = float(per_station["coverage_pct"].mean()) if len(per_station) else np.nan
 
     # coverage by hour of day (0..23) across stations
-    per_hour = win.copy()
-    per_hour["hour"] = per_hour["ts"].dt.hour
-    per_hour = (per_hour.groupby(["hour", "station_id"])["ts"].nunique()
-                         .rename("obs").reset_index())
-    # expected bins per hour per station: #days * 4 bins/hour
-    exp_hour = current_days * 4
+    if tz:
+        # ts est naïf UTC → on le localise en UTC puis convertit en tz souhaité
+        win["hour"] = pd.to_datetime(win["ts"]).dt.tz_localize("UTC").dt.tz_convert(tz).dt.hour
+    else:
+        # Sinon, rester en UTC
+        win["hour"] = pd.to_datetime(win["ts"]).dt.hour
+
+    per_hour = (win.groupby(["hour", "station_id"])["ts"].nunique()
+                  .rename("obs").reset_index())
+    # expected bins per hour per station: #days * (60/bin_min) bins/hour
+    exp_hour = current_days * (60 // max(1, int(bin_min)))
     per_hour["coverage_pct"] = per_hour["obs"].clip(upper=exp_hour) / float(exp_hour) * 100.0
     cov_by_hour = (per_hour.groupby("hour")["coverage_pct"].mean()
                           .rename_axis("hour").reset_index())
@@ -222,13 +212,13 @@ def kpi_completeness(df: pd.DataFrame, current_days: int) -> tuple[dict, pd.Data
     # station×day heatmap: fraction of present bins per day
     win["date"] = win["ts"].dt.date
     per_sd = win.groupby(["station_id","date"])["ts"].nunique().reset_index(name="obs")
-    per_sd["expected"] = 24 * 4  # 96 bins per day
+    per_sd["expected"] = 24 * (60 // max(1, int(bin_min)))  # bins per day
     per_sd["coverage_pct"] = per_sd["obs"].clip(upper=per_sd["expected"]) / per_sd["expected"] * 100.0
     heat = per_sd.pivot(index="station_id", columns="date", values="coverage_pct").fillna(0.0)
 
     return {"coverage_global_pct": round(coverage_global, 2)}, per_station, heat, cov_by_hour
 
-def kpi_latency(df: pd.DataFrame) -> tuple[dict, Optional[pd.DataFrame]]:
+def kpi_latency(df: pd.DataFrame) -> Tuple[dict, Optional[pd.DataFrame]]:
     """Latence d’ingestion: (ingested_at - ts) en minutes. Retourne KPIs + distribution brute."""
     if "ingested_at" not in df.columns or df["ingested_at"].isna().all():
         return {"latency_p95_min": np.nan, "latency_p50_min": np.nan}, None
@@ -240,7 +230,7 @@ def kpi_latency(df: pd.DataFrame) -> tuple[dict, Optional[pd.DataFrame]]:
     p95 = float(np.nanpercentile(lat["latency_min"], 95))
     return {"latency_p50_min": round(p50,2), "latency_p95_min": round(p95,2)}, lat[["ts","station_id","latency_min"]]
 
-def schema_report(df: pd.DataFrame) -> pd.DataFrame:
+def schema_report(df: pd.DataFrame, bin_min: int) -> pd.DataFrame:
     """Vérifie un schéma minimal & contraintes simples."""
     rep = []
     def add(name, status, detail=""):
@@ -252,7 +242,7 @@ def schema_report(df: pd.DataFrame) -> pd.DataFrame:
 
     # types
     add("type:ts:datetime64", "pass" if np.issubdtype(df["ts"].dtype, np.datetime64) else "fail")
-    add("type:station_id:str", "pass" if df["station_id"].dtype == object or str(df["station_id"].dtype).startswith("string") else "warn")
+    add("type:station_id:str", "pass" if (df["station_id"].dtype == object or str(df["station_id"].dtype).startswith("string")) else "warn")
     add("type:bikes:numeric", "pass" if np.issubdtype(df["bikes"].dtype, np.number) else "fail")
 
     # valeurs plausibles
@@ -273,14 +263,14 @@ def schema_report(df: pd.DataFrame) -> pd.DataFrame:
     # couverture temporelle grossière
     if len(df):
         tmin, tmax = df["ts"].min(), df["ts"].max()
-        exp = _expected_bins(tmin, tmax)
+        exp = _expected_bins(tmin, tmax, bin_min=bin_min)
         got = int(df["ts"].nunique())
         ratio = got / float(exp)
         add("temporal_coverage", "pass" if ratio >= 0.9 else "warn", f"bins={got}/{exp} ({ratio:.2%})")
 
     return pd.DataFrame(rep)
 
-def flat_sequences(df: pd.DataFrame, min_steps: int, current_days: int) -> pd.DataFrame:
+def flat_sequences(df: pd.DataFrame, min_steps: int, current_days: int, bin_min: int) -> pd.DataFrame:
     """
     Detect flat sequences (constant `bikes`) over the recent window.
     Returns columns: station_id, steps, start, end.
@@ -304,11 +294,14 @@ def flat_sequences(df: pd.DataFrame, min_steps: int, current_days: int) -> pd.Da
         win[win["is_flat"]]
         .groupby(["station_id", "grp"])
         .agg(steps=("is_flat", "size"), start=("ts", "min"), end=("ts", "max"))
-        .reset_index()  # KEEP station_id
+        .reset_index()
     )
 
     out = agg[agg["steps"] >= min_steps][["station_id", "steps", "start", "end"]]
-    return out.sort_values(["steps"], ascending=False).reset_index(drop=True)
+    out = out.sort_values(["steps"], ascending=False).reset_index(drop=True)
+    # Ajoute la durée en minutes pour lecture rapide
+    out["duration_min"] = (out["steps"] * bin_min).astype(int)
+    return out
 
 def duplication_stats(df: pd.DataFrame) -> pd.DataFrame:
     """Comptage de doublons (ts, station_id)."""
@@ -318,12 +311,12 @@ def duplication_stats(df: pd.DataFrame) -> pd.DataFrame:
               .rename_axis("station_id").reset_index(name="dups"))
     return dups.sort_values("dups", ascending=False)
 
-def missing_bins(df: pd.DataFrame, current_days: int) -> pd.DataFrame:
+def missing_bins(df: pd.DataFrame, current_days: int, bin_min: int) -> pd.DataFrame:
     """Trous temporels par station (#bins manquants) sur la fenêtre récente."""
     if df.empty: return pd.DataFrame()
     tmax = df["ts"].max()
     tmin = tmax - pd.Timedelta(days=current_days)
-    exp = _expected_bins(tmin, tmax)
+    exp = _expected_bins(tmin, tmax, bin_min)
     got = (df[(df["ts"] > tmin) & (df["ts"] <= tmax)]
              .groupby("station_id")["ts"].nunique()
              .rename_axis("station_id").reset_index(name="obs"))
@@ -403,9 +396,9 @@ Vérifier que le **pipeline d’ingestion** fournit des données **fraîches, co
 - **Complétude (fenêtre {current_days} j)** : {coverage_global:.2f}% (moyenne stations)
 - **Latence d’ingestion** : médiane={lat_p50} min · P95={lat_p95} min
 - **Schéma & contraintes** : {schema_pass} pass · {schema_warn} warn · {schema_fail} fail
-- **Anomalies** : doublons={dups_pct:.2f}% · séquences plates≥{flat_steps} pas={flat_count} · stations avec trous={missing_stations}
+- **Anomalies** : doublons={dups_pct:.2f}% · séquences plates≥{flat_steps} pas ({bin_min} min/pt)={flat_count} · stations avec trous={missing_stations}
 
-> Snapshot UTC : **{now_utc}** · Fenêtre récente : **{current_days}** jours
+> Snapshot UTC : **{now_utc}** · Fenêtre récente : **{current_days}** jours · **Pas** : **{bin_min} min**
 
 ---
 
@@ -436,7 +429,7 @@ Fichier JSON : `{alerts_rel}`
 
 ## Méthodes & règles
 - **Contrat de schéma** : colonnes minimales, types et bornes souples (warnings) / dures (erreurs).
-- **Détection plateaux** : séquence ≥ **{flat_steps}** pas sans variation (**15 min** le pas) → alerte station.
+- **Détection plateaux** : séquence ≥ **{flat_steps}** pas de **{bin_min} min** → alerte station.
 - **Contrôle temps** : pas manquants, pas dupliqués, dérive/retard d’horloge.
 - **Cartographie** : heatmap complétude (stations en lignes × jours en colonnes).
 - **Couverture par heure** : moyenne de la couverture (toutes stations) par heure locale sur {current_days} jours.
@@ -461,9 +454,9 @@ La qualité “technique” n’implique pas la **représentativité** (couverte
 # --------------------------- Main ---------------------------
 
 def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min: int,
-         dup_alert_pct: float, flat_steps: int, compl_alert_pct: float) -> None:
+         dup_alert_pct: float, flat_steps: int, compl_alert_pct: float, bin_min: int) -> None:
     _mkdirs()
-    df = _read_events(events_path)
+    df = _read_events(events_path, bin_min=bin_min)
 
     # Info basic
     info = {
@@ -471,15 +464,18 @@ def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min:
         "stations": int(df["station_id"].nunique()),
         "span": [df["ts"].min().isoformat() if len(df) else None,
                  df["ts"].max().isoformat() if len(df) else None],
+        "bin_min": int(bin_min),
     }
 
     # KPIs
-    kfresh = kpi_freshness(df, slo_min=fresh_slo_min)
-    kcov, by_station_cov, heat, cov_by_hour = kpi_completeness(df, current_days=current_days)
+    kfresh = kpi_freshness(df, slo_min=fresh_slo_min, bin_min=bin_min)
+    kcov, by_station_cov, heat, cov_by_hour = kpi_completeness(
+        df, current_days=current_days, bin_min=bin_min, tz=tz
+    )
     klat, lat_df = kpi_latency(df)
 
     # Anomalies : séquences plates
-    flats = flat_sequences(df, min_steps=flat_steps, current_days=current_days)
+    flats = flat_sequences(df, min_steps=flat_steps, current_days=current_days, bin_min=bin_min)
 
     # Duplications
     dups = duplication_stats(df)
@@ -487,7 +483,7 @@ def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min:
     dups_pct = (dup_total / max(1, len(df))) * 100.0 if len(df) else 0.0
 
     # Missing bins (fenêtre récente)
-    miss = missing_bins(df, current_days=current_days)
+    miss = missing_bins(df, current_days=current_days, bin_min=bin_min)
     missing_stations = int((miss["missing"] > 0).sum()) if len(miss) else 0
 
     # Station health table
@@ -527,7 +523,7 @@ def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min:
         pd.DataFrame(columns=["hour","coverage_pct"]).to_csv(cov_by_hour_csv, index=False)
 
     # Schema report
-    sch = schema_report(df)
+    sch = schema_report(df, bin_min=bin_min)
     schema_report_csv = TABLES_DIR / "schema_report.csv"
     sch.to_csv(schema_report_csv, index=False)
 
@@ -541,7 +537,8 @@ def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min:
                 "start": r["start"].isoformat(),
                 "end": r["end"].isoformat(),
                 "steps": int(r["steps"]),
-                "detail": f"flat for {int(r['steps'])}×15min"
+                "duration_min": int(r["duration_min"]),
+                "detail": f"flat for {int(r['steps'])}×{bin_min}min"
             })
 
     if len(dups):
@@ -598,8 +595,7 @@ def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min:
     gauges_rel = rel_from_md(OUT_MD, FIGS_DIR / "gauges.png")
     heatmap_rel = rel_from_md(OUT_MD, FIGS_DIR / "heatmap_completeness.png")
     top_issues_rel = rel_from_md(OUT_MD, FIGS_DIR / "top_issues.png")
-    lat_fig_path = FIGS_DIR / "latency_hist.png"
-    latency_rel = rel_from_md(OUT_MD, lat_fig_path)
+    latency_rel = rel_from_md(OUT_MD, FIGS_DIR / "latency_hist.png")
 
     data_health_csv_rel = rel_from_md(OUT_MD, data_health_csv)
     station_health_csv_rel = rel_from_md(OUT_MD, station_health_csv)
@@ -616,7 +612,7 @@ def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min:
     flat_alert = "❌ Oui" if alerts["flat_sequences_found"] else "✅ Non"
 
     latency_block = (f"![latency]({latency_rel})"
-                     if lat_fig_path.exists()
+                     if (FIGS_DIR / "latency_hist.png").exists()
                      else "_Latence non disponible (pas de `ingested_at`)._")
 
     md = MD_TEMPLATE.format(
@@ -624,12 +620,13 @@ def main(events_path: Path, current_days: int, tz: Optional[str], fresh_slo_min:
         fresh_p95=(kfresh.get("freshness_age_p95_min", float("nan")) or float("nan")),
         slo_min=(kfresh.get("freshness_slo_min", float("nan")) or float("nan")),
         fresh_status=fresh_status,
-        coverage_global=(data_health.get("coverage_global_pct", float("nan")) or float("nan")),
+        coverage_global=(kcov.get("coverage_global_pct", float("nan")) or float("nan")),
         lat_p50=("n.d." if pd.isna(klat.get("latency_p50_min", np.nan)) else f"{klat['latency_p50_min']:.2f}"),
         lat_p95=("n.d." if pd.isna(klat.get("latency_p95_min", np.nan)) else f"{klat['latency_p95_min']:.2f}"),
         schema_pass=schema_pass, schema_warn=schema_warn, schema_fail=schema_fail,
         dups_pct=dups_pct,
         flat_steps=flat_steps,
+        bin_min=bin_min,
         flat_count=int(len(flats)) if len(flats) else 0,
         missing_stations=missing_stations,
         now_utc=kfresh.get("now_utc", ""),
@@ -665,8 +662,9 @@ if __name__ == "__main__":
     ap.add_argument("--tz", type=str, default="Europe/Paris", help="Fuseau pour l’affichage (info)")
     ap.add_argument("--fresh-slo-min", type=int, default=5, help="SLO fraîcheur (min, P95)")
     ap.add_argument("--dup-alert-pct", type=float, default=1.0, help="Seuil d’alerte duplications (%)")
-    ap.add_argument("--flat-steps", type=int, default=8, help="Séquence min (pas de 15min) pour considérer une série plate")
+    ap.add_argument("--flat-steps", type=int, default=6, help="Séquence min (en pas) pour considérer une série plate")
     ap.add_argument("--compl-alert-pct", type=float, default=98.0, help="Seuil d’alerte de complétude globale (%)")
+    ap.add_argument("--bin-min", type=int, default=5, help="Taille du pas temporel (minutes)")
     args = ap.parse_args()
 
     main(
@@ -677,4 +675,5 @@ if __name__ == "__main__":
         dup_alert_pct=args.dup_alert_pct,
         flat_steps=args.flat_steps,
         compl_alert_pct=args.compl_alert_pct,
+        bin_min=args.bin_min,
     )

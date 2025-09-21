@@ -1,19 +1,37 @@
 # tools/build_model_explainability.py
+# -----------------------------------------------------------------------------
 # Modèle — Explicabilité & calibration
 #
-# Produit (assets):
-# - Résidus & diagnostics : histogramme, QQ-plot, ACF du résidu moyen, hétéroscédasticité, épisodes d'erreurs.
-# - Calibration : scatter global, binning 20 quantiles, pente β par heure, erreur relative par niveau.
-# - Segments : erreurs par cluster (si table disponible).
-# - Importance (si bundle dispo) : permutation importance + PDP (top-3).
-# - Incertitude : coverage empirique (si colonnes présentes).
+# Rôle
+# ----
+# Produire les **diagnostics résidus**, **calibration** (globale & segments),
+# **importance** (si bundle dispo), **PDP** top-3, et **incertitude** (si colonnes).
+# Générer la page `docs/model/explainability.md`.
 #
-# Produit (doc):
-# - docs/model/explainability.md — page "overview-style" suivant le plan fourni.
+# Entrées
+# -------
+# - `docs/exports/perf.parquet` (doit contenir y_true, y_pred, baseline, ts, station_id)
+# - (optionnel) `assets/tables/network/stations/station_clusters.csv` pour segments
 #
-# CLI :
-#   python tools/build_model_explainability.py --perf docs/exports/perf.parquet --last-days 7 --tz Europe/Paris
-#   (optionnel) --no-md pour ne pas écrire la page Markdown
+# Sorties
+# -------
+# - `docs/assets/figs/model/explainability/*.png` (+ map HTML si folium dispo)
+# - `docs/assets/tables/model/explainability/*.csv`
+# - `docs/assets/maps/bias_by_station.html` (si coords)
+# - `docs/model/explainability.md`
+#
+# Notes
+# -----
+# - Cadence temporelle : pas **5 minutes** (arrondi des timestamps).
+# - L’overview se contente d’**associations** (pas de causalité).
+#
+# CLI
+# ---
+# python tools/build_model_explainability.py \
+#   --perf docs/exports/perf.parquet --last-days 7 --tz Europe/Paris
+#   # ajouter --no-md pour ne pas écrire la page Markdown
+# -----------------------------------------------------------------------------
+
 from __future__ import annotations
 
 import argparse
@@ -24,6 +42,10 @@ from typing import Optional, List, Dict, Tuple
 
 import numpy as np
 import pandas as pd
+
+# Matplotlib (headless)
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Carte biais optionnelle
@@ -86,7 +108,7 @@ def _read_perf(path: Path) -> pd.DataFrame:
     # ts
     if "ts" not in df.columns:
         raise KeyError("[explain] Colonne 'ts' manquante")
-    df["ts"] = pd.to_datetime(df["ts"], errors="coerce").dt.floor("15min")
+    df["ts"] = pd.to_datetime(df["ts"], errors="coerce", utc=True).dt.floor("5min")
 
     # station id
     sid = None
@@ -117,9 +139,11 @@ def _read_perf(path: Path) -> pd.DataFrame:
 
 def _localize(df: pd.DataFrame, tz: Optional[str]) -> pd.DataFrame:
     if tz:
-        ldt = df["ts"].dt.tz_localize("UTC").dt.tz_convert(tz)
+        ldt = df["ts"].dt.tz_convert(tz)
         return df.assign(date_local=ldt.dt.date, dow=ldt.dt.dayofweek, hour=ldt.dt.hour)
-    return df.assign(date_local=df["ts"].dt.date, dow=df["ts"].dt.dayofweek, hour=df["ts"].dt.hour)
+    # ts est déjà UTC aware
+    return df.assign(date_local=df["ts"].dt.tz_convert("UTC").dt.date,
+                     dow=df["ts"].dt.dayofweek, hour=df["ts"].dt.hour)
 
 def _metrics(y_true: pd.Series, y_hat: pd.Series) -> Dict[str, float]:
     e = (y_true - y_hat).astype(float)
@@ -147,7 +171,10 @@ def erfinv(y: np.ndarray) -> np.ndarray:
     second = ln / a
     return sgn * np.sqrt(np.sqrt(first**2 - second) - first)
 
-def _acf(x: pd.Series, nlags: int = 48) -> np.ndarray:
+def _acf(x: pd.Series, nlags: int = 144) -> np.ndarray:
+    """
+    ACF sur le résidu moyen (nlags par défaut ≈ 12h à 5 min → 12*60/5 = 144).
+    """
     x = pd.Series(x).astype(float)
     x = x - x.mean()
     acf = np.zeros(nlags + 1)
@@ -196,16 +223,16 @@ def residual_diagnostics(perf: pd.DataFrame, out_dir_figs: Path) -> None:
     plt.ylabel("Quantiles empiriques")
     _save_fig(out_dir_figs / "residual_qqplot.png")
 
-    # ACF du résidu moyen par timestamp
+    # ACF du résidu moyen par timestamp (lag 5 min)
     ts_mean = (df.groupby("ts")["resid"].mean())
-    ac = _acf(ts_mean, nlags=48)  # 12h si pas de trou (15min)
+    ac = _acf(ts_mean, nlags=144)  # 12h à 5 min
     pd.DataFrame({"lag": np.arange(len(ac)), "acf": ac}).to_csv(
         TABLES_DIR / "acf_values.csv", index=False
     )
     plt.figure(figsize=(7, 3.5))
     plt.stem(np.arange(len(ac)), ac, basefmt=" ")
-    plt.title("ACF du résidu moyen (lag 15min)")
-    plt.xlabel("Lag (×15 min)")
+    plt.title("ACF du résidu moyen (lag 5 min)")
+    plt.xlabel("Lag (×5 min)")
     plt.ylabel("ACF")
     _save_fig(out_dir_figs / "residual_acf.png")
 
@@ -365,19 +392,39 @@ def segments_by_cluster(perf: pd.DataFrame, out_dir_tables: Path) -> None:
         clusters = pd.read_csv(STATION_CLUSTERS, dtype={"station_id": str})
     except Exception:
         return
-    df = (perf.merge(clusters[["station_id", "cluster"]], on="station_id", how="left")
-               .dropna(subset=["cluster"]))
+
+    df = perf.copy()
+    df["station_id"] = df["station_id"].astype(str)
+
+    # join clusters and keep only rows with a cluster
+    df = (
+        df.merge(clusters[["station_id", "cluster"]], on="station_id", how="left")
+          .dropna(subset=["cluster"])
+    )
     if df.empty:
         return
-    df["abs_err"] = (df["y_true"] - df["y_pred"]).abs()
-    by_cluster = (df.groupby("cluster")
-             .apply(lambda g: pd.Series({
-                 "mae": float(np.nanmean(g["abs_err"])),
-                 "rmse": float(np.sqrt(np.nanmean((g["y_true"] - g["y_pred"])**2))),
-                 "n": int(len(g))
-             }))).reset_index()
-    by_cluster.to_csv(out_dir_tables / "errors_by_cluster.csv", index=False)
 
+    # compute errors
+    e = (pd.to_numeric(df["y_true"], errors="coerce") -
+         pd.to_numeric(df["y_pred"], errors="coerce")).astype(float)
+    df["abs_err"] = e.abs()
+
+    # one-pass aggregation to avoid index order issues
+    def _per_cluster(g: pd.DataFrame) -> pd.Series:
+        err = (g["y_true"] - g["y_pred"]).astype(float)
+        return pd.Series({
+            "mae": float(np.nanmean(np.abs(err))),
+            "rmse": float(np.sqrt(np.nanmean(err**2))),
+            "n": int(len(g)),
+        })
+
+    # compat with pandas 2.2+ and older via your helper if present
+    try:
+        by_cluster = df.groupby("cluster").apply(_per_cluster, include_groups=False).reset_index()
+    except TypeError:
+        by_cluster = df.groupby("cluster").apply(_per_cluster).reset_index()
+
+    by_cluster.to_csv(out_dir_tables / "errors_by_cluster.csv", index=False)
 
 # --------------------------- Importance & PDP ---------------------------
 
@@ -401,7 +448,7 @@ def _load_bundle() -> tuple[object | None, list[str] | None]:
 
     if isinstance(bundle, dict):
         model = (bundle.get("model") or bundle.get("estimator") or bundle.get("clf") or bundle.get("regressor"))
-        features = (bundle.get("features") or bundle.get("X_cols") or bundle.get("columns") or bundle.get("feature_names"))
+        features = (bundle.get("feat_cols") or bundle.get("features") or bundle.get("X_cols") or bundle.get("columns") or bundle.get("feature_names"))
 
     if model is None or features is None:
         try:
@@ -615,7 +662,6 @@ def _rel_from_md(target: Path) -> str:
     rel_fs = os.path.relpath(target, OUT_MD.parent).replace("\\", "/")
     return "../" + rel_fs  # <- compense 'directory URLs'
 
-
 def _grid(fig_paths: List[Tuple[Path, str]], cols: int) -> str:
     items = []
     for p, alt in fig_paths:
@@ -637,7 +683,7 @@ def build_overview_md() -> str:
     residuals_grid = _grid([
         (FIGS_DIR / "residual_hist.png", "Distribution des résidus"),
         (FIGS_DIR / "residual_qqplot.png", "QQ-plot vs N(0,1)"),
-        (FIGS_DIR / "residual_acf.png", "ACF du résidu moyen (lag 15 min)"),
+        (FIGS_DIR / "residual_acf.png", "ACF du résidu moyen (lag 5 min)"),
         (FIGS_DIR / "heteroscedasticity_mae_by_true_quantile.png", "MAE par quantile de y_true (hétéroscédasticité)"),
     ], cols=2)
 
@@ -720,7 +766,9 @@ def main(perf_path: str, last_days: Optional[int], tz: Optional[str], write_md: 
     perf = _read_perf(Path(perf_path))
     if last_days:
         tmax = perf["ts"].max()
+        # last_days exprimé en jours → filtre en minutes (pas 5 min déjà géré par floor plus haut)
         perf = perf[perf["ts"] >= (tmax - np.timedelta64(int(last_days * 24 * 60), "m"))].copy()
+    # Localisation horaire pour features de découpe (hour/dow/date)
     perf = _localize(perf, tz)
 
     # Assets
@@ -752,7 +800,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--perf", type=str, required=True, help="Chemin vers docs/exports/perf.parquet")
     ap.add_argument("--last-days", type=int, default=None, help="Limiter à N derniers jours")
-    ap.add_argument("--tz", type=str, default=None, help="Timezone locale (ex: Europe/Paris)")
+    ap.add_argument("--tz", type=str, default="Europe/Paris", help="Timezone locale (ex: Europe/Paris)")
     ap.add_argument("--no-md", action="store_true", help="Ne pas écrire docs/model/explainability.md")
     args = ap.parse_args()
     main(perf_path=args.perf, last_days=args.last_days, tz=args.tz, write_md=not args.no_md)

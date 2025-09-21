@@ -1,5 +1,37 @@
 # tools/apply_model.py
-# Applique le modèle entraîné et injecte y_pred dans docs/exports/perf.parquet.
+# -----------------------------------------------------------------------------
+# Modèle — Application du modèle (injection y_pred)
+#
+# Rôle
+# ----
+# Appliquer le modèle entraîné et **écrire y_pred** dans `docs/exports/perf.parquet`,
+# avec mapping station robuste (name/lat/lon → station_id) et alignement temporel
+# (test T / T−h / T+h).
+#
+# Entrées
+# -------
+# - Modèle + colonnes de features via `src.forecast.load_model_bundle(...)`
+# - `docs/exports/events.parquet` (pour mapping station)
+# - `docs/exports/perf.parquet` (clé (ts, station_id) → cible & baseline)
+#
+# Sorties
+# -------
+# - Mise à jour **in place** de `docs/exports/perf.parquet` (colonne `y_pred`)
+#
+# Notes
+# -----
+# - Cadence temporelle actuelle : pas **15 minutes** (arrondi des timestamps).
+# - Contrôle de couverture après merge ; échec si 0 % de lignes écrites.
+# - Ne modifie jamais les colonnes cibles : remplace uniquement `y_pred`.
+#
+# CLI
+# ---
+# python tools/apply_model.py \
+#   --horizon 15 --lookback-days 30 \
+#   --events docs/exports/events.parquet \
+#   --perf docs/exports/perf.parquet
+# -----------------------------------------------------------------------------
+
 
 from __future__ import annotations
 import argparse
@@ -21,7 +53,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.forecast import load_model_bundle                   # (model, feat_cols)
-from src.features import _load_base_15min                    # base 15 min (tbin_utc, +meta)
+from src.features import _load_base_5min                     # base 5 min (tbin_utc, +meta)
 from src.cal_features import add_calendar_features           # calendrier
 
 # Tente d'importer feature_cols (liste) OU feature_cols() (fonction)
@@ -43,14 +75,14 @@ EXPORTS = DOCS / "exports"
 # --------------------------- Features d'inférence ---------------------------
 
 def build_inference_frame(horizon_minutes: int, lookback_days: int) -> pd.DataFrame:
-    """Construit les features comme à l'entraînement, en préservant tbin_utc/name/lat/lon."""
-    base = _load_base_15min().copy()
+    """Construit les features comme à l'entraînement, en préservant tbin_utc/name/lat/lon (pas 5 min)."""
+    base = _load_base_5min().copy()
 
     # fenêtre temporelle
     if lookback_days and lookback_days > 0:
         tmin = pd.to_datetime(base["tbin_utc"]).min()
         tmax = pd.to_datetime(base["tbin_utc"]).max()
-        cutoff = max(tmax.floor("15min") - pd.Timedelta(days=lookback_days), tmin)
+        cutoff = max(tmax.floor("5min") - pd.Timedelta(days=lookback_days), tmin)
         base = base[base["tbin_utc"] >= cutoff].copy()
 
     # tri
@@ -58,18 +90,21 @@ def build_inference_frame(horizon_minutes: int, lookback_days: int) -> pd.DataFr
     if order_cols:
         base = base.sort_values(order_cols)
 
-    # lags/rollings identiques au train
+    # lags/rollings identiques au train (bins de 5 min)
     def add_lags_rollings(dfg: pd.DataFrame) -> pd.DataFrame:
         g = dfg.copy()
-        for b in (1, 2, 3, 4, 8, 16):  # 15,30,45,60,120,240 min
+        # 1,3,6,12,24,48 bins => 5,15,30,60,120,240 min
+        for b in (1, 3, 6, 12, 24, 48):
             g[f"lag_nb_{b}b"]  = g["nb_velos_bin"].shift(b)
             g[f"lag_occ_{b}b"] = g["occ_ratio_bin"].shift(b)
-        g["roll_nb_4b"]  = g["nb_velos_bin"].rolling(4, min_periods=1).mean()
-        g["roll_nb_8b"]  = g["nb_velos_bin"].rolling(8, min_periods=1).mean()
-        g["roll_occ_4b"] = g["occ_ratio_bin"].rolling(4, min_periods=1).mean()
-        g["roll_occ_8b"] = g["occ_ratio_bin"].rolling(8, min_periods=1).mean()
-        g["trend_nb_4b"]  = (g["nb_velos_bin"] - g["nb_velos_bin"].shift(4)) / 4.0
-        g["trend_occ_4b"] = (g["occ_ratio_bin"] - g["occ_ratio_bin"].shift(4)) / 4.0
+        # Moyennes glissantes ~1h et ~2h
+        g["roll_nb_12b"]  = g["nb_velos_bin"].rolling(12, min_periods=1).mean()
+        g["roll_nb_24b"]  = g["nb_velos_bin"].rolling(24, min_periods=1).mean()
+        g["roll_occ_12b"] = g["occ_ratio_bin"].rolling(12, min_periods=1).mean()
+        g["roll_occ_24b"] = g["occ_ratio_bin"].rolling(24, min_periods=1).mean()
+        # Trend ~1h
+        g["trend_nb_12b"]  = (g["nb_velos_bin"] - g["nb_velos_bin"].shift(12)) / 12.0
+        g["trend_occ_12b"] = (g["occ_ratio_bin"] - g["occ_ratio_bin"].shift(12)) / 12.0
         return g
 
     if "stationcode" in base.columns:
@@ -164,7 +199,7 @@ def main(horizon: int, lookback_days: int, events_path: Path, perf_path: Path) -
 
     preds = df[[ts_src, "y_pred", "name", "lat", "lon"]].copy()
     preds.rename(columns={ts_src: "ts"}, inplace=True)
-    preds["ts"] = pd.to_datetime(preds["ts"], utc=False, errors="coerce").dt.floor("15min")
+    preds["ts"] = pd.to_datetime(preds["ts"], utc=False, errors="coerce").dt.floor("5min")
 
     # normaliser meta pour la clé de mapping (arrondir coords + lower name)
     for k in ("name", "lat", "lon"):
@@ -175,7 +210,7 @@ def main(horizon: int, lookback_days: int, events_path: Path, perf_path: Path) -
     preds["lon"]  = pd.to_numeric(preds["lon"], errors="coerce").round(5)
 
     events = pd.read_parquet(events_path, columns=["ts","name","lat","lon","station_id"]).copy()
-    events["ts"] = pd.to_datetime(events["ts"], utc=False, errors="coerce").dt.floor("15min")
+    events["ts"] = pd.to_datetime(events["ts"], utc=False, errors="coerce").dt.floor("5min")
     events["station_id"] = events["station_id"].astype(str)
     events["name"] = events["name"].astype(str).str.strip().str.lower()
     events["lat"]  = pd.to_numeric(events["lat"], errors="coerce").round(5)
@@ -194,7 +229,7 @@ def main(horizon: int, lookback_days: int, events_path: Path, perf_path: Path) -
 
     # ------------------ Alignement temporel sur T (fallback si T=0) ------------------
     perf_keys = pd.read_parquet(perf_path, columns=["ts","station_id"]).drop_duplicates()
-    perf_keys["ts"] = pd.to_datetime(perf_keys["ts"], utc=False, errors="coerce").dt.floor("15min")
+    perf_keys["ts"] = pd.to_datetime(perf_keys["ts"], utc=False, errors="coerce").dt.floor("5min")
     perf_keys["station_id"] = perf_keys["station_id"].astype(str)
 
     candidates = {
@@ -224,7 +259,7 @@ def main(horizon: int, lookback_days: int, events_path: Path, perf_path: Path) -
 
     # ------------------ Merge : ÉCRASE TOUJOURS y_pred par la sortie modèle ---------
     perf = pd.read_parquet(perf_path)
-    perf["ts"] = pd.to_datetime(perf["ts"], utc=False, errors="coerce").dt.floor("15min")
+    perf["ts"] = pd.to_datetime(perf["ts"], utc=False, errors="coerce").dt.floor("5min")
     perf["station_id"] = perf["station_id"].astype(str)
 
     out = perf.merge(preds.rename(columns={"y_pred": "y_pred_model"}),
@@ -253,7 +288,7 @@ if __name__ == "__main__":
         description="Injecte y_pred dans perf.parquet (aligne T). "
                     "⚠️ events/perf doivent avoir été générés localement par datasets.py dans ce même run."
     )
-    ap.add_argument("--horizon", type=int, default=60, help="Horizon minutes (doit matcher le modèle)")
+    ap.add_argument("--horizon", type=int, default=15, help="Horizon minutes (doit matcher le modèle)")
     ap.add_argument("--lookback-days", type=int, default=30, help="Fenetre de reconstruction des features")
     ap.add_argument("--events", type=Path, required=True, help="Chemin local vers events.parquet")
     ap.add_argument("--perf", type=Path, required=True, help="Chemin local vers perf.parquet")
