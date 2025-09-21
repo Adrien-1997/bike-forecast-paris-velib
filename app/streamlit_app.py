@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Tuple, List
@@ -10,6 +10,10 @@ import requests
 import folium
 from folium.plugins import MarkerCluster
 import streamlit as st
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from src.utils_io import get_export_path
 
 # -----------------------------------------------------------------------------
