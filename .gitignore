@@ -11,7 +11,8 @@ docs/exports/*.csv
 *.csv
 *.csv.gz
 
+# --- DuckDB local warehouse ---
+warehouse.duckdb
+
 # --- tables CSV pour la doc ---
 !docs/assets/tables/*.csv
-
-

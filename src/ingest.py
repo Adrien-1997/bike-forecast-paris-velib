@@ -1,26 +1,8 @@
 # src/ingest.py
 import os
 from typing import Optional, List, Dict, Any
-
-import duckdb
 import pandas as pd
 
-CON = duckdb.connect("warehouse.duckdb")
-
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS velib_snapshots (
-  ts_utc              TIMESTAMP,
-  stationcode         VARCHAR,
-  name                VARCHAR,
-  lat                 DOUBLE,
-  lon                 DOUBLE,
-  numbikesavailable   INTEGER,
-  numdocksavailable   INTEGER,
-  capacity            INTEGER,
-  mechanical          INTEGER,
-  ebike               INTEGER
-);
-"""
 
 # -----------------------------
 # HTTP utils
@@ -218,45 +200,13 @@ def fetch_snapshot() -> pd.DataFrame:
     print("[ingest] Network unavailable → using synthetic snapshot")
     return _synthetic_snapshot(30)
 
-def ingest_once() -> int:
-    CON.execute(CREATE_TABLE_SQL)
+def ingest_once() -> pd.DataFrame:
     df = fetch_snapshot()
     if df is None or df.empty:
         print("[ingest] no data")
-        return 0
-
-    CON.register("snap_df", df)
-    info_df = CON.execute("PRAGMA table_info('velib_snapshots')").fetchdf()
-    existing_cols = [c for c in info_df["name"].tolist()]
-
-    expr_map = {
-        "ts_utc": "ts_utc",
-        "stationcode": "stationcode",
-        "name": "name",
-        "lat": "CAST(lat AS DOUBLE)",
-        "lon": "CAST(lon AS DOUBLE)",
-        "numbikesavailable": "CAST(numbikesavailable AS INTEGER)",
-        "numdocksavailable": "CAST(numdocksavailable AS INTEGER)",
-        "capacity": "CAST(capacity AS INTEGER)",
-        "mechanical": "CAST(mechanical AS INTEGER)",
-        "ebike": "CAST(ebike AS INTEGER)",
-    }
-
-    select_exprs = []
-    for col in existing_cols:
-        if col in expr_map:
-            select_exprs.append(expr_map[col] + f" AS {col}")
-        else:
-            select_exprs.append(f"NULL AS {col}")
-
-    cols_sql = ", ".join(existing_cols)
-    sel_sql = ", ".join(select_exprs)
-    sql = f"INSERT INTO velib_snapshots ({cols_sql}) SELECT {sel_sql} FROM snap_df"
-    CON.execute(sql)
-
-    return len(df)
+        return pd.DataFrame()
+    return df
 
 if __name__ == "__main__":
-    os.makedirs("exports", exist_ok=True)
-    n = ingest_once()
-    print(f"[ingest] inserted rows: {n}")
+    df = ingest_once()
+    print(f"[ingest] rows fetched: {len(df)}")
