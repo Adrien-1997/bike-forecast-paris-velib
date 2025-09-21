@@ -2,8 +2,9 @@ name: velib-ingest
 
 on:
   schedule:
-    - cron: "*/20 * * * *"   # un démarrage toutes les 20 min
-  workflow_dispatch: {}
+    # Toutes les 5 minutes (UTC). On décale de 60s dans le job pour laisser la source publier.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,104 +14,92 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  looped_ingest:
+  ingest_aggregate:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-    env:
-      TZ: Europe/Paris
-      PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      PIP_NO_INPUT: "1"
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install deps
+      - name: Install pipeline deps
         run: |
           python -m pip install -U pip
-          pip install -r requirements-pipeline.txt --prefer-binary --no-build-isolation
-          pip install -U huggingface_hub
+          pip install -r requirements-pipeline.txt
 
-      - name: Run 4 cycles (every ~5 min) with boundary alignment
+      # Petit tampon pour laisser l'OpenData publier (équiv. à ton 1-59/5)
+      - name: Offset start by ~60s
+        run: sleep 60
+
+      - name: Ingest snapshot (OpenData → DuckDB)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m src.ingest
+
+      - name: Aggregate 5min + weather → docs/exports/
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m src.aggregate
+
+      - name: Inspect exports
+        shell: bash
+        run: |
+          echo "=== Exports present? ==="
+          ls -lh docs/exports || true
+          python -c "import pathlib, pandas as pd; p=pathlib.Path('docs/exports/velib.parquet'); print('[ingest] file exists:', p.exists()); \
+                     (print('[ingest] rows:', len(pd.read_parquet(p)), 'stations:', pd.read_parquet(p)['stationcode'].nunique()) if p.exists() else None)"
+
+      # ------------ Hugging Face ------------
+      - name: Install Hugging Face CLI
+        run: |
+          python -m pip install -U huggingface_hub
+          git lfs install
+
+      - name: Login to Hugging Face
         shell: bash
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_DATASET: ${{ vars.HF_DATASET }}
-          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${HF_TOKEN:-}" ]]; then
+            echo "HF_TOKEN is empty or not set. Define repository secret HF_TOKEN."
+            exit 1
+          fi
+          huggingface-cli login --token "${HF_TOKEN}" --add-to-git-credential
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: Push velib exports (parquet/csv) to HF dataset
+        shell: bash
+        env:
+          HF_DATASET: ${{ vars.HF_DATASET }}   # ex: "adrien/velib-paris-exports"
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
 
-          align_5min() {
-            # Aligne sur le prochain multiple de 300s (frontière 5 min) en UTC
-            now=$(date -u +%s)
-            wait=$(( ( (now/300 + 1)*300 ) - now ))
-            printf "[align] sleeping %ss to next 5-min boundary\n" "$wait"
-            sleep "$wait"
-          }
+          if [[ -z "${HF_DATASET:-}" || -z "${HF_TOKEN:-}" ]]; then
+            echo "HF_DATASET or HF_TOKEN missing"
+            exit 1
+          fi
 
-          do_cycle() {
-            echo "----- cycle start: $(date -u '+UTC %F %T') -----"
-            # petit tampon pour laisser OpenData publier
-            sleep 45
+          rm -rf hf-ds
+          git clone "https://huggingface.co/datasets/${HF_DATASET}" hf-ds
 
-            python -m src.ingest
-            python -m src.aggregate
+          mkdir -p hf-ds/exports
+          [[ -f docs/exports/velib.parquet ]] && cp -v docs/exports/velib.parquet hf-ds/exports/velib.parquet || true
+          [[ -f docs/exports/velib.csv     ]] && cp -v docs/exports/velib.csv     hf-ds/exports/velib.csv     || true
 
-            # build snapshot (dernier bin)
-            python - <<'PY'
-            import pathlib, pandas as pd, datetime as dt
-            DOCS = pathlib.Path('docs'); p = DOCS/'exports'/'velib.parquet'
-            if not p.exists(): raise SystemExit("no velib.parquet")
-            df = pd.read_parquet(p)
-            ts_col = next((c for c in ('tbin_utc','timestamp','ts','time') if c in df.columns), None)
-            if ts_col is None: raise SystemExit("no ts column")
-            last_ts = df[ts_col].max()
-            snap = df[df[ts_col]==last_ts].copy()
-            if pd.api.types.is_datetime64_any_dtype(snap[ts_col]):
-                ts_utc = pd.to_datetime(last_ts, utc=True)
-                ts_str = ts_utc.strftime('%Y%m%d_%H%M')
-            else:
-                ts_str = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d_%H%M')
-            out_dir = DOCS/'exports'/'snapshots'; out_dir.mkdir(parents=True, exist_ok=True)
-            out = out_dir/f'velib_{ts_str}.parquet'
-            snap.to_parquet(out, index=False)
-            print('[snapshot] built', out)
-            PY
+          cd hf-ds
+          git add -A
+          git commit -m "Update velib exports from ingest (5min)" || echo "Nothing to commit"
 
-            # upload snapshot to HF (API)
-            python - <<'PY'
-            import os, pathlib, re
-            from huggingface_hub import HfApi
-            repo_id = os.environ['HF_DATASET']; token = os.environ['HF_TOKEN']
-            api = HfApi(token=token)
-            snaps = sorted(pathlib.Path('docs/exports/snapshots').glob('velib_*.parquet'))
-            if not snaps: raise SystemExit("no snapshot")
-            path = snaps[-1]
-            m = re.match(r'velib_(\d{8})_(\d{4})\.parquet$', path.name)
-            if m:
-                y, mo, d = m.group(1)[:4], m.group(1)[4:6], m.group(1)[6:8]
-                dest = f'snapshots/{y}/{mo}/{d}/{path.name}'
-            else:
-                dest = f'snapshots/{path.name}'
-            api.upload_file(path_or_fileobj=str(path), path_in_repo=dest,
-                            repo_id=repo_id, repo_type="dataset",
-                            commit_message=f"Add snapshot {path.name}")
-            print("[upload] snapshot ->", dest)
-            PY
+          HF_USER="${HF_DATASET%%/*}"
+          git remote set-url origin "https://${HF_USER}:${HF_TOKEN}@huggingface.co/datasets/${HF_DATASET}"
 
-            echo "----- cycle end: $(date -u '+UTC %F %T') -----"
-          }
-
-          # aligne au début
-          align_5min
-          # 4 cycles (≈ 20 min)
-          for i in 1 2 3 4; do
-            do_cycle
-            # aligne avant le cycle suivant
-            [ "$i" -lt 4 ] && align_5min
-          done
+          git push origin main
