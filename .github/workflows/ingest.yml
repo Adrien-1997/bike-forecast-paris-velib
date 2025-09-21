@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ingest_aggregate:
+  ingest_aggregate_and_push_snapshot:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -44,20 +44,6 @@ jobs:
           echo "sha=${{ github.sha }}"
           date -u "+UTC   %Y-%m-%d %H:%M:%S"
           date    "+PARIS %Y-%m-%d %H:%M:%S %Z"
-
-      - name: Decide mode (push every 15 min)
-        shell: bash
-        run: |
-          set -euo pipefail
-          MINUTE=$(date -u +%M)
-          MOD=$((10#$MINUTE % 15))
-          if [ "$MOD" = "1" ]; then
-            echo "DO_HF_PUSH=true" >> "$GITHUB_ENV"
-            echo "[mode] This tick WILL push to Hugging Face (minute=$MINUTE, mod15=$MOD)"
-          else
-            echo "DO_HF_PUSH=false" >> "$GITHUB_ENV"
-            echo "[mode] This tick is ingest+aggregate only (minute=$MINUTE, mod15=$MOD)"
-          fi
 
       - name: Install pipeline deps (prefer wheels)
         shell: bash
@@ -95,56 +81,99 @@ jobs:
           if p.exists():
               df = pd.read_parquet(p)
               print('[ingest] rows:', len(df), 'unique stations:', df['stationcode'].nunique() if 'stationcode' in df else 'n/a')
+              # Affiche le dernier bin disponible
+              ts_col = 'tbin_utc' if 'tbin_utc' in df.columns else ('timestamp' if 'timestamp' in df.columns else None)
+              if ts_col:
+                  print('[ingest] last bin:', df[ts_col].max())
           PY
 
-      # -------- Push Hugging Face toutes les 15 min --------
-      - name: Install Hugging Face CLI
-        if: env.DO_HF_PUSH == 'true'
+      # -------- Build & push a compact 5-min snapshot to HF (API upload) --------
+      - name: Install Hugging Face client
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install -U huggingface_hub
-          git lfs install
 
-      - name: Login to Hugging Face
-        if: env.DO_HF_PUSH == 'true'
+      - name: Build last-5min snapshot (single bin) from aggregate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, pathlib, pandas as pd
+          import datetime as dt
+          DOCS = pathlib.Path('docs')
+          exports = DOCS / 'exports' / 'velib.parquet'
+          if not exports.exists():
+              raise SystemExit("velib.parquet not found; abort snapshot build")
+
+          df = pd.read_parquet(exports)
+
+          # Détecte la colonne temporelle
+          ts_col = None
+          for c in ('tbin_utc', 'timestamp', 'ts', 'time'):
+              if c in df.columns:
+                  ts_col = c
+                  break
+          if ts_col is None:
+              raise SystemExit("No timestamp column found in velib.parquet")
+
+          # Dernier bin complet
+          last_ts = df[ts_col].max()
+          snap = df[df[ts_col] == last_ts].copy()
+
+          # Nom: velib_YYYYMMDD_HHMM.parquet (UTC si possible)
+          if pd.api.types.is_datetime64_any_dtype(snap[ts_col]):
+              ts_utc = pd.to_datetime(last_ts, utc=True)
+              ts_str = ts_utc.strftime('%Y%m%d_%H%M')
+          else:
+              ts_str = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d_%H%M')
+
+          out_dir = DOCS / 'exports' / 'snapshots'
+          out_dir.mkdir(parents=True, exist_ok=True)
+          out_file = out_dir / f'velib_{ts_str}.parquet'
+          snap.to_parquet(out_file, index=False)
+          print('[snapshot] built:', out_file, 'rows:', len(snap))
+          PY
+
+      - name: Upload snapshot to Hugging Face (no git clone)
         shell: bash
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${HF_TOKEN:-}" ]]; then
-            echo "HF_TOKEN is empty or not set. Add it in repo Settings > Secrets and variables > Actions."
-            exit 1
-          fi
-          huggingface-cli login --token "${HF_TOKEN}" --add-to-git-credential
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-
-      - name: Push velib exports to HF dataset
-        if: env.DO_HF_PUSH == 'true'
-        shell: bash
-        env:
           HF_DATASET: ${{ vars.HF_DATASET }}   # ex: "adrien/velib-paris-exports"
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
-          if [[ -z "${HF_DATASET:-}" || -z "${HF_TOKEN:-}" ]]; then
-            echo "HF_DATASET (repo variable) or HF_TOKEN (secret) missing."
+          if [[ -z "${HF_TOKEN:-}" || -z "${HF_DATASET:-}" ]]; then
+            echo "HF_TOKEN (secret) or HF_DATASET (variable) missing."
             exit 1
           fi
+          python - <<'PY'
+          import os, pathlib, re
+          from huggingface_hub import HfApi
+          repo_id = os.environ['HF_DATASET']
+          token = os.environ['HF_TOKEN']
+          api = HfApi(token=token)
 
-          rm -rf hf-ds
-          git clone "https://huggingface.co/datasets/${HF_DATASET}" hf-ds
+          # Snapshot le plus récent
+          snaps_dir = pathlib.Path('docs/exports/snapshots')
+          snaps = sorted(snaps_dir.glob('velib_*.parquet'))
+          if not snaps:
+              raise SystemExit("No snapshot parquet to upload")
+          path = snaps[-1]
 
-          mkdir -p hf-ds/exports
-          [[ -f docs/exports/velib.parquet ]] && cp -v docs/exports/velib.parquet hf-ds/exports/velib.parquet || true
-          [[ -f docs/exports/velib.csv     ]] && cp -v docs/exports/velib.csv     hf-ds/exports/velib.csv     || true
+          # Dossier daté: snapshots/YYYY/MM/DD/...
+          m = re.match(r'velib_(\d{8})_(\d{4})\.parquet$', path.name)
+          if m:
+              y, mo, d = m.group(1)[:4], m.group(1)[4:6], m.group(1)[6:8]
+              dest = f'snapshots/{y}/{mo}/{d}/{path.name}'
+          else:
+              dest = f'snapshots/{path.name}'
 
-          cd hf-ds
-          git add -A
-          git commit -m "Update velib exports (5-min ingest/aggregate, 15-min HF push)" || echo "Nothing to commit"
-
-          HF_USER="${HF_DATASET%%/*}"
-          git remote set-url origin "https://${HF_USER}:${HF_TOKEN}@huggingface.co/datasets/${HF_DATASET}"
-          git push origin main
+          api.upload_file(
+              path_or_fileobj=str(path),
+              path_in_repo=dest,
+              repo_id=repo_id,
+              repo_type="dataset",
+              commit_message=f"Add snapshot {path.name}"
+          )
+          print("[upload] uploaded to HF:", repo_id, dest)
+          PY
