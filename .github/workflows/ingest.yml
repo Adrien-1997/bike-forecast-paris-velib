@@ -2,8 +2,8 @@ name: velib-ingest
 
 on:
   schedule:
-    # Toutes les 5 minutes en UTC, décalées +1 min pour laisser le temps à la source de publier
-    - cron: "1-59/5 * * * *"
+    # Toutes les 5 minutes (UTC). On décale de 60s dans le job pour laisser la source publier.
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -33,6 +33,10 @@ jobs:
           python -m pip install -U pip
           pip install -r requirements-pipeline.txt
 
+      # Petit tampon pour laisser l'OpenData publier (équiv. à ton 1-59/5)
+      - name: Offset start by ~60s
+        run: sleep 60
+
       - name: Ingest snapshot (OpenData → DuckDB)
         env:
           PYTHONPATH: ${{ github.workspace }}
@@ -48,16 +52,8 @@ jobs:
         run: |
           echo "=== Exports present? ==="
           ls -lh docs/exports || true
-          python - <<'PY'
-          import pandas as pd, pathlib
-          p = pathlib.Path("docs/exports/velib.parquet")
-          if p.exists():
-              df = pd.read_parquet(p)
-              print("[ingest] rows:", len(df), "stations:", df['stationcode'].nunique())
-              print("[ingest] span:", df['tbin_utc'].min(), "->", df['tbin_utc'].max())
-          else:
-              print("[ingest] docs/exports/velib.parquet NOT FOUND")
-          PY
+          python -c "import pathlib, pandas as pd; p=pathlib.Path('docs/exports/velib.parquet'); print('[ingest] file exists:', p.exists()); \
+                     (print('[ingest] rows:', len(pd.read_parquet(p)), 'stations:', pd.read_parquet(p)['stationcode'].nunique()) if p.exists() else None)"
 
       # ------------ Hugging Face ------------
       - name: Install Hugging Face CLI
@@ -103,7 +99,6 @@ jobs:
           git add -A
           git commit -m "Update velib exports from ingest (5min)" || echo "Nothing to commit"
 
-          # --- inject token dans le remote pour le push https ---
           HF_USER="${HF_DATASET%%/*}"
           git remote set-url origin "https://${HF_USER}:${HF_TOKEN}@huggingface.co/datasets/${HF_DATASET}"
 
