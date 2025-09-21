@@ -21,7 +21,7 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
     if snapshot_df.empty:
         return pd.DataFrame()
 
-    # Arrondis
+    # bins temps
     snapshot_df["tbin_utc"] = snapshot_df["ts_utc"].dt.floor("5min")
     snapshot_df["hour_utc"] = snapshot_df["ts_utc"].dt.floor("h")
 
@@ -39,12 +39,12 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
         .reset_index()
     )
 
-    # ✅ ajoute hour_utc dans le résultat (pour la jointure météo)
+    # ✅ nécessaire pour la jointure météo
     agg["hour_utc"] = agg["tbin_utc"].dt.floor("h")
 
+    # types + ratio
     agg["nb_velos_bin"] = agg["nb_velos_bin"].astype("Int64")
     agg["nb_bornes_bin"] = agg["nb_bornes_bin"].astype("Int64")
-
     agg["occ_ratio_bin"] = agg.apply(
         lambda r: r.nb_velos_bin / r.capacity_bin
         if r.capacity_bin and r.capacity_bin > 0 else (
@@ -56,30 +56,23 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
     agg["occ_ratio_bin"] = pd.to_numeric(agg["occ_ratio_bin"], errors="coerce").clip(0, 1)
 
     if with_weather:
-        # ✅ colonnes météo créées à NaN si absentes (évite KeyError)
+        # ✅ évite KeyError si pas encore mergé
         for c in ["temp_C", "precip_mm", "wind_mps"]:
             if c not in agg.columns:
                 agg[c] = pd.NA
 
         # Historique
         try:
-            start, end = agg["hour_utc"].min(), agg["hour_utc"].max()
-            w = fetch_history(start, end)
+            w = fetch_history(agg["hour_utc"].min(), agg["hour_utc"].max())
         except Exception:
             w = None
-
         if w is not None and not w.empty:
             w["hour_utc"] = _to_utc_naive_floor_hour(w["hour_utc"])
-            # on merge uniquement si les colonnes existent côté météo
-            cols = [c for c in ["hour_utc", "temp_C", "precip_mm", "wind_mps"] if c in w.columns]
+            cols = [c for c in ["hour_utc","temp_C","precip_mm","wind_mps"] if c in w.columns]
             agg = agg.merge(w[cols], on="hour_utc", how="left")
 
-        # Compléter avec la prévision si trous restants
-        try:
-            need_fx = agg[["temp_C","precip_mm","wind_mps"]].isna().any(axis=1).any()
-        except KeyError:
-            need_fx = True  # par sécurité
-
+        # Faut-il compléter par la prévision ?
+        need_fx = agg[["temp_C","precip_mm","wind_mps"]].isna().any(axis=1).any()
         if need_fx:
             try:
                 wf = fetch_forecast(pd.to_datetime(agg["hour_utc"].max()), 24)
@@ -96,6 +89,7 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
                          inplace=True, errors="ignore")
 
     return agg
+
 
 if __name__ == "__main__":
     from src.ingest import ingest_once
