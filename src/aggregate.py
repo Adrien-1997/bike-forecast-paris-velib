@@ -139,41 +139,62 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
     return agg[cols_first + rest]
 
 
-if __name__ == "__main__":
-    from src.ingest import ingest_once
+# aggregate.py
 
-    EXPORTS = "exports"
-    os.makedirs(EXPORTS, exist_ok=True)
-    parquet_path = os.path.join(EXPORTS, "velib.parquet")
+import pandas as pd
+from pathlib import Path
+from weather import fetch_history, fetch_forecast
 
-    snaps = ingest_once()
-    new = occupancy_5min(snaps, with_weather=True)
-    if new.empty:
-        print("[aggregate] Aucun nouveau point.")
-        raise SystemExit(0)
+def main(input_path: Path, output_path: Path):
+    # Charger le snapshot ingéré
+    df = pd.read_parquet(input_path)
+    df["ts"] = pd.to_datetime(df["ts"], utc=True)
 
+    # Fenêtre temporelle min/max
+    start_ts, end_ts = df["ts"].min(), df["ts"].max()
+    print(f"[aggregate] snapshot window: {start_ts} → {end_ts}")
+
+    # Récup historique météo
     try:
-        old_path = get_export_path("velib.parquet")
-        old = pd.read_parquet(old_path)
-        for c in ("tbin_utc", "hour_utc"):
-            if c in old.columns:
-                old[c] = pd.to_datetime(old[c], utc=True).dt.tz_localize(None)
-        df = pd.concat([old, new], ignore_index=True)
+        w = fetch_history(start_ts, end_ts)
     except Exception as e:
-        print(f"[aggregate] Pas d'existant ({e}) → repartir du nouveau")
-        df = new.copy()
+        print(f"[aggregate] weather fetch_history failed: {e}")
+        w = None
 
-    df = (
-        df.sort_values(["tbin_utc", "stationcode"])
-          .drop_duplicates(subset=["tbin_utc", "stationcode"], keep="last")
-    )
+    # 👉 log taille history météo
+    print(f"[aggregate] weather hist rows: {0 if (w is None or w.empty) else len(w)}")
 
-    try:
-        tmax = df["tbin_utc"].max()
-        cutoff = (tmax - pd.Timedelta(days=90)).floor("5min")
-        df = df[df["tbin_utc"] >= cutoff].copy()
-    except Exception:
-        pass
+    # Est-ce qu’il faut du forecast ?
+    need_fx = end_ts > pd.Timestamp.utcnow()
+    print(f"[aggregate] need forecast: {need_fx}")
 
-    df.to_parquet(parquet_path, index=False)
-    print(f"[aggregate] OK → {parquet_path} (rows={len(df)})")
+    wf = None
+    if need_fx:
+        try:
+            wf = fetch_forecast(end_ts, horizon_h=24)
+        except Exception as e:
+            print(f"[aggregate] weather fetch_forecast failed: {e}")
+            wf = None
+
+        # 👉 log taille forecast météo
+        print(f"[aggregate] weather forecast rows: {0 if (wf is None or wf.empty) else len(wf)}")
+
+    # Fusion history + forecast
+    if w is not None and wf is not None and not wf.empty:
+        w = pd.concat([w, wf], ignore_index=True).drop_duplicates("hour_utc")
+    elif wf is not None and not wf.empty and (w is None or w.empty):
+        w = wf
+
+    if w is None or w.empty:
+        print("[aggregate] WARNING: no weather data available")
+    else:
+        print(f"[aggregate] merged weather rows: {len(w)}")
+
+    # Join météo → snapshots
+    if w is not None and not w.empty:
+        df["hour_utc"] = df["ts"].dt.floor("h").dt.tz_localize(None)
+        df = df.merge(w, on="hour_utc", how="left")
+
+    # Sauvegarde
+    df.to_parquet(output_path, index=False)
+    print(f"[aggregate] saved {len(df)} rows → {output_path}")
