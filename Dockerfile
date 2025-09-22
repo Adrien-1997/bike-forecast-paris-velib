@@ -1,18 +1,26 @@
 FROM python:3.11-slim
 
-# Install system deps
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+# 1) System deps (certifs pour HTTPS)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install Python deps
+# 2) Déps Python (couche cacheable)
 COPY requirements-pipeline.txt .
 RUN python -m pip install -U pip \
- && pip install --no-cache-dir -r requirements-pipeline.txt \
- && pip install --no-cache-dir huggingface_hub
+ && pip install --no-cache-dir -r requirements-pipeline.txt
 
-# Copy project files
+# 3) Code
 COPY . .
 
-# Sleep 60s → ingest → aggregate → push_hf
-CMD bash -lc "sleep 60 && PYTHONPATH=/app python -m src.ingest && PYTHONPATH=/app python -m src.aggregate && python tools/push_hf.py"
+# 4) Runtime envs par défaut
+#    - WITH_WEATHER=0 : plus rapide; mets 1 dans Cloud Run si tu veux la météo
+#    - PYTHONUNBUFFERED pour logs immédiats
+ENV WITH_WEATHER=0 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+# 5) Entrypoint unique : ingest -> aggregate -> export shard -> push HF
+CMD ["python", "-m", "src.aggregate"]
