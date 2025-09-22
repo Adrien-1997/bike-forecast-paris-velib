@@ -1,11 +1,24 @@
+# tools/show_tail.py
 import pandas as pd
+from pathlib import Path
 
-# chemin du fichier parquet local
-path = r"H:\Documents\2. Perso\github\velib-historical-hf\parquet\velib.parquet"
+def main():
+    outdir = Path("docs/exports")
+    pq = outdir / "velib_local.parquet"
+    csv = outdir / "velib_local.csv"
 
-# lecture du parquet
-df = pd.read_parquet(path)
+    if pq.exists():
+        df = pd.read_parquet(pq)
+        print(f"[show_tail] Loaded {pq} ({len(df)} rows)")
+    elif csv.exists():
+        df = pd.read_csv(csv, parse_dates=["tbin_utc","hour_utc"])
+        print(f"[show_tail] Loaded {csv} ({len(df)} rows)")
+    else:
+        print("[show_tail] No local export found in docs/exports/")
+        return
 
-# afficher les 10 dernières lignes avec toutes les colonnes visibles
-pd.set_option("display.max_columns", None)
-print(df.tail(10))
+    pd.set_option("display.max_columns", None)
+    print(df.tail(10))
+
+if __name__ == "__main__":
+    main()
