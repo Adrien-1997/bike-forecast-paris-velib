@@ -15,4 +15,4 @@ COPY src/ src/
 COPY tools/ tools/
 COPY exports/ exports/
 
-CMD python -m src.ingest && python -m src.aggregate && python tools/push_hf.py
+CMD python -m src.ingest && python -m src.aggregate --input exports/snapshot.parquet --output exports/velib.parquet && python tools/push_hf.py

@@ -195,6 +195,14 @@ def main(input_path: Path, output_path: Path):
     # Sauvegarde
     df.to_parquet(output_path, index=False)
     print(f"[aggregate] saved {len(df)} rows → {output_path}")
+    df.to_parquet(output_path, index=False)
+
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", default="exports/snapshot.parquet")
+    parser.add_argument("--output", default="exports/velib.parquet")
+    args = parser.parse_args()
+    # ton main existant: main(input_path: Path, output_path: Path)
+    main(Path(args.input), Path(args.output))
