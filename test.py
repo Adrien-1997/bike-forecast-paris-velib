@@ -1,24 +1,14 @@
-# tools/show_tail.py
+import io
+import requests
 import pandas as pd
-from pathlib import Path
 
-def main():
-    outdir = Path("docs/exports")
-    pq = outdir / "velib_local.parquet"
-    csv = outdir / "velib_local.csv"
+# URL directe du fichier Parquet sur HuggingFace
+url = "https://huggingface.co/datasets/Adrien97/velib-monitoring-historical/resolve/main/exports/velib.parquet"
 
-    if pq.exists():
-        df = pd.read_parquet(pq)
-        print(f"[show_tail] Loaded {pq} ({len(df)} rows)")
-    elif csv.exists():
-        df = pd.read_csv(csv, parse_dates=["tbin_utc","hour_utc"])
-        print(f"[show_tail] Loaded {csv} ({len(df)} rows)")
-    else:
-        print("[show_tail] No local export found in docs/exports/")
-        return
+# Télécharger et lire le parquet
+resp = requests.get(url)
+resp.raise_for_status()
+df = pd.read_parquet(io.BytesIO(resp.content))
 
-    pd.set_option("display.max_columns", None)
-    print(df.tail(10))
-
-if __name__ == "__main__":
-    main()
+# Afficher les 10 dernières lignes
+print(df.tail(10))

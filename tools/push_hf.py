@@ -1,16 +1,16 @@
 # tools/push_hf.py
 from __future__ import annotations
-import os, sys, time, hashlib, pathlib, typing as t
+import os, sys, time, hashlib, pathlib
 from huggingface_hub import HfApi, CommitOperationAdd
 
-# --- Compat: attrape HfHubHTTPError quelle que soit la version
+# --- Compat: HfHubHTTPError où qu'il soit
 try:
     from huggingface_hub.errors import HfHubHTTPError  # >=0.20
 except Exception:
     try:
         from huggingface_hub.utils._errors import HfHubHTTPError  # anciennes versions
     except Exception:
-        class HfHubHTTPError(Exception):  # fallback
+        class HfHubHTTPError(Exception):
             def __init__(self, *a, **k):
                 super().__init__(*a, **k)
                 self.response = getattr(self, "response", None)
@@ -39,34 +39,39 @@ def read_remote_hash(api: HfApi) -> str | None:
         return None
 
 def _is_rate_limited(e: Exception) -> tuple[bool, float | None]:
-    """Detect 429 + optional Retry-After seconds."""
     resp = getattr(e, "response", None)
-    if resp is not None:
+    if resp is not None and getattr(resp, "status_code", None) == 429:
         try:
-            if getattr(resp, "status_code", None) == 429:
-                ra = None
-                try:
-                    ra_hdr = resp.headers.get("Retry-After")
-                    if ra_hdr:
-                        ra = float(ra_hdr)
-                except Exception:
-                    ra = None
-                return True, ra
+            ra_hdr = resp.headers.get("Retry-After")
+            return True, float(ra_hdr) if ra_hdr else None
         except Exception:
-            pass
+            return True, None
     return False, None
+
+def _create_commit_compat(api: HfApi, **kwargs):
+    """
+    Appelle create_commit en essayant d'abord avec max_workers=1 (si supporté),
+    sinon retombe sur l'appel sans cet argument (versions plus anciennes).
+    """
+    try:
+        # tentative avec max_workers (réduit la pression API si la version le supporte)
+        return api.create_commit(max_workers=1, **kwargs)
+    except TypeError:
+        # ancienne version: pas de max_workers
+        kwargs.pop("max_workers", None)
+        return api.create_commit(**kwargs)
 
 def create_commit_with_backoff(api: HfApi, operations: list, msg: str):
     tries, delay = 0, 1.5
     while True:
         try:
-            return api.create_commit(
+            return _create_commit_compat(
+                api,
                 repo_id=REPO_ID,
                 repo_type=REPO_TYPE,
                 operations=operations,
                 commit_message=msg,
                 token=TOKEN,
-                max_workers=1,   # pas d’uploads parallèles -> moins de pression API
             )
         except HfHubHTTPError as e:
             rate, retry_after = _is_rate_limited(e)
@@ -80,7 +85,6 @@ def create_commit_with_backoff(api: HfApi, operations: list, msg: str):
                 continue
             raise
         except Exception as e:
-            # d’autres erreurs réseau transitoires (rare) : petit retry safe
             if tries < 3:
                 import random
                 sleep_s = delay + random.uniform(0, 0.6)
@@ -99,7 +103,7 @@ def main():
 
     api = HfApi(token=TOKEN)
 
-    # 1) Skip si contenu identique
+    # skip si inchangé
     local_hash = sha256_of_file(str(src))
     remote_hash = read_remote_hash(api)
     if remote_hash == local_hash:
@@ -108,14 +112,13 @@ def main():
 
     print(f"[push_hf] Upload {src} -> {REPO_ID}:{DEST}", flush=True)
 
-    # 2) Un seul commit atomique
     ops = [
         CommitOperationAdd(path_in_repo=DEST, path_or_fileobj=str(src)),
         CommitOperationAdd(path_in_repo=HASH_DEST, path_or_fileobj=bytes(local_hash, "utf-8")),
     ]
 
     info = create_commit_with_backoff(api, ops, msg=f"update {DEST} (hash={local_hash[:8]}...)")
-    print(f"[push_hf] Done: {info.commit_url}")
+    print(f"[push_hf] Done: {getattr(info, 'commit_url', '(no url)')}")
     return 0
 
 if __name__ == "__main__":
