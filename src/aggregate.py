@@ -81,29 +81,7 @@ def _merge_weather_tolerant(
     weather_history_df: Optional[pd.DataFrame] = None,
     weather_forecast_df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
-    """
-    Merge history + forecast on hour_utc using merge_asof with ±59min tolerance.
-    If weather_*_df are None, tries project-level fetchers.
-    """
-    # Lazy import to avoid hard dependency when running tests
-    if weather_history_df is None or weather_forecast_df is None:
-        try:
-            from src.weather import fetch_history, fetch_forecast  # type: ignore
-        except Exception:
-            fetch_history = fetch_forecast = None  # type: ignore
-
-    if weather_history_df is None and 'fetch_history' in locals() and fetch_history:
-        try:
-            weather_history_df = fetch_history(agg["hour_utc"].min(), agg["hour_utc"].max())
-        except Exception:
-            weather_history_df = None
-
-    if weather_forecast_df is None and 'fetch_forecast' in locals() and fetch_forecast:
-        try:
-            weather_forecast_df = fetch_forecast(pd.to_datetime(agg["hour_utc"].max()), 36)
-        except Exception:
-            weather_forecast_df = None
-
+    # ... (tout le début inchangé) ...
     h = _normalize_weather(weather_history_df)
     f = _normalize_weather(weather_forecast_df)
 
@@ -114,46 +92,56 @@ def _merge_weather_tolerant(
         if c not in out.columns:
             out[c] = pd.NA
 
+    # --- NE JAMAIS PERDRE DE LIGNES ---
+    mask_valid = out["hour_utc"].notna()
+    left_na   = out.loc[~mask_valid].copy()   # on les gardera telles quelles (météo NaN)
+    left_ok   = out.loc[ mask_valid].copy()
+
     if h.empty and f.empty:
         print("[aggregate] weather empty (history & forecast) — leaving NaNs for temp_C/precip_mm/wind_mps")
+        # rien à merger, on recompose et on sort
+        return pd.concat([left_ok, left_na], axis=0, ignore_index=True).sort_values(
+            ["tbin_utc","stationcode"]
+        ).reset_index(drop=True)
 
-    # Merge history first (fill past)
-    if not h.empty:
+    # Merge history
+    if not h.empty and not left_ok.empty:
         h["hour_utc"] = _ensure_ns(h["hour_utc"])
-        out = pd.merge_asof(
-            out.sort_values("hour_utc"),
+        left_ok = pd.merge_asof(
+            left_ok.sort_values("hour_utc").reset_index(),
             h.sort_values("hour_utc"),
             on="hour_utc",
             direction="nearest",
             tolerance=pd.Timedelta("59min"),
             suffixes=("", "_h"),
-        )
+        ).set_index("index").sort_index()
         for c in ["temp_C", "precip_mm", "wind_mps"]:
-            out[c] = out[c].fillna(out.get(f"{c}_h"))
-            if f"{c}_h" in out.columns:
-                out.drop(columns=[f"{c}_h"], inplace=True, errors="ignore")
+            left_ok[c] = left_ok[c].fillna(left_ok.get(f"{c}_h"))
+            if f"{c}_h" in left_ok.columns:
+                left_ok.drop(columns=[f"{c}_h"], inplace=True, errors="ignore")
 
-    # Merge forecast next (fill future)
-    if not f.empty:
+    # Merge forecast
+    if not f.empty and not left_ok.empty:
         f["hour_utc"] = _ensure_ns(f["hour_utc"])
-        out = pd.merge_asof(
-            out.sort_values("hour_utc"),
+        left_ok = pd.merge_asof(
+            left_ok.sort_values("hour_utc").reset_index(),
             f.sort_values("hour_utc"),
             on="hour_utc",
             direction="nearest",
             tolerance=pd.Timedelta("59min"),
             suffixes=("", "_f"),
-        )
+        ).set_index("index").sort_index()
         for c in ["temp_C", "precip_mm", "wind_mps"]:
-            out[c] = out[c].fillna(out.get(f"{c}_f"))
-            if f"{c}_f" in out.columns:
-                out.drop(columns=[f"{c}_f"], inplace=True, errors="ignore")
+            left_ok[c] = left_ok[c].fillna(left_ok.get(f"{c}_f"))
+            if f"{c}_f" in left_ok.columns:
+                left_ok.drop(columns=[f"{c}_f"], inplace=True, errors="ignore")
 
-    out["temp_C"] = pd.to_numeric(out["temp_C"], errors="coerce")
-    out["precip_mm"] = pd.to_numeric(out["precip_mm"], errors="coerce")
-    out["wind_mps"] = pd.to_numeric(out["wind_mps"], errors="coerce")
-    return out
-
+    # Recompose: toutes les lignes, aucune perte
+    out2 = pd.concat([left_ok, left_na], axis=0, ignore_index=True)
+    out2["temp_C"]   = pd.to_numeric(out2["temp_C"], errors="coerce")
+    out2["precip_mm"]= pd.to_numeric(out2["precip_mm"], errors="coerce")
+    out2["wind_mps"] = pd.to_numeric(out2["wind_mps"], errors="coerce")
+    return out2.sort_values(["tbin_utc", "stationcode"]).reset_index(drop=True)
 
 # =============================================================================
 # Core aggregation

@@ -3,12 +3,11 @@ from __future__ import annotations
 import os, sys, time, hashlib, pathlib
 from huggingface_hub import HfApi, CommitOperationAdd
 
-# --- Compat: HfHubHTTPError où qu'il soit
 try:
-    from huggingface_hub.errors import HfHubHTTPError  # >=0.20
+    from huggingface_hub.errors import HfHubHTTPError
 except Exception:
     try:
-        from huggingface_hub.utils._errors import HfHubHTTPError  # anciennes versions
+        from huggingface_hub.utils._errors import HfHubHTTPError
     except Exception:
         class HfHubHTTPError(Exception):
             def __init__(self, *a, **k):
@@ -49,15 +48,9 @@ def _is_rate_limited(e: Exception) -> tuple[bool, float | None]:
     return False, None
 
 def _create_commit_compat(api: HfApi, **kwargs):
-    """
-    Appelle create_commit en essayant d'abord avec max_workers=1 (si supporté),
-    sinon retombe sur l'appel sans cet argument (versions plus anciennes).
-    """
     try:
-        # tentative avec max_workers (réduit la pression API si la version le supporte)
         return api.create_commit(max_workers=1, **kwargs)
     except TypeError:
-        # ancienne version: pas de max_workers
         kwargs.pop("max_workers", None)
         return api.create_commit(**kwargs)
 
@@ -83,6 +76,10 @@ def create_commit_with_backoff(api: HfApi, operations: list, msg: str):
                 tries += 1
                 delay *= 2
                 continue
+            # 429 final ou autre erreur HF -> skip proprement (exit 0)
+            if rate:
+                print("[push_hf] final 429: skip this run without failing the job.")
+                return None
             raise
         except Exception as e:
             if tries < 3:
@@ -103,7 +100,6 @@ def main():
 
     api = HfApi(token=TOKEN)
 
-    # skip si inchangé
     local_hash = sha256_of_file(str(src))
     remote_hash = read_remote_hash(api)
     if remote_hash == local_hash:
@@ -118,6 +114,8 @@ def main():
     ]
 
     info = create_commit_with_backoff(api, ops, msg=f"update {DEST} (hash={local_hash[:8]}...)")
+    if info is None:
+        return 0  # skip silencieux si 429 final
     print(f"[push_hf] Done: {getattr(info, 'commit_url', '(no url)')}")
     return 0
 
