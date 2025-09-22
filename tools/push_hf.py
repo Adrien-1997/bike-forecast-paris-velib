@@ -30,18 +30,24 @@ def main() -> int:
     print(f"[push_hf] repo={REPO_ID} type={REPO_TYPE}", flush=True)
     print(f"[push_hf] src={SRC}  dest={DEST}", flush=True)
 
+    # --- dans main(), juste après l'affichage cwd/repo/src/dest
     src = pathlib.Path(SRC)
     if not src.exists():
-        print(f"[push_hf] Source not found: {src}", file=sys.stderr, flush=True)
-        # Petit diagnostic de répertoire
-        try:
-            if pathlib.Path("exports").exists():
-                print(f"[push_hf] ls exports/: {os.listdir('exports')}", flush=True)
-            else:
-                print("[push_hf] 'exports/' directory does not exist.", flush=True)
-        except Exception as e:
-            print(f"[push_hf] ls exports/ failed: {e}", flush=True)
-        return 1
+        # Fallback automatique si quelqu'un re-pousse un mauvais PUSH_SRC
+        fallback = pathlib.Path("exports") / "velib.parquet"
+        if fallback.exists():
+            print(f"[push_hf] WARNING: {src} missing; using fallback {fallback}", flush=True)
+            src = fallback
+        else:
+            print(f"[push_hf] Source not found: {src}", file=sys.stderr, flush=True)
+            try:
+                if pathlib.Path("exports").exists():
+                    print(f"[push_hf] ls exports/: {os.listdir('exports')}", flush=True)
+                else:
+                    print("[push_hf] 'exports/' directory does not exist.", flush=True)
+            except Exception as e:
+                print(f"[push_hf] ls exports/ failed: {e}", flush=True)
+            return 1
 
     try:
         size_mb = src.stat().st_size / (1024 * 1024)
