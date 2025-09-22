@@ -1,44 +1,40 @@
-# ---- Base image ----
+# ---- Base ----
 FROM python:3.11-slim
 
-# ---- System deps (SSL, TZ, curl pour debug) ----
+# ---- System deps (SSL, TZ, debug utils) ----
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates tzdata curl \
  && rm -rf /var/lib/apt/lists/*
 
-# ---- Runtime env ----
+# ---- Env ----
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     TZ=Europe/Paris \
-    # Variables météo par défaut (overridables dans Cloud Run)
     WEATHER_TIMEOUT=25 \
     NO_SSL_VERIFY=0
 
-# ---- Workdir ----
 WORKDIR /app
 
 # ---- Python deps ----
-# Si tu utilises requirements-pipeline.txt, on l'installe. Sinon, passe à requirements.txt.
 COPY requirements-pipeline.txt /app/requirements-pipeline.txt
 RUN python -m pip install -U pip \
  && pip install --no-cache-dir -r requirements-pipeline.txt \
  && pip install --no-cache-dir huggingface_hub
 
-# ---- App code ----
+# ---- Code ----
 COPY . /app
 
-# ---- Non-root user (sécurité) ----
+# ---- User non-root ----
 RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser
 
-# ---- Commande (Job) ----
-# Optionnel: ajoute 'sleep 60' si tu veux laisser la source publier avant l’ingest.
-# Ici on log bien chaque étape, et on force PYTHONPATH=/app pour les imports internes.
+# ---- Command (Cloud Run Job) ----
+# Si besoin, ajoute `sleep 60 &&` juste après bash -lc pour laisser la source publier.
 CMD bash -lc '\
-  echo "[job] start at $(date -u +"%Y-%m-%dT%H:%M:%SZ")" && \
   export PYTHONPATH=/app && \
-  echo "[job] running ingest.py" && python ingest.py && \
-  echo "[job] running aggregate.py" && python aggregate.py && \
-  echo "[job] running push_hf.py" && python push_hf.py \
+  echo "[job] start $(date -u +%FT%TZ)" && \
+  echo "[job] run src.ingest" && python -m src.ingest && \
+  echo "[job] run src.aggregate" && python -m src.aggregate && \
+  echo "[job] run tools/push_hf.py" && python tools/push_hf.py \
 '
