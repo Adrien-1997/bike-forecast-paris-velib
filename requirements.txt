@@ -10,3 +10,7 @@ lightgbm==4.4.0
 joblib==1.4.2
 huggingface_hub==0.24.6
 fastparquet==2024.5.0
+
+
+nicegui>=1.4.27
+uvicorn[standard]>=0.29

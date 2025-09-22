@@ -6,7 +6,7 @@ CACHE = ROOT / "data"
 CACHE.mkdir(parents=True, exist_ok=True)
 HIST_PATH = CACHE / "weather_hourly.parquet"
 
-LAT, LON = 48.8566, 2.3522  # Paris (tu pourras rendre ça dynamique plus tard)
+LAT, LON = 48.8566, 2.3522  # Paris
 
 def _to_utc_naive(x):
     dt = pd.to_datetime(x, errors="coerce", utc=True)
@@ -23,7 +23,7 @@ def _floor_hour_naive(x):
         return dt.dt.floor("h").dt.tz_localize(None)
 
 def fetch_history(start_ts, end_ts):
-    """Historique récent (J-0..J-6) via open-meteo forecast + past_days."""
+    """Historique récent (J-0..J-6) via Open-Meteo forecast + past_days."""
     start = pd.to_datetime(start_ts, utc=True).tz_convert(None)
     end   = pd.to_datetime(end_ts,   utc=True).tz_convert(None)
     days  = max(1, int((end - start).ceil("D").days) + 1)
@@ -33,6 +33,7 @@ def fetch_history(start_ts, end_ts):
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={LAT}&longitude={LON}"
         "&hourly=temperature_2m,precipitation,wind_speed_10m"
+        "&windspeed_unit=ms&precipitation_unit=mm"
         f"&past_days={days}"
         "&timezone=UTC"
     )
@@ -52,9 +53,11 @@ def fetch_history(start_ts, end_ts):
     for c in ["temp_C","precip_mm","wind_mps"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
+    # borne temps + nettoyage
     df = df[(df["hour_utc"] >= start.floor("h")) & (df["hour_utc"] <= end.floor("h"))].copy()
+    df = df.drop_duplicates(subset=["hour_utc"]).sort_values("hour_utc")
 
-    # Cache parquet
+    # Cache parquet best-effort (optionnel)
     try:
         if HIST_PATH.exists():
             old = pd.read_parquet(HIST_PATH)
@@ -74,6 +77,7 @@ def fetch_forecast(start_ts, horizon_h=24):
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={LAT}&longitude={LON}"
         "&hourly=temperature_2m,precipitation,wind_speed_10m"
+        "&windspeed_unit=ms&precipitation_unit=mm"
         "&timezone=UTC"
     )
     js = requests.get(url, timeout=30).json()
@@ -94,4 +98,7 @@ def fetch_forecast(start_ts, horizon_h=24):
 
     start = pd.to_datetime(start_ts, utc=True).tz_convert(None).floor("h")
     end   = start + pd.Timedelta(hours=horizon_h)
-    return df[(df["hour_utc"] > start) & (df["hour_utc"] <= end)].copy()
+
+    df = df[(df["hour_utc"] > start) & (df["hour_utc"] <= end)].copy()
+    df = df.drop_duplicates(subset=["hour_utc"]).sort_values("hour_utc")
+    return df
