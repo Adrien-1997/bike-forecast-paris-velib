@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
+import os
 import numpy as np
 import pandas as pd
 
@@ -290,3 +291,57 @@ def occupancy_5min(
     cols = [c for c in cols if c in agg.columns]
     agg = agg[cols].sort_values(["tbin_utc", "stationcode"]).reset_index(drop=True)
     return agg
+
+
+# =============================================================================
+# Orchestrateur (ingest -> aggregate -> export -> push HF)
+# =============================================================================
+if __name__ == "__main__":
+    # bootstrap sys.path project root
+    import sys
+    from pathlib import Path
+
+    ROOT = Path(__file__).resolve().parents[1]
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+
+    # imports runtime
+    try:
+        from src.ingest import ingest_once  # type: ignore
+    except Exception:
+        from ingest import ingest_once  # type: ignore
+
+    # 1) ingest
+    df_raw = ingest_once()
+    if df_raw is None or df_raw.empty:
+        print("[aggregate] No raw data — exiting 0.")
+        sys.exit(0)
+
+    # 2) aggregate
+    cfg = OccupancyConfig(res_minutes=5, with_weather=True)
+    df_agg = occupancy_5min(df_raw, cfg)
+
+    # 3) export (chemin attendu par push)
+    outdir = Path("exports")
+    outdir.mkdir(parents=True, exist_ok=True)
+    out_pq = outdir / "velib.parquet"
+    df_agg.to_parquet(out_pq, index=False)
+    print(f"[aggregate] wrote {out_pq} ({len(df_agg)} rows)")
+
+    # 4) push HF
+    try:
+        # autoriser override par env si besoin
+        os.environ.setdefault("PUSH_SRC", str(out_pq))
+        try:
+            from tools.push_hf import main as push_main  # type: ignore
+        except Exception:
+            # fallback si structure différente
+            from push_hf import main as push_main  # type: ignore
+        push_main()
+    except SystemExit as e:
+        # respecter code de retour du push
+        raise
+    except Exception as e:
+        # ne pas masquer l’erreur pour Cloud Run
+        print(f"[aggregate] push_hf failed: {e}")
+        sys.exit(1)
