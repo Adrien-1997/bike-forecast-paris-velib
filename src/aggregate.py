@@ -1,7 +1,6 @@
 ﻿# src/aggregate.py
 import os
 import pandas as pd
-from pathlib import Path
 from src.weather import fetch_history, fetch_forecast
 from src.utils_io import get_export_path
 
@@ -21,10 +20,11 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
     if snapshot_df.empty:
         return pd.DataFrame()
 
-    # bins temps
+    # Bins de temps
     snapshot_df["tbin_utc"] = snapshot_df["ts_utc"].dt.floor("5min")
     snapshot_df["hour_utc"] = snapshot_df["ts_utc"].dt.floor("h")
 
+    # Aggregate par pas de 5 min
     agg = (
         snapshot_df
         .groupby(["tbin_utc", "stationcode"])
@@ -39,10 +39,10 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
         .reset_index()
     )
 
-    # ✅ nécessaire pour la jointure météo
+    # Recrée l'heure (pour jointure météo)
     agg["hour_utc"] = agg["tbin_utc"].dt.floor("h")
 
-    # types + ratio
+    # Types + ratio d'occupation
     agg["nb_velos_bin"] = agg["nb_velos_bin"].astype("Int64")
     agg["nb_bornes_bin"] = agg["nb_bornes_bin"].astype("Int64")
     agg["occ_ratio_bin"] = agg.apply(
@@ -56,23 +56,26 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
     agg["occ_ratio_bin"] = pd.to_numeric(agg["occ_ratio_bin"], errors="coerce").clip(0, 1)
 
     if with_weather:
-        # ✅ évite KeyError si pas encore mergé
+        # Pré-crée les colonnes météo pour éviter KeyError
         for c in ["temp_C", "precip_mm", "wind_mps"]:
             if c not in agg.columns:
                 agg[c] = pd.NA
 
-        # Historique
+        # Historique météo
         try:
             w = fetch_history(agg["hour_utc"].min(), agg["hour_utc"].max())
         except Exception:
             w = None
         if w is not None and not w.empty:
             w["hour_utc"] = _to_utc_naive_floor_hour(w["hour_utc"])
-            cols = [c for c in ["hour_utc","temp_C","precip_mm","wind_mps"] if c in w.columns]
+            cols = [c for c in ["hour_utc", "temp_C", "precip_mm", "wind_mps"] if c in w.columns]
             agg = agg.merge(w[cols], on="hour_utc", how="left")
 
-        # Faut-il compléter par la prévision ?
-        need_fx = agg[["temp_C","precip_mm","wind_mps"]].isna().any(axis=1).any()
+        # Complète avec la prévision si trous restants
+        try:
+            need_fx = agg[["temp_C", "precip_mm", "wind_mps"]].isna().any(axis=1).any()
+        except KeyError:
+            need_fx = True
         if need_fx:
             try:
                 wf = fetch_forecast(pd.to_datetime(agg["hour_utc"].max()), 24)
@@ -80,18 +83,19 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
                 wf = None
             if wf is not None and not wf.empty:
                 wf["hour_utc"] = _to_utc_naive_floor_hour(wf["hour_utc"])
-                cols = [c for c in ["hour_utc","temp_C","precip_mm","wind_mps"] if c in wf.columns]
+                cols = [c for c in ["hour_utc", "temp_C", "precip_mm", "wind_mps"] if c in wf.columns]
                 agg = agg.merge(wf[cols], on="hour_utc", how="left", suffixes=("", "_fx"))
-                for c in ["temp_C","precip_mm","wind_mps"]:
+                for c in ["temp_C", "precip_mm", "wind_mps"]:
                     if f"{c}_fx" in agg.columns:
                         agg[c] = agg[c].fillna(agg[f"{c}_fx"])
-                agg.drop(columns=[c for c in ["temp_C_fx","precip_mm_fx","wind_mps_fx"] if c in agg.columns],
+                agg.drop(columns=[c for c in ["temp_C_fx", "precip_mm_fx", "wind_mps_fx"] if c in agg.columns],
                          inplace=True, errors="ignore")
 
     return agg
 
 if __name__ == "__main__":
     from src.ingest import ingest_once
+    import os
 
     DOCS_EXPORTS = os.path.join("docs", "exports")
     os.makedirs(DOCS_EXPORTS, exist_ok=True)
@@ -103,6 +107,7 @@ if __name__ == "__main__":
         print("[aggregate] Aucun nouveau point.")
         raise SystemExit(0)
 
+    # Concat avec historique existant (local ou HF via utils_io)
     try:
         old_path = get_export_path("velib.parquet")
         old = pd.read_parquet(old_path)
@@ -114,11 +119,11 @@ if __name__ == "__main__":
         print(f"[aggregate] Pas d'existant ({e}) → repartir du nouveau")
         df = new.copy()
 
+    # Dédup et purge à 90 jours
     df = (
         df.sort_values(["tbin_utc", "stationcode"])
           .drop_duplicates(subset=["tbin_utc", "stationcode"], keep="last")
     )
-
     try:
         tmax = df["tbin_utc"].max()
         cutoff = (tmax - pd.Timedelta(days=90)).floor("5min")
