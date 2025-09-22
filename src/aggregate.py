@@ -82,7 +82,7 @@ def _merge_weather_tolerant(
     weather_forecast_df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
-    Merge history + forecast on hour_utc using merge_asof with ±30min tolerance.
+    Merge history + forecast on hour_utc using merge_asof with ±59min tolerance.
     If weather_*_df are None, tries project-level fetchers.
     """
     # Lazy import to avoid hard dependency when running tests
@@ -114,6 +114,9 @@ def _merge_weather_tolerant(
         if c not in out.columns:
             out[c] = pd.NA
 
+    if h.empty and f.empty:
+        print("[aggregate] weather empty (history & forecast) — leaving NaNs for temp_C/precip_mm/wind_mps")
+
     # Merge history first (fill past)
     if not h.empty:
         h["hour_utc"] = _ensure_ns(h["hour_utc"])
@@ -122,7 +125,7 @@ def _merge_weather_tolerant(
             h.sort_values("hour_utc"),
             on="hour_utc",
             direction="nearest",
-            tolerance=pd.Timedelta("30min"),
+            tolerance=pd.Timedelta("59min"),
             suffixes=("", "_h"),
         )
         for c in ["temp_C", "precip_mm", "wind_mps"]:
@@ -138,7 +141,7 @@ def _merge_weather_tolerant(
             f.sort_values("hour_utc"),
             on="hour_utc",
             direction="nearest",
-            tolerance=pd.Timedelta("30min"),
+            tolerance=pd.Timedelta("59min"),
             suffixes=("", "_f"),
         )
         for c in ["temp_C", "precip_mm", "wind_mps"]:
@@ -330,18 +333,14 @@ if __name__ == "__main__":
 
     # 4) push HF
     try:
-        # autoriser override par env si besoin
         os.environ.setdefault("PUSH_SRC", str(out_pq))
         try:
             from tools.push_hf import main as push_main  # type: ignore
         except Exception:
-            # fallback si structure différente
             from push_hf import main as push_main  # type: ignore
         push_main()
     except SystemExit as e:
-        # respecter code de retour du push
         raise
     except Exception as e:
-        # ne pas masquer l’erreur pour Cloud Run
         print(f"[aggregate] push_hf failed: {e}")
         sys.exit(1)
