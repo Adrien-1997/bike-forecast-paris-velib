@@ -141,9 +141,6 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
 
 # aggregate.py
 
-import pandas as pd
-from pathlib import Path
-from weather import fetch_history, fetch_forecast
 
 def main(input_path: Path, output_path: Path):
     # Charger le snapshot ingéré
