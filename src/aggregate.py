@@ -90,7 +90,6 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
 
     return agg
 
-
 if __name__ == "__main__":
     from src.ingest import ingest_once
 
