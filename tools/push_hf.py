@@ -25,11 +25,29 @@ def _create_commit_compat(api: HfApi, **kwargs):
         kwargs.pop("max_workers", None)
         return api.create_commit(**kwargs)
 
-def main():
+def main() -> int:
+    print(f"[push_hf] cwd={os.getcwd()}", flush=True)
+    print(f"[push_hf] repo={REPO_ID} type={REPO_TYPE}", flush=True)
+    print(f"[push_hf] src={SRC}  dest={DEST}", flush=True)
+
     src = pathlib.Path(SRC)
     if not src.exists():
-        print(f"[push_hf] Source not found: {src}", file=sys.stderr)
+        print(f"[push_hf] Source not found: {src}", file=sys.stderr, flush=True)
+        # Petit diagnostic de répertoire
+        try:
+            if pathlib.Path("exports").exists():
+                print(f"[push_hf] ls exports/: {os.listdir('exports')}", flush=True)
+            else:
+                print("[push_hf] 'exports/' directory does not exist.", flush=True)
+        except Exception as e:
+            print(f"[push_hf] ls exports/ failed: {e}", flush=True)
         return 1
+
+    try:
+        size_mb = src.stat().st_size / (1024 * 1024)
+        print(f"[push_hf] file size ≈ {size_mb:.2f} MB", flush=True)
+    except Exception:
+        pass
 
     api = HfApi(token=TOKEN)
     print(f"[push_hf] Upload {src} -> {REPO_ID}:{DEST}", flush=True)
@@ -47,11 +65,13 @@ def main():
                 commit_message=f"append shard {DEST}",
                 token=TOKEN,
             )
-            print(f"[push_hf] Done: {getattr(info, 'commit_url', '(no url)')}")
+            print(f"[push_hf] Done: {getattr(info, 'commit_url', '(no url)')}", flush=True)
             return 0
+
         except HfHubHTTPError as e:
             resp = getattr(e, "response", None)
-            if resp is not None and getattr(resp, "status_code", None) == 429 and tries < 6:
+            code = getattr(resp, "status_code", None)
+            if code == 429 and tries < 6:
                 import time, random
                 sleep_s = delay + random.uniform(0, 0.6)
                 print(f"[push_hf] 429 rate-limited, retry in {sleep_s:.1f}s (try {tries+1}/6)...", flush=True)
@@ -59,10 +79,20 @@ def main():
                 tries += 1
                 delay *= 2
                 continue
-            if resp is not None and getattr(resp, "status_code", None) == 429:
-                print("[push_hf] final 429: skip this run (append shard).")
+            if code == 429:
+                print("[push_hf] final 429: skip this run (append shard).", flush=True)
                 return 0
+            # Autres erreurs HF : on les remonte après quelques retries génériques
+            if tries < 3:
+                import time, random
+                sleep_s = delay + random.uniform(0, 0.6)
+                print(f"[push_hf] HfHubHTTPError ({code}). retry in {sleep_s:.1f}s...", flush=True)
+                time.sleep(sleep_s)
+                tries += 1
+                delay *= 2
+                continue
             raise
+
         except Exception as e:
             if tries < 3:
                 import time, random
