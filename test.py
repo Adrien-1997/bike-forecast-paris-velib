@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 
 # URL directe du fichier Parquet sur HuggingFace
-url = "https://huggingface.co/datasets/Adrien97/velib-monitoring-historical/resolve/main/exports/velib.parquet"
+url = "https://huggingface.co/datasets/Adrien97/velib-monitoring-historical/resolve/main/exports/shards/dt=2025-09-22/velib_20250922_1705.parquet"
 
 # Télécharger et lire le parquet
 resp = requests.get(url)
