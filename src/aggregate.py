@@ -195,3 +195,4 @@ def main(input_path: Path, output_path: Path):
     # Sauvegarde
     df.to_parquet(output_path, index=False)
     print(f"[aggregate] saved {len(df)} rows → {output_path}")
+
