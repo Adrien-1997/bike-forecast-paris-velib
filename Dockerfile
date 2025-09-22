@@ -5,4 +5,7 @@ COPY requirements-pipeline.txt .
 RUN python -m pip install -U pip && pip install --no-cache-dir -r requirements-pipeline.txt && pip install --no-cache-dir huggingface_hub
 COPY . .
 # Tampon 60s → ingest → aggregate
-CMD bash -lc "sleep 60 && PYTHONPATH=/app python -m src.ingest && PYTHONPATH=/app python -m src.aggregate && python tools/push_hf.py"
+# (le reste ne change pas)
+CMD bash -lc "PYTHONPATH=/app python -m src.ingest \
+ && PYTHONPATH=/app python -m src.aggregate \
+ && python tools/push_hf.py"
