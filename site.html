@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vélib’ Forecast Paris — Prévisions +60 min, Carte en direct & Monitoring</title>
+  <meta name="description" content="Carte temps réel des stations Vélib’ + prévisions à 60 minutes, monitoring qualité des données et performances du modèle. Application NiceGUI embarquée, déployée sur Cloud Run." />
+  <meta property="og:title" content="Vélib’ Forecast Paris" />
+  <meta property="og:description" content="App temps réel + prévisions à 60 min. UX premium, monitoring intégré." />
+  <meta property="og:type" content="website" />
+  <meta name="theme-color" content="#0b1220" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🚲</text></svg>">
+
+  <style>
+    /* ---------------------- CSS VARIABLES ---------------------- */
+    :root{
+      --bg: #0b1220;          /* Nuit profonde */
+      --bg-soft: #111a2b;
+      --panel: #0f172a;       /* Slate-900 */
+      --text: #e6eaf2;        /* Clair neutral */
+      --muted: #a7b0c0;
+      --primary: #ff6a00;     /* Orange signature */
+      --primary-2: #1d7fff;   /* Bleu signature */
+      --accent: #59d4ff;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --err: #ef4444;
+      --ring: 0 0 0 3px rgba(29,127,255,.25);
+      --radius: 16px;
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+    @media (prefers-color-scheme: light){
+      :root{
+        --bg: #f7f8fb;
+        --bg-soft: #ffffff;
+        --panel: #ffffff;
+        --text: #0b1220;
+        --muted: #626b7b;
+        --shadow: 0 10px 25px rgba(0,0,0,.08);
+      }
+    }
+
+    /* ---------------------- RESET / BASE ---------------------- */
+    *,*::before,*::after{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;font:16px/1.6 Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; color:var(--text); background:radial-gradient(1200px 600px at 10% -10%, rgba(29,127,255,.12), transparent 60%), radial-gradient(900px 500px at 90% -10%, rgba(255,106,0,.12), transparent 60%), var(--bg)}
+    img{max-width:100%;display:block}
+    a{color:inherit;text-decoration:none}
+    .container{max-width:1200px;margin:0 auto;padding:0 24px}
+    .btn{display:inline-flex;align-items:center;gap:.6rem;padding:.9rem 1.1rem;border-radius:12px;background:linear-gradient(135deg,var(--primary),var(--primary-2));color:white;font-weight:600;box-shadow:var(--shadow);border:0}
+    .btn:hover{transform:translateY(-1px);filter:saturate(1.05);}
+    .btn.outline{background:transparent;color:var(--text);border:1px solid rgba(255,255,255,.16)}
+    .chip{display:inline-flex;align-items:center;gap:.5rem;padding:.35rem .6rem;border:1px solid rgba(255,255,255,.14);border-radius:999px;font-size:.85rem;color:var(--muted);backdrop-filter: blur(8px)}
+    .kbd{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;border:1px solid rgba(255,255,255,.18);padding:.15rem .4rem;border-radius:6px;background:rgba(255,255,255,.05);}
+
+    /* ---------------------- NAV ---------------------- */
+    header{position:sticky;top:0;z-index:50;background:linear-gradient(0deg, transparent, rgba(0,0,0,.35));backdrop-filter: blur(10px)}
+    .nav{display:flex;align-items:center;justify-content:space-between;padding:14px 0}
+    .brand{display:flex;align-items:center;gap:.7rem;font-weight:800}
+    .brand .logo{width:34px;height:34px;border-radius:10px;background:conic-gradient(from 180deg at 50% 50%, var(--primary), var(--primary-2));display:grid;place-items:center;box-shadow:var(--shadow)}
+    nav ul{display:flex;gap:1.2rem;list-style:none;margin:0;padding:0}
+    nav a{padding:.6rem .8rem;border-radius:10px;color:var(--muted)}
+    nav a.active, nav a:hover{color:var(--text);background:rgba(255,255,255,.06)}
+
+    /* ---------------------- HERO ---------------------- */
+    .hero{position:relative;padding:90px 0 40px}
+    .hero-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:42px;align-items:center}
+    .eyebrow{display:inline-flex;gap:.5rem;align-items:center;margin-bottom:.8rem}
+    .eyebrow .ping{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 6px rgba(34,197,94,.15)}
+    h1{font-size:clamp(36px, 5.2vw, 64px);line-height:1.05;margin:.2rem 0 .6rem}
+    .lead{font-size:1.15rem;color:var(--muted);max-width:60ch}
+    .cta{display:flex;gap:.8rem;flex-wrap:wrap;margin-top:1.2rem}
+
+    .glass{background:linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.04));border:1px solid rgba(255,255,255,.16);border-radius:var(--radius);box-shadow:var(--shadow)}
+    .hero-card{padding:18px}
+    .hero-card h3{margin:.2rem 0 .6rem;font-size:1rem;color:var(--muted)}
+    .kpis{display:grid;grid-template-columns:repeat(3, 1fr);gap:12px}
+    .kpi{padding:16px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)}
+    .kpi .value{font-weight:900;font-size:1.6rem}
+    .kpi .label{font-size:.85rem;color:var(--muted)}
+
+    /* ---------------------- EMBED (NiceGUI) ---------------------- */
+    .embed{margin:30px 0 0;border-radius:18px;overflow:hidden;border:1px solid rgba(255,255,255,.12);position:relative}
+    .embed .skeleton{position:absolute;inset:0;background:linear-gradient(90deg, rgba(255,255,255,.04) 0%, rgba(255,255,255,.09) 50%, rgba(255,255,255,.04) 100%);background-size:400% 100%;animation:shimmer 2.2s infinite;display:grid;place-items:center;color:var(--muted)}
+    @keyframes shimmer{0%{background-position:0 0}100%{background-position:200% 0}}
+    iframe{width:100%;height:68vh;border:0;background:var(--panel)}
+
+    /* ---------------------- FEATURES ---------------------- */
+    section{padding:72px 0}
+    .sec-head{display:flex;justify-content:space-between;align-items:end;margin-bottom:22px}
+    .sec-head h2{font-size:clamp(28px, 3.6vw, 40px);margin:0}
+    .sec-head p{color:var(--muted);max-width:60ch;margin:8px 0 0}
+
+    .features{display:grid;grid-template-columns:repeat(3, 1fr);gap:16px}
+    .feature{padding:18px;border-radius:18px;border:1px solid rgba(255,255,255,.12);background:linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02))}
+    .feature .icon{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(135deg, rgba(255,106,0,.25), rgba(29,127,255,.25))}
+    .feature h3{margin:.8rem 0 .3rem;font-size:1.1rem}
+    .feature p{color:var(--muted);margin:0}
+
+    /* ---------------------- SHOWCASE (captures / cartes) ---------------------- */
+    .showcase{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+    .card{border-radius:18px;border:1px solid rgba(255,255,255,.1);overflow:hidden}
+    .card .cap{padding:14px 16px;background:rgba(255,255,255,.04);display:flex;justify-content:space-between;align-items:center}
+    .card .cap strong{font-weight:700}
+    .card .cap span{color:var(--muted);font-size:.9rem}
+    .ratio{aspect-ratio:16/10;background:radial-gradient(800px 400px at 30% -20%, rgba(29,127,255,.18), transparent 60%), radial-gradient(900px 500px at 90% -10%, rgba(255,106,0,.14), transparent 60%), linear-gradient(180deg, var(--panel), var(--bg-soft));display:grid;place-items:center}
+    .ratio small{color:var(--muted)}
+
+    /* ---------------------- HOW ---------------------- */
+    .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+    .step{padding:18px;border:1px dashed rgba(255,255,255,.20);border-radius:18px}
+    .step strong{display:block;margin:.2rem 0 .2rem}
+    .step p{margin:0;color:var(--muted)}
+
+    /* ---------------------- FAQ & FOOTER ---------------------- */
+    details{padding:16px;border:1px solid rgba(255,255,255,.12);border-radius:14px;background:rgba(255,255,255,.03)}
+    details+details{margin-top:10px}
+    summary{cursor:pointer;font-weight:700}
+
+    footer{padding:40px 0;border-top:1px solid rgba(255,255,255,.12);color:var(--muted)}
+
+    /* ---------------------- UTIL ---------------------- */
+    .grid-2{display:grid;grid-template-columns:1.2fr .8fr;gap:16px}
+    .cols-2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+
+    @media (max-width: 980px){
+      .hero-grid, .grid-2{grid-template-columns:1fr}
+      .features{grid-template-columns:repeat(2,1fr)}
+      .steps{grid-template-columns:repeat(2,1fr)}
+      iframe{height:64vh}
+    }
+    @media (max-width: 680px){
+      .features{grid-template-columns:1fr}
+      .steps{grid-template-columns:1fr}
+      .kpis{grid-template-columns:1fr 1fr}
+    }
+
+  </style>
+</head>
+<body>
+  <!-- ====================== NAV ====================== -->
+  <header>
+    <div class="container nav">
+      <a class="brand" href="#">
+        <span class="logo" aria-hidden="true">🚲</span>
+        <span>Vélib’ Forecast</span>
+      </a>
+      <nav aria-label="Navigation principale">
+        <ul>
+          <li><a href="#demo" class="active">Démo</a></li>
+          <li><a href="#features">Fonctions</a></li>
+          <li><a href="#monitoring">Monitoring</a></li>
+          <li><a href="#faq">FAQ</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ====================== HERO ====================== -->
+  <section class="hero">
+    <div class="container hero-grid">
+      <div>
+        <div class="eyebrow"><span class="ping"></span><span class="chip">Prévisions +60 min • Paris</span></div>
+        <h1>Anticipez les stations Vélib’<br>avec une <span style="background:linear-gradient(90deg,var(--primary),var(--primary-2));-webkit-background-clip:text;background-clip:text;color:transparent">UX taillée pour la ville</span>.</h1>
+        <p class="lead">Carte temps réel, prédictions +60 min par station, et un monitoring qualité qui surveille la fraîcheur des données & la performance du modèle — pour un produit fiable, jour et nuit.</p>
+        <div class="cta">
+          <a class="btn" href="#demo" aria-label="Ouvrir la démo en direct">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 7h10v10H7z" stroke="white" stroke-width="1.8"/><path d="M3 3v6M3 3h6M21 21v-6M21 21h-6" stroke="white" stroke-width="1.8"/></svg>
+            Ouvrir la démo</a>
+          <a class="btn outline" href="#how">Architecture</a>
+        </div>
+        <div style="margin-top:14px;color:var(--muted);display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+          <span class="chip">Cloud Run</span>
+          <span class="chip">NiceGUI</span>
+          <span class="chip">DuckDB</span>
+          <span class="chip">LightGBM</span>
+          <span class="chip">Monitoring automatique</span>
+        </div>
+      </div>
+
+      <aside class="glass hero-card">
+        <h3>En chiffres — 7 derniers jours</h3>
+        <div class="kpis" role="list">
+          <div class="kpi" role="listitem"><div class="value" data-count="87">0%</div><div class="label">Précision moyenne</div></div>
+          <div class="kpi" role="listitem"><div class="value" data-count="5">0</div><div class="label">Fraîcheur (min)</div></div>
+          <div class="kpi" role="listitem"><div class="value" data-count="365">0</div><div class="label">Stations suivies</div></div>
+        </div>
+        <div class="embed" style="margin-top:16px">
+          <div class="skeleton" aria-hidden="true">Mini‑aperçu</div>
+          <div class="ratio"><small>Prévisualisation statique — lancez la démo ci‑dessous</small></div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ====================== DEMO (NiceGUI embed) ====================== -->
+  <section id="demo">
+    <div class="container">
+      <div class="sec-head">
+        <div>
+          <h2>Démo en direct</h2>
+          <p>Application NiceGUI embarquée : carte en direct, recherche de stations, et prévisions à +60 minutes. Le chargement peut prendre quelques secondes au premier accès (cold start Cloud Run).</p>
+        </div>
+        <div>
+          <span class="kbd">Alt</span> + <span class="kbd">Clique</span> pour plein écran
+        </div>
+      </div>
+
+      <div class="embed" aria-live="polite">
+        <div class="skeleton" id="skeleton">Initialisation de la démo…</div>
+        <!-- REMPLACEZ l’URL PAR VOTRE ENDPOINT CLOUD RUN -->
+        <iframe id="appFrame" title="Vélib’ Forecast — Démo"
+                src="https://YOUR-CLOUD-RUN-URL.example/"
+                loading="lazy"
+                allow="fullscreen; clipboard-read; clipboard-write">
+        </iframe>
+      </div>
+
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px">
+        <a class="btn" href="https://YOUR-CLOUD-RUN-URL.example/" target="_blank" rel="noopener">Ouvrir dans un onglet</a>
+        <button class="btn outline" id="reloadApp" type="button">Recharger la démo</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================== FEATURES ====================== -->
+  <section id="features">
+    <div class="container">
+      <div class="sec-head">
+        <div>
+          <h2>Pensé pour l’usage, du matin au soir</h2>
+          <p>Des parcours clairs et rapides : repérez les stations utiles, visualisez l’évolution à +60 min, comparez à la médiane et passez en mode monitoring si besoin.</p>
+        </div>
+        <a class="btn outline" href="#demo">Essayer maintenant</a>
+      </div>
+
+      <div class="features">
+        <article class="feature">
+          <div class="icon" aria-hidden><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 3v18M3 12h18" stroke="currentColor" stroke-width="2"/></svg></div>
+          <h3>Carte lisible & rapide</h3>
+          <p>Couleurs et contrastes étudiés, légende compacte, recherches instantanées et focus quartier.</p>
+        </article>
+        <article class="feature">
+          <div class="icon" aria-hidden><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 12a9 9 0 1018 0A9 9 0 003 12z" stroke="currentColor" stroke-width="2"/><path d="M12 7v6l4 2" stroke="currentColor" stroke-width="2"/></svg></div>
+          <h3>Prévisions à +60 min</h3>
+          <p>Un modèle entraîné sur l’historique et enrichi météo pour anticiper disponibilité et saturation.</p>
+        </article>
+        <article class="feature">
+          <div class="icon" aria-hidden><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 4h16v16H4z" stroke="currentColor" stroke-width="2"/><path d="M4 9h16M9 4v16" stroke="currentColor" stroke-width="2"/></svg></div>
+          <h3>Comparaisons utiles</h3>
+          <p>“Aujourd’hui vs médiane” et profils horaires par station pour comprendre les dynamiques.</p>
+        </article>
+        <article class="feature">
+          <div class="icon" aria-hidden><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 12h16" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/></svg></div>
+          <h3>Monitoring intégré</h3>
+          <p>KPIs fraîcheur, complétude, anomalies & résilience du pipeline pour une qualité constante.</p>
+        </article>
+        <article class="feature">
+          <div class="icon" aria-hidden><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M7 7h10v10H7z" stroke="currentColor" stroke-width="2"/><path d="M3 3v6M3 3h6M21 21v-6M21 21h-6" stroke="currentColor" stroke-width="2"/></svg></div>
+          <h3>Responsive & accessible</h3>
+          <p>Design first mobile, contrastes conformes, navigation clavier, et préférences système respectées.</p>
+        </article>
+        <article class="feature">
+          <div class="icon" aria-hidden><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2"/></svg></div>
+          <h3>Intégrable partout</h3>
+          <p>Simple <code>&lt;iframe&gt;</code> pour s’embarquer dans n’importe quel site (Cloud Run, proxy, etc.).</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================== SHOWCASE ====================== -->
+  <section id="monitoring">
+    <div class="container">
+      <div class="sec-head">
+        <div>
+          <h2>Monitoring & Qualité des données</h2>
+          <p>Surveille en continu la fraîcheur, la couverture et les anomalies. Toute dérive est détectée rapidement pour préserver la fiabilité des prévisions.</p>
+        </div>
+        <a class="btn outline" href="#faq">En savoir plus</a>
+      </div>
+
+      <div class="showcase">
+        <figure class="card">
+          <figcaption class="cap"><strong>Data Health Dashboard</strong><span>Détails techniques & KPIs</span></figcaption>
+          <div class="ratio"><small>Prévisualisation — insérez vos captures générées</small></div>
+        </figure>
+        <div class="cols-2">
+          <figure class="card">
+            <figcaption class="cap"><strong>Fraîcheur</strong><span>Objectif ≤ 5 min</span></figcaption>
+            <div class="ratio"></div>
+          </figure>
+          <figure class="card">
+            <figcaption class="cap"><strong>Complétude</strong><span>Stations × heures</span></figcaption>
+            <div class="ratio"></div>
+          </figure>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================== HOW IT WORKS ====================== -->
+  <section id="how">
+    <div class="container">
+      <div class="sec-head">
+        <div>
+          <h2>Sous le capot</h2>
+          <p>Un pipeline robuste de l’ingestion à la mise en prod, avec des composants simples à maintenir.</p>
+        </div>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <span class="chip">1 · Ingestion</span>
+          <strong>GBFS → DuckDB</strong>
+          <p>Snapshots toutes les 5 minutes, consolidation et indexation spatio‑temporelle.</p>
+        </div>
+        <div class="step">
+          <span class="chip">2 · Enrichissement</span>
+          <strong>Features calendrier & météo</strong>
+          <p>Jour de semaine, heure, vacances, pluviométrie, vents, etc.</p>
+        </div>
+        <div class="step">
+          <span class="chip">3 · Modélisation</span>
+          <strong>LightGBM</strong>
+          <p>Prévisions station‑par‑station à +60 min, évaluation AUC/MAE et baseline persistance.</p>
+        </div>
+        <div class="step">
+          <span class="chip">4 · App & Docs</span>
+          <strong>NiceGUI + MkDocs</strong>
+          <p>Carte interactive, pages “Réseau/Modèle/Monitoring/Data” et export automatique des KPIs.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================== FAQ ====================== -->
+  <section id="faq">
+    <div class="container grid-2">
+      <div>
+        <div class="sec-head"><h2>FAQ</h2></div>
+        <details>
+          <summary>La démo met quelques secondes à démarrer, normal ?</summary>
+          <p>Oui, c’est le cold start de Cloud Run. Les accès suivants sont instantanés. Vous pouvez augmenter l’instance minimum pour éviter ce délai.</p>
+        </details>
+        <details>
+          <summary>Puis‑je intégrer l’app dans mon site ?</summary>
+          <p>Oui, via un simple <code>&lt;iframe&gt;</code>. La page gère déjà le responsive, le thème et le focus clavier.</p>
+        </details>
+        <details>
+          <summary>Comment sont calculées les prévisions ?</summary>
+          <p>Le modèle apprend les dynamiques horaires par station et incorpore des signaux calendrier/météo. Une baseline de persistance sert de repère pour mesurer l’amélioration.</p>
+        </details>
+      </div>
+      <aside class="glass" style="padding:18px">
+        <h3 style="margin-top:0">Intégration Cloud Run</h3>
+        <p style="color:var(--muted);margin-top:.4rem">Remplacez l’URL ci‑dessous par l’endpoint public de votre service NiceGUI.</p>
+        <pre style="overflow:auto;background:rgba(255,255,255,.04);padding:14px;border-radius:12px;border:1px solid rgba(255,255,255,.10)"><code>&lt;iframe
+  src="https://YOUR-CLOUD-RUN-URL.example/"
+  width="100%" height="68vh" style="border:0"
+  allow="fullscreen"&gt;&lt;/iframe&gt;</code></pre>
+        <p style="color:var(--muted);font-size:.95rem">Vous pouvez aussi placer l’app derrière un sous‑domaine (ex. <em>app.votredomaine.fr</em>) et gérer le SSO côté proxy.</p>
+      </aside>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container" style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div>© <span id="year"></span> Vélib’ Forecast — Fait avec ♥ à Paris</div>
+      <div style="display:flex;gap:10px">
+        <a class="chip" href="#demo">Démo</a>
+        <a class="chip" href="#monitoring">Monitoring</a>
+        <a class="chip" href="#how">Architecture</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // ----- Active link on scroll
+    const links = Array.from(document.querySelectorAll('nav a'))
+    const sections = links.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean)
+    const setActive = () => {
+      const y = window.scrollY + 120
+      let active = links[0]
+      sections.forEach((sec, i) => {
+        if (sec.offsetTop <= y) active = links[i]
+      })
+      links.forEach(a => a.classList.remove('active'))
+      active?.classList.add('active')
+    }
+    document.addEventListener('scroll', setActive, {passive:true})
+    setActive()
+
+    // ----- Counters
+    const ease = t => 1 - Math.pow(1-t, 4)
+    const animateCount = (el, to, suffix='') => {
+      const start = performance.now();
+      const dur = 1100 + Math.random()*600
+      const from = 0
+      const step = now => {
+        const p = Math.min(1, (now - start)/dur)
+        const v = Math.round((from + (to-from)*ease(p)) * 10)/10
+        el.textContent = suffix ? v + suffix : (el.dataset.count.endsWith('%') ? v + '%' : v)
+        if (p < 1) requestAnimationFrame(step)
+      }
+      requestAnimationFrame(step)
+    }
+    document.querySelectorAll('.kpi .value').forEach(el => {
+      const raw = el.getAttribute('data-count')
+      if(!raw) return
+      const pct = raw.includes('%')
+      const to = parseFloat(raw)
+      animateCount(el, to, pct ? '%' : '')
+    })
+
+    // ----- Iframe skeleton handling
+    const frame = document.getElementById('appFrame')
+    const skel = document.getElementById('skeleton')
+    frame?.addEventListener('load', () => { skel?.remove() })
+
+    // ----- Reload button
+    document.getElementById('reloadApp')?.addEventListener('click', () =>{
+      const url = frame.src
+      frame.src = ''
+      setTimeout(()=>{frame.src = url}, 60)
+    })
+
+    // ----- Year
+    document.getElementById('year').textContent = new Date().getFullYear()
+  </script>
+</body>
+</html>
