@@ -1,4 +1,4 @@
-﻿﻿import os
+﻿import os
 import pandas as pd
 from src.weather import fetch_history, fetch_forecast
 from src.utils_io import get_export_path
