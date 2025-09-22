@@ -21,7 +21,7 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
     if snapshot_df.empty:
         return pd.DataFrame()
 
-    # Arrondis
+    # Arrondis temps
     snapshot_df["tbin_utc"] = snapshot_df["ts_utc"].dt.floor("5min")
     snapshot_df["hour_utc"] = snapshot_df["ts_utc"].dt.floor("h")
 
@@ -39,29 +39,36 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
         .reset_index()
     )
 
-    # ✅ ajoute hour_utc dans le résultat (pour la jointure météo)
+    # hour_utc pour la jointure météo
     agg["hour_utc"] = agg["tbin_utc"].dt.floor("h")
 
-    agg["nb_velos_bin"] = agg["nb_velos_bin"].astype("Int64")
-    agg["nb_bornes_bin"] = agg["nb_bornes_bin"].astype("Int64")
+    # Types propres
+    agg["nb_velos_bin"] = agg["nb_velos_bin"].round().astype("Int64")
+    agg["nb_bornes_bin"] = agg["nb_bornes_bin"].round().astype("Int64")
+    agg["capacity_bin"] = agg["capacity_bin"].astype("Int64")
 
-    agg["occ_ratio_bin"] = agg.apply(
-        lambda r: r.nb_velos_bin / r.capacity_bin
-        if r.capacity_bin and r.capacity_bin > 0 else (
-            r.nb_velos_bin / (r.nb_velos_bin + r.nb_bornes_bin)
-            if (r.nb_velos_bin + r.nb_bornes_bin) > 0 else None
-        ),
-        axis=1,
-    )
-    agg["occ_ratio_bin"] = pd.to_numeric(agg["occ_ratio_bin"], errors="coerce").clip(0, 1)
+    # Ratio d'occupation (évite les truthiness sur pd.NA)
+    def _occ(r):
+        cap = r.capacity_bin
+        bikes = r.nb_velos_bin
+        docks = r.nb_bornes_bin
+        if pd.notna(cap) and cap > 0:
+            return float(bikes) / float(cap)
+        total = (0 if pd.isna(bikes) else int(bikes)) + (0 if pd.isna(docks) else int(docks))
+        if total > 0:
+            return float(0 if pd.isna(bikes) else int(bikes)) / float(total)
+        return None
 
+    agg["occ_ratio_bin"] = pd.to_numeric(agg.apply(_occ, axis=1), errors="coerce").clip(0, 1)
+
+    # --- Météo (historique + forecast) --------------------------------------
     if with_weather:
-        # ✅ colonnes météo créées à NaN si absentes (évite KeyError)
+        # Colonnes météo de base
         for c in ["temp_C", "precip_mm", "wind_mps"]:
             if c not in agg.columns:
                 agg[c] = pd.NA
 
-        # Historique
+        # 1) Historique
         try:
             start, end = agg["hour_utc"].min(), agg["hour_utc"].max()
             w = fetch_history(start, end)
@@ -70,15 +77,23 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
 
         if w is not None and not w.empty:
             w["hour_utc"] = _to_utc_naive_floor_hour(w["hour_utc"])
-            # on merge uniquement si les colonnes existent côté météo
             cols = [c for c in ["hour_utc", "temp_C", "precip_mm", "wind_mps"] if c in w.columns]
-            agg = agg.merge(w[cols], on="hour_utc", how="left")
+            agg = agg.merge(w[cols], on="hour_utc", how="left", suffixes=("", "_hist"))
+            # coalescence base <- hist
+            for c in ["temp_C", "precip_mm", "wind_mps"]:
+                ch = f"{c}_hist"
+                if ch in agg.columns:
+                    agg[c] = pd.to_numeric(agg[c], errors="coerce")
+                    agg[ch] = pd.to_numeric(agg[ch], errors="coerce")
+                    agg[c] = agg[c].fillna(agg[ch])
+            agg.drop(columns=[c for c in ["temp_C_hist", "precip_mm_hist", "wind_mps_hist"] if c in agg.columns],
+                     inplace=True, errors="ignore")
 
-        # Compléter avec la prévision si trous restants
+        # 2) Forecast si trous
         try:
-            need_fx = agg[["temp_C","precip_mm","wind_mps"]].isna().any(axis=1).any()
+            need_fx = agg[["temp_C", "precip_mm", "wind_mps"]].isna().any(axis=1).any()
         except KeyError:
-            need_fx = True  # par sécurité
+            need_fx = True
 
         if need_fx:
             try:
@@ -87,15 +102,42 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
                 wf = None
             if wf is not None and not wf.empty:
                 wf["hour_utc"] = _to_utc_naive_floor_hour(wf["hour_utc"])
-                cols = [c for c in ["hour_utc","temp_C","precip_mm","wind_mps"] if c in wf.columns]
+                cols = [c for c in ["hour_utc", "temp_C", "precip_mm", "wind_mps"] if c in wf.columns]
                 agg = agg.merge(wf[cols], on="hour_utc", how="left", suffixes=("", "_fx"))
-                for c in ["temp_C","precip_mm","wind_mps"]:
-                    if f"{c}_fx" in agg.columns:
-                        agg[c] = agg[c].fillna(agg[f"{c}_fx"])
-                agg.drop(columns=[c for c in ["temp_C_fx","precip_mm_fx","wind_mps_fx"] if c in agg.columns],
+                for c in ["temp_C", "precip_mm", "wind_mps"]:
+                    cf = f"{c}_fx"
+                    if cf in agg.columns:
+                        agg[c] = pd.to_numeric(agg[c], errors="coerce")
+                        agg[cf] = pd.to_numeric(agg[cf], errors="coerce")
+                        agg[c] = agg[c].fillna(agg[cf])
+                agg.drop(columns=[c for c in ["temp_C_fx", "precip_mm_fx", "wind_mps_fx"] if c in agg.columns],
                          inplace=True, errors="ignore")
 
-    return agg
+        # 3) Sécurité: nettoie résiduels *_x/_y
+        for base in ["temp_C", "precip_mm", "wind_mps"]:
+            bx, by = f"{base}_x", f"{base}_y"
+            if bx in agg.columns or by in agg.columns:
+                for extra in [bx, by]:
+                    if extra in agg.columns:
+                        agg[extra] = pd.to_numeric(agg[extra], errors="coerce")
+                if base not in agg.columns:
+                    agg[base] = pd.NA
+                agg[base] = pd.to_numeric(agg[base], errors="coerce")
+                if bx in agg.columns:
+                    agg[base] = agg[base].fillna(agg[bx])
+                if by in agg.columns:
+                    agg[base] = agg[base].fillna(agg[by])
+                agg.drop(columns=[c for c in [bx, by] if c in agg.columns], inplace=True, errors="ignore")
+
+    # Colonnes finales (ordre stable)
+    cols_first = [
+        "tbin_utc", "hour_utc", "stationcode", "name",
+        "nb_velos_bin", "nb_bornes_bin", "capacity_bin", "occ_ratio_bin",
+        "lat", "lon", "temp_C", "precip_mm", "wind_mps"
+    ]
+    rest = [c for c in agg.columns if c not in cols_first]
+    return agg[cols_first + rest]
+
 
 if __name__ == "__main__":
     from src.ingest import ingest_once
