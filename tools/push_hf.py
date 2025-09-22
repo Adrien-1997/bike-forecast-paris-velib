@@ -17,7 +17,7 @@ except Exception:
 
 REPO_ID   = os.environ.get("HF_DATASET_ID", "Adrien97/velib-monitoring-historical")
 REPO_TYPE = "dataset"
-SRC       = os.environ.get("PUSH_SRC", "docs/exports/velib.parquet")
+SRC       = os.environ.get("PUSH_SRC", "exports/velib.parquet")
 DEST      = os.environ.get("PUSH_DEST", "exports/velib.parquet")
 HASH_DEST = os.environ.get("PUSH_HASH_DEST", "exports/velib.sha256")
 TOKEN     = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN")
