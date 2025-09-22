@@ -100,9 +100,9 @@ def occupancy_5min(snapshot_df: pd.DataFrame, with_weather: bool = True) -> pd.D
 if __name__ == "__main__":
     from src.ingest import ingest_once
 
-    DOCS_EXPORTS = os.path.join("docs", "exports")
-    os.makedirs(DOCS_EXPORTS, exist_ok=True)
-    parquet_path = os.path.join(DOCS_EXPORTS, "velib.parquet")
+    EXPORTS = "exports"
+    os.makedirs(EXPORTS, exist_ok=True)
+    parquet_path = os.path.join(EXPORTS, "velib.parquet")
 
     snaps = ingest_once()
     new = occupancy_5min(snaps, with_weather=True)

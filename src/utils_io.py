@@ -22,7 +22,14 @@ def _hub_filename_for_exports(filename: str) -> str:
     # "perf.parquet" -> "exports/perf.parquet"
     return f"{HUB_EXPORTS_PREFIX.rstrip('/')}/{filename.lstrip('/')}"
 
+
+
 def get_export_path(filename: str) -> Path:
+
+    if os.environ.get("HF_DISABLE_HF") == "1":
+        # Short-circuit: ne tente PAS HF, on laisse l’étape courante produire le fichier
+        return Path("exports") / filename
+    
     local_path = LOCAL_EXPORTS_DIR / filename
     if not HF_FORCE_HF and local_path.exists():
         return local_path
