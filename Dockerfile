@@ -13,6 +13,6 @@ RUN pip install -U pip && pip install -r requirements-pipeline.txt && pip instal
 
 COPY src/ src/
 COPY tools/ tools/
-COPY exports/ exports/
+COPY exports/ exports/   # 👉 embarque le dossier exports (même vide avec .gitkeep)
 
-CMD python -m src.ingest && python -m src.aggregate --input exports/velib.parquet --output exports/velib.parquet && python tools/push_hf.py
+CMD python -m src.ingest && python -m src.aggregate --input exports/staging_ingest.parquet --output exports/velib.parquet && python tools/push_hf.py

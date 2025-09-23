@@ -1,9 +1,10 @@
 ﻿# src/aggregate.py
-import os
-import pandas as pd
+import argparse, os
 from pathlib import Path
+import pandas as pd
 from src.weather import fetch_history, fetch_forecast
 from src.utils_io import get_export_path
+
 
 def _to_utc_naive(x):
     dt = pd.to_datetime(x, errors="coerce", utc=True)
@@ -199,10 +200,22 @@ def main(input_path: Path, output_path: Path):
 
 
 if __name__ == "__main__":
-    import argparse
+
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default="exports/velib.parquet")
+    parser.add_argument("--input",  default="exports/staging_ingest.parquet")
     parser.add_argument("--output", default="exports/velib.parquet")
     args = parser.parse_args()
-    # ton main existant: main(input_path: Path, output_path: Path)
-    main(Path(args.input), Path(args.output))
+
+    print("[aggregate] cwd:", os.getcwd())
+    try:
+        print("[aggregate] exports:", os.listdir("exports"))
+    except FileNotFoundError:
+        print("[aggregate] WARNING: 'exports' folder missing"); raise
+
+    # ---- lecture du staging + ta logique d’aggrégat ----
+    df = pd.read_parquet(args.input)
+    # ... enrichissements, météo, etc. ...
+    df.to_parquet(args.output, index=False)
+    print(f"[aggregate] saved {len(df)} rows -> {args.output}")
+

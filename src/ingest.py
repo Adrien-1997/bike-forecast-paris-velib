@@ -3,7 +3,6 @@ import os
 from typing import Optional, List, Dict, Any
 import pandas as pd
 
-
 # -----------------------------
 # HTTP utils
 # -----------------------------
@@ -19,7 +18,7 @@ def _make_session():
         connect=5,
         backoff_factor=0.5,
         status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET", "HEAD", "OPTIONS"]
+        allowed_methods=["GET", "HEAD", "OPTIONS"],
     )
     s.mount("https://", HTTPAdapter(max_retries=retry))
     s.mount("http://", HTTPAdapter(max_retries=retry))
@@ -167,7 +166,7 @@ def _coerce_schema(df: pd.DataFrame) -> pd.DataFrame:
 
     needed = [
         "ts_utc","stationcode","name","lat","lon",
-        "numbikesavailable","numdocksavailable","capacity","mechanical","ebike"
+        "numbikesavailable","numdocksavailable","capacity","mechanical","ebike",
     ]
     for col in needed:
         if col not in df.columns:
@@ -207,6 +206,21 @@ def ingest_once() -> pd.DataFrame:
         return pd.DataFrame()
     return df
 
-if __name__ == "__main__":
+def main(return_df: bool = False) -> pd.DataFrame:
     df = ingest_once()
     print(f"[ingest] rows fetched: {len(df)}")
+
+    # --- Handoff parquet pour aggregate (staging, ne touche pas à ta BDD principale) ---
+    STAGING_PATH = "exports/staging_ingest.parquet"
+    # Pas de mkdir: on suppose que 'exports/' existe dans le repo/Docker image
+    try:
+        df.to_parquet(STAGING_PATH, index=False)
+        print(f"[ingest] saved -> {STAGING_PATH}")
+    except FileNotFoundError:
+        print("[ingest][FATAL] 'exports/' folder is missing; create it in the repo.")
+        raise
+
+    return df if return_df else df
+
+if __name__ == "__main__":
+    main()
