@@ -201,7 +201,7 @@ def main(input_path: Path, output_path: Path):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default="exports/snapshot.parquet")
+    parser.add_argument("--input", default="exports/velib.parquet")
     parser.add_argument("--output", default="exports/velib.parquet")
     args = parser.parse_args()
     # ton main existant: main(input_path: Path, output_path: Path)
