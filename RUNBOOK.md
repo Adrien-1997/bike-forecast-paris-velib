@@ -139,6 +139,6 @@ Appliquer : `gsutil lifecycle set bucket-lifecycle.json gs://<bucket>`
 - Disponibilité jobs > 99% / mois
 
 ### Contacts
-- Owner GCP: <ton-email@domain.tld>
+- Owner GCP: moreladrie@cy-tech.fr
 - Bucket: `gs://velib-forecast-472820_cloudbuild/velib`
 - Projet: `velib-forecast-472820`
