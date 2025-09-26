@@ -1,6 +1,9 @@
 # tools/push_hf.py
 from __future__ import annotations
-import os, sys, pathlib
+import os
+import sys
+import argparse
+from pathlib import Path
 from huggingface_hub import HfApi, CommitOperationAdd
 
 # Compat HfHubHTTPError (multi versions)
@@ -10,13 +13,8 @@ except Exception:
     try:
         from huggingface_hub.utils._errors import HfHubHTTPError
     except Exception:
-        class HfHubHTTPError(Exception): pass
-
-REPO_ID   = os.environ.get("HF_DATASET_ID", "Adrien97/velib-monitoring-historical")
-REPO_TYPE = "dataset"
-SRC       = os.environ.get("PUSH_SRC") or "exports/velib.parquet"
-DEST      = os.environ.get("PUSH_DEST") or "exports/velib.parquet"
-TOKEN     = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN")
+        class HfHubHTTPError(Exception):  # type: ignore
+            pass
 
 def _create_commit_compat(api: HfApi, **kwargs):
     try:
@@ -26,22 +24,35 @@ def _create_commit_compat(api: HfApi, **kwargs):
         return api.create_commit(**kwargs)
 
 def main() -> int:
-    print(f"[push_hf] cwd={os.getcwd()}", flush=True)
-    print(f"[push_hf] repo={REPO_ID} type={REPO_TYPE}", flush=True)
-    print(f"[push_hf] src={SRC}  dest={DEST}", flush=True)
+    p = argparse.ArgumentParser(description="Upload a file to a HF dataset repo")
+    p.add_argument("--file", "-f", help="Local file to upload (ex: exports/data_health.csv)")
+    p.add_argument("--dest", "-d", help="Path in repo (ex: exports/data_health.csv)")
+    p.add_argument("--repo", "-r", help="HF dataset id (ex: user/velib-monitoring)")
+    p.add_argument("--token", "-t", help="HF token (or set HF_TOKEN env var)")
+    args = p.parse_args()
 
-    # --- dans main(), juste après l'affichage cwd/repo/src/dest
-    src = pathlib.Path(SRC)
+    # ---- Resolve inputs (CLI > env > defaults)
+    repo_id = args.repo or os.environ.get("HF_DATASET_ID") or "Adrien97/velib-monitoring-historical"
+    token   = args.token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN")
+    src_env = os.environ.get("PUSH_SRC")  # legacy env support
+    dst_env = os.environ.get("PUSH_DEST")
+    src     = Path(args.file or src_env or "exports/velib.parquet")
+    dest    = args.dest or dst_env or f"exports/{src.name}"
+
+    print(f"[push_hf] cwd={os.getcwd()}", flush=True)
+    print(f"[push_hf] repo={repo_id} type=dataset", flush=True)
+    print(f"[push_hf] src={src}  dest={dest}", flush=True)
+
     if not src.exists():
-        # Fallback automatique si quelqu'un re-pousse un mauvais PUSH_SRC
-        fallback = pathlib.Path("exports") / "velib.parquet"
+        # Fallback helper
+        fallback = Path("exports") / "velib.parquet"
         if fallback.exists():
             print(f"[push_hf] WARNING: {src} missing; using fallback {fallback}", flush=True)
             src = fallback
         else:
             print(f"[push_hf] Source not found: {src}", file=sys.stderr, flush=True)
             try:
-                if pathlib.Path("exports").exists():
+                if Path("exports").exists():
                     print(f"[push_hf] ls exports/: {os.listdir('exports')}", flush=True)
                 else:
                     print("[push_hf] 'exports/' directory does not exist.", flush=True)
@@ -55,21 +66,21 @@ def main() -> int:
     except Exception:
         pass
 
-    api = HfApi(token=TOKEN)
-    print(f"[push_hf] Upload {src} -> {REPO_ID}:{DEST}", flush=True)
+    api = HfApi(token=token)
+    print(f"[push_hf] Upload {src} -> {repo_id}:{dest}", flush=True)
 
-    ops = [CommitOperationAdd(path_in_repo=DEST, path_or_fileobj=str(src))]
+    ops = [CommitOperationAdd(path_in_repo=dest, path_or_fileobj=str(src))]
 
     tries, delay = 0, 1.5
     while True:
         try:
             info = _create_commit_compat(
                 api,
-                repo_id=REPO_ID,
-                repo_type=REPO_TYPE,
+                repo_id=repo_id,
+                repo_type="dataset",
                 operations=ops,
-                commit_message=f"append shard {DEST}",
-                token=TOKEN,
+                commit_message=f"upload {dest}",
+                token=token,
             )
             print(f"[push_hf] Done: {getattr(info, 'commit_url', '(no url)')}", flush=True)
             return 0
@@ -77,26 +88,22 @@ def main() -> int:
         except HfHubHTTPError as e:
             resp = getattr(e, "response", None)
             code = getattr(resp, "status_code", None)
+            if code == 401:
+                print("[push_hf] Unauthorized: set HF_TOKEN or pass --token", flush=True)
+                return 1
             if code == 429 and tries < 6:
                 import time, random
                 sleep_s = delay + random.uniform(0, 0.6)
                 print(f"[push_hf] 429 rate-limited, retry in {sleep_s:.1f}s (try {tries+1}/6)...", flush=True)
-                time.sleep(sleep_s)
-                tries += 1
-                delay *= 2
-                continue
+                time.sleep(sleep_s); tries += 1; delay *= 2; continue
             if code == 429:
-                print("[push_hf] final 429: skip this run (append shard).", flush=True)
+                print("[push_hf] final 429: skip this run.", flush=True)
                 return 0
-            # Autres erreurs HF : on les remonte après quelques retries génériques
             if tries < 3:
                 import time, random
                 sleep_s = delay + random.uniform(0, 0.6)
                 print(f"[push_hf] HfHubHTTPError ({code}). retry in {sleep_s:.1f}s...", flush=True)
-                time.sleep(sleep_s)
-                tries += 1
-                delay *= 2
-                continue
+                time.sleep(sleep_s); tries += 1; delay *= 2; continue
             raise
 
         except Exception as e:
@@ -104,10 +111,7 @@ def main() -> int:
                 import time, random
                 sleep_s = delay + random.uniform(0, 0.6)
                 print(f"[push_hf] transient error: {e}. retry in {sleep_s:.1f}s...", flush=True)
-                time.sleep(sleep_s)
-                tries += 1
-                delay *= 2
-                continue
+                time.sleep(sleep_s); tries += 1; delay *= 2; continue
             raise
 
 if __name__ == "__main__":

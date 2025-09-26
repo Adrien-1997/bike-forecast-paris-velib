@@ -10,9 +10,7 @@ docs/exports/*.csv
 *.parquet
 *.csv
 *.csv.gz
-
-# --- DuckDB local warehouse ---
-warehouse.duckdb
+*.duckdb
 
 # --- tables CSV pour la doc ---
 !docs/assets/tables/*.csv

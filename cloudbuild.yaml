@@ -1,0 +1,82 @@
+# cloudbuild.yaml
+substitutions:
+  _REGION: "europe-west1"
+  _REPO: "velib"                 # dépôt Artifact Registry
+  _IMAGE: "velib-jobs"
+  _PROJECT: "velib-forecast-472820"
+
+  # GCS layout
+  _BUCKET: "gs://velib-forecast-472820_cloudbuild/velib"
+  _RAW:     "gs://velib-forecast-472820_cloudbuild/velib/bronze"
+  _DAILY:   "gs://velib-forecast-472820_cloudbuild/velib/db/daily"
+  _REPORT:  "gs://velib-forecast-472820_cloudbuild/velib/db/reporting/velib_reporting.duckdb"
+  _SERVE4H: "gs://velib-forecast-472820_cloudbuild/velib/serving/features_4h"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', '${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID', '.']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID']
+
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      [
+        'run','jobs','update','velib-ingest','--region','${_REGION}',
+        '--image','${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID',
+        '--update-env-vars','JOB=ingest,INGEST_TO_GCS=1,GCS_RAW_PREFIX=${_RAW}'
+      ]
+
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      [
+        'run','jobs','update','velib-features-4h','--region','${_REGION}',
+        '--image','${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID',
+        '--update-env-vars','JOB=build_features_4h,GCS_RAW_PREFIX=${_RAW},GCS_SERVING_PREFIX=${_SERVE4H},WINDOW_MIN=240,TZ_APP=Europe/Paris'
+      ]
+
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      [
+        'run','jobs','update','velib-dim-station','--region','${_REGION}',
+        '--image','${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID',
+        '--update-env-vars','JOB=dim_station,GCS_DB_URI=${_REPORT},DB_LOCAL=/tmp/velib_reporting.duckdb'
+      ]
+
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      [
+        'run','jobs','update','velib-compact-daily','--region','${_REGION}',
+        '--image','${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID',
+        '--update-env-vars','JOB=compact_daily,GCS_RAW_PREFIX=${_RAW},GCS_DB_DAILY=${_DAILY},DB_LOCAL=/tmp/velib_daily.duckdb'
+      ]
+
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      [
+        'run','jobs','update','velib-daily','--region','${_REGION}',
+        '--image','${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID',
+        '--update-env-vars','JOB=build_daily,GCS_DB_DAILY=${_DAILY},GCS_DB_URI=${_REPORT},DB_LOCAL=/tmp/velib_reporting.duckdb'
+      ]
+
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      [
+        'run','jobs','update','velib-windows','--region','${_REGION}',
+        '--image','${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID',
+        '--update-env-vars','JOB=build_windows,GCS_DB_URI=${_REPORT},DB_LOCAL=/tmp/velib_reporting.duckdb,WINDOW_DAYS=7'
+      ]
+
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      [
+        'run','jobs','update','velib-monthly','--region','${_REGION}',
+        '--image','${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID',
+        '--update-env-vars','JOB=build_monthly,GCS_DB_URI=${_REPORT},DB_LOCAL=/tmp/velib_reporting.duckdb'
+      ]
+
+images:
+  - '${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID'
