@@ -1,0 +1,55 @@
+/* ------------------------------
+   Extra CSS pour bike-forecast
+   ------------------------------ */
+
+/* Centrer et limiter la largeur */
+.md-content {
+  max-width: 1080px;
+}
+
+/* KPI cards */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 16px 0 8px;
+}
+.kpi {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--md-default-bg-color);
+  box-shadow: 0 1px 0 rgba(0,0,0,.06),
+              0 8px 24px -16px rgba(0,0,0,.2);
+}
+.kpi .label {
+  font-size: .78rem;
+  opacity: .7;
+  margin-bottom: 6px;
+}
+.kpi .value {
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+/* Figures avec légende */
+.figure {
+  margin: 18px 0;
+}
+.figure img {
+  width: 100%;
+  border-radius: 10px;
+}
+.caption {
+  font-size: .84rem;
+  opacity: .7;
+  margin-top: 6px;
+}
+
+/* Tables plus lisibles */
+.md-typeset table:not([class]) {
+  font-size: .92rem;
+}
+.md-typeset table th,
+.md-typeset table td {
+  padding: 8px 10px;
+}
