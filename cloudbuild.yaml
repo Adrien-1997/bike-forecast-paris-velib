@@ -1,7 +1,7 @@
 # cloudbuild.yaml
 substitutions:
   _REGION: "europe-west1"
-  _REPO: "velib"                 # dépôt Artifact Registry
+  _REPO: "velib"                 # Artifact Registry repo
   _IMAGE: "velib-jobs"
   _PROJECT: "velib-forecast-472820"
 
@@ -16,12 +16,20 @@ options:
   logging: CLOUD_LOGGING_ONLY
 
 steps:
+  # Build image from subfolder "service/"
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', '${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID', '.']
+    args:
+      [
+        'build',
+        '-t','${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID',
+        '-f','service/Dockerfile',
+        'service'
+      ]
 
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', '${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID']
 
+  # Jobs updates
   - name: 'gcr.io/cloud-builders/gcloud'
     args:
       [
@@ -35,7 +43,7 @@ steps:
       [
         'run','jobs','update','velib-features-4h','--region','${_REGION}',
         '--image','${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID',
-        '--update-env-vars','JOB=build_features_4h,GCS_RAW_PREFIX=${_RAW},GCS_SERVING_PREFIX=${_SERVE4H},WINDOW_MIN=240,TZ_APP=Europe/Paris'
+        '--update-env-vars','JOB=build_features_4h,GCS_RAW_PREFIX=${_RAW},GCS_SERVING_PREFIX=${_SERVE4H},WINDOW_HOURS=4'
       ]
 
   - name: 'gcr.io/cloud-builders/gcloud'

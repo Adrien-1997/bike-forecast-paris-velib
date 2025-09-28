@@ -14,3 +14,7 @@ docs/exports/*.csv
 
 # --- tables CSV pour la doc ---
 !docs/assets/tables/*.csv
+
+exports/
+data/
+bucket-lifecycle.json  # si tu préfères ne pas versionner la policy

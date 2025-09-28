@@ -83,13 +83,13 @@ def build_daily(day: str):
     );
     """)
 
-    # 3) SILVER — daily_compact (ajout min/max/status_mode)
-    con.execute(f"DELETE FROM silver.daily_compact WHERE date = DATE '{day}'")
+    # 3) SILVER — daily_compact
+    con.execute(f"DELETE FROM silver.daily_compact WHERE date = CAST('{day}' AS DATE)")
     con.execute(f"""
     WITH base AS (
       SELECT *
       FROM shard.bronze.raw_snapshots_5min
-      WHERE DATE(ts_utc) = DATE '{day}'
+      WHERE CAST(ts_utc AS DATE) = CAST('{day}' AS DATE)
     ),
     status_cnt AS (
       SELECT station_id, status, COUNT(*) AS cnt
@@ -103,34 +103,39 @@ def build_daily(day: str):
     )
     INSERT INTO silver.daily_compact
     SELECT
-      DATE('{day}')                        AS date,
+      CAST('{day}' AS DATE)                 AS date,
       b.station_id,
-      288                                  AS bins,
-      COUNT(*)                             AS bins_present,
-      100.0 * COUNT(*) / 288.0             AS completeness_pct,
-      median(b.bikes)                      AS bikes_median,
-      quantile(b.bikes, 0.90)              AS bikes_p90,
-      MIN(b.bikes)                         AS bikes_min,
-      MAX(b.bikes)                         AS bikes_max,
-      sm.status_mode                       AS status_mode,
-      quantile(b.ingest_latency_s, 0.95)   AS ingest_latency_p95_s
+      288                                   AS bins,
+      COUNT(*)                              AS bins_present,
+      100.0 * COUNT(*) / 288.0              AS completeness_pct,
+      median(b.bikes)                       AS bikes_median,
+      quantile(b.bikes, 0.90)               AS bikes_p90,
+      MIN(b.bikes)                          AS bikes_min,
+      MAX(b.bikes)                          AS bikes_max,
+      sm.status_mode                        AS status_mode,
+      quantile(b.ingest_latency_s, 0.95)    AS ingest_latency_p95_s
     FROM base b
     LEFT JOIN status_mode sm USING (station_id)
     GROUP BY 1,2,10;
     """)
 
     # 4) SILVER — station_health_daily (gaps / max gap / outliers simples)
-    # Gaps: on génère les 288 bins attendus et on détecte les séquences manquantes.
-    con.execute(f"DELETE FROM silver.station_health_daily WHERE date = DATE '{day}'")
+    con.execute(f"DELETE FROM silver.station_health_daily WHERE date = CAST('{day}' AS DATE)")
     con.execute(f"""
     WITH
-    stations AS (SELECT DISTINCT station_id FROM shard.bronze.raw_snapshots_5min WHERE DATE(ts_utc)=DATE '{day}'),
+    stations AS (
+      SELECT DISTINCT station_id
+      FROM shard.bronze.raw_snapshots_5min
+      WHERE CAST(ts_utc AS DATE) = CAST('{day}' AS DATE)
+    ),
     bins AS (
-      SELECT generate_series(
-        TIMESTAMP '{day} 00:00:00',
-        TIMESTAMP '{day} 23:55:00',
-        INTERVAL 5 MINUTE
-      ) AS tbin_utc
+      -- ✅ table function : retourne des lignes
+      SELECT tbin_utc
+      FROM generate_series(
+            TIMESTAMP '{day} 00:00:00',
+            TIMESTAMP '{day} 23:55:00',
+            INTERVAL 5 MINUTE
+          ) AS t(tbin_utc)
     ),
     expected AS (
       SELECT s.station_id, b.tbin_utc
@@ -139,22 +144,22 @@ def build_daily(day: str):
     present AS (
       SELECT station_id, tbin_utc
       FROM shard.bronze.raw_snapshots_5min
-      WHERE DATE(ts_utc)=DATE '{day}'
+      WHERE CAST(ts_utc AS DATE) = CAST('{day}' AS DATE)
       GROUP BY 1,2
     ),
     missing AS (
       SELECT e.station_id, e.tbin_utc
       FROM expected e
-      LEFT JOIN present p
-      USING (station_id, tbin_utc)
+      LEFT JOIN present p USING (station_id, tbin_utc)
       WHERE p.tbin_utc IS NULL
     ),
     runs AS (
       SELECT
         station_id,
         tbin_utc,
-        -- id de run par gaps consécutifs: 5min = taille du pas
-        (strftime(tbin_utc, '%s')::BIGINT/300) - row_number() OVER (PARTITION BY station_id ORDER BY tbin_utc) AS grp
+        /* id de run pour séquences manquantes 5min */
+        ( (date_diff('minute', TIMESTAMP '1970-01-01', tbin_utc)) / 5 )
+          - row_number() OVER (PARTITION BY station_id ORDER BY tbin_utc) AS grp
       FROM missing
     ),
     gaps AS (
@@ -163,31 +168,31 @@ def build_daily(day: str):
       GROUP BY station_id, grp
     ),
     outliers AS (
-      -- outliers simples: bikes <0 ou bikes > capacity
+      -- outliers simples: bikes < 0 ou bikes > capacity
       SELECT station_id, COUNT(*) AS outlier_bins
       FROM shard.bronze.raw_snapshots_5min
-      WHERE DATE(ts_utc)=DATE '{day}'
+      WHERE CAST(ts_utc AS DATE) = CAST('{day}' AS DATE)
         AND (bikes < 0 OR (capacity IS NOT NULL AND bikes > capacity))
       GROUP BY 1
     )
     INSERT INTO silver.station_health_daily
     SELECT
-      DATE '{day}'                              AS date,
+      CAST('{day}' AS DATE) AS date,
       s.station_id,
-      COALESCE((SELECT COUNT(*) FROM gaps g WHERE g.station_id=s.station_id),0) AS gaps_count,
-      COALESCE((SELECT MAX(gap_len) FROM gaps g WHERE g.station_id=s.station_id),0) AS max_gap_bins,
-      COALESCE((SELECT outlier_bins FROM outliers o WHERE o.station_id=s.station_id),0) AS outlier_bins,
+      COALESCE((SELECT COUNT(*) FROM gaps g WHERE g.station_id = s.station_id), 0) AS gaps_count,
+      COALESCE((SELECT MAX(gap_len) FROM gaps g WHERE g.station_id = s.station_id), 0) AS max_gap_bins,
+      COALESCE((SELECT o.outlier_bins FROM outliers o WHERE o.station_id = s.station_id), 0) AS outlier_bins,
       NULL AS alerts_json
     FROM stations s;
     """)
 
     # 5) GOLD — data_health_daily (+ schema_ok)
-    con.execute(f"DELETE FROM gold.data_health_daily WHERE date = DATE '{day}'")
+    con.execute(f"DELETE FROM gold.data_health_daily WHERE date = CAST('{day}' AS DATE)")
     con.execute(f"""
     WITH last_ts AS (
       SELECT MAX(ts_utc) AS ts_max
       FROM shard.bronze.raw_snapshots_5min
-      WHERE DATE(ts_utc)=DATE '{day}'
+      WHERE CAST(ts_utc AS DATE) = CAST('{day}' AS DATE)
     ),
     agg AS (
       SELECT
@@ -195,18 +200,21 @@ def build_daily(day: str):
         SUM(288 - bins_present) AS missing_bins_24h,
         quantile(ingest_latency_p95_s, 0.95) AS ingest_latency_p95_s
       FROM silver.daily_compact
-      WHERE date = DATE '{day}'
+      WHERE date = CAST('{day}' AS DATE)
     ),
     checks AS (
       SELECT
-        -- part des lignes "valides" sur la journée (bornes simples)
-        AVG(CASE WHEN bikes IS NOT NULL AND capacity IS NOT NULL AND bikes BETWEEN 0 AND capacity THEN 1 ELSE 0 END)::DOUBLE AS share_valid
+        /* part des lignes "valides" sur la journée (bornes simples) */
+        AVG(CASE
+              WHEN bikes IS NOT NULL AND capacity IS NOT NULL AND bikes BETWEEN 0 AND capacity
+              THEN 1 ELSE 0
+            END)::DOUBLE AS share_valid
       FROM shard.bronze.raw_snapshots_5min
-      WHERE DATE(ts_utc)=DATE '{day}'
+      WHERE CAST(ts_utc AS DATE) = CAST('{day}' AS DATE)
     )
     INSERT INTO gold.data_health_daily
     SELECT
-      DATE '{day}' AS date,
+      CAST('{day}' AS DATE) AS date,
       ts_max,
       EXTRACT(EPOCH FROM (now() - ts_max))/60.0 AS freshness_min,
       agg.completeness_pct_24h,
