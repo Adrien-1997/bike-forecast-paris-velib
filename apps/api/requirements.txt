@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pandas
+numpy
+joblib
+lightgbm
+duckdb
+google-cloud-storage
+python-dateutil
+pydantic

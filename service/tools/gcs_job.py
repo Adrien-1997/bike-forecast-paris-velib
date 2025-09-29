@@ -29,8 +29,8 @@ def needs_db(job: str) -> bool:
         "build_monthly",       # (si tu l'ajoutes plus tard)
         "build_windows",       # écrit/maj reporting
         "dim_station",         # écrit/maj reporting
-        # "build_latest",      # si un jour tu en fais une vue matérialisée DANS reporting, décommente
-        # "dedup",             # si jamais réintroduit
+        # "build_latest",
+        # "dedup",
     }
 
 def parse_gs(uri: str):
@@ -107,9 +107,11 @@ def main():
             cmd = ["python", "-m", "pipeline.build_features_4h"]
 
         elif JOB == "build_latest":
-            # si tu veux un fichier unique “latest” direct depuis bronze (pas reporting)
+            # fichier unique “latest” direct depuis bronze (pas reporting)
             cmd = ["python", "-m", "pipeline.build_latest"]
 
+        elif JOB == "train_model":
+            cmd = ["python", "-m", "tools.train_model"]
         else:
             print(f"[job] unknown JOB={JOB}", file=sys.stderr)
             return 2

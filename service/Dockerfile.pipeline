@@ -1,0 +1,36 @@
+FROM python:3.11-slim
+
+# ---- Environment ----
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TZ=Europe/Paris \
+    PYTHONPATH=/app
+
+# ---- System deps ----
+# DuckDB httpfs + TLS + LightGBM (OpenMP) + Arrow
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tzdata ca-certificates curl openssl libssl3 libstdc++6 libgomp1 \
+ && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user early (so we can chown later)
+RUN useradd -ms /bin/bash appuser
+
+WORKDIR /app
+
+# ---- Python deps ----
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ---- Project code ----
+COPY . .
+
+# Write permissions for appuser (incl. exports/)
+RUN mkdir -p /app/exports && chown -R appuser:appuser /app
+
+# ---- Security: non-root user ----
+USER appuser
+
+# ---- Entrypoint ----
+ENTRYPOINT ["python", "-m", "tools.gcs_job"]

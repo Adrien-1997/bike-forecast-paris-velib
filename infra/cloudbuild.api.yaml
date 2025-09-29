@@ -1,0 +1,19 @@
+﻿# cloudbuild.api.yaml
+substitutions:
+  _REGION: "europe-west1"
+  _PROJECT: "velib-forecast-472820"
+  _REPO: "velib"
+  _IMAGE: "velib-api"
+
+steps:
+- name: gcr.io/cloud-builders/docker
+  args:
+    - build
+    - -f
+    - service/api/Dockerfile.api
+    - -t
+    - ${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID
+    - service
+
+images:
+- ${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID
