@@ -1,0 +1,13 @@
+substitutions:
+  _REGION: europe-west1
+  _PROJECT: velib-forecast-472820
+  _REPO: velib
+  _IMAGE: velib-ui
+
+steps:
+- name: gcr.io/cloud-builders/docker
+  args: ["build","-f","ui/Dockerfile",
+         "-t","${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID",
+         "ui"]
+images:
+- ${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID

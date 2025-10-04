@@ -1,138 +1,139 @@
-﻿# service/train/forecast.py
+﻿# forecast.py
+# =============================================================================
+# Entraînement + prédiction simple sur la base des features construites
+# dans features.py (modèle scikit-learn HistGradientBoostingRegressor).
+#
+# Exemples CLI :
+#   # train
+#   python -m forecast train --src "data_local/daily/*.parquet" --horizon 3 --out model.joblib
+#
+#   # predict sur le dernier bin observé de chaque station
+#   python -m forecast predict --src "data_local/daily/*.parquet" --horizon 3 --model model.joblib
+# =============================================================================
+
 from __future__ import annotations
-
-from pathlib import Path
-from datetime import datetime
-import json
-
-import joblib
-import pandas as pd
+import argparse, joblib
 import numpy as np
-from lightgbm import LGBMRegressor
-import lightgbm as lgb
+import pandas as pd
+from sklearn.experimental import enable_hist_gradient_boosting  # noqa: F401
+from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from .features import build_training_frame, _load_base_5min
+from features import build_training_frame, _read_many_parquets, _coerce_types, _dedupe_per_bin, _add_target_and_lags
 
-MODELS_DIR = Path("models")
-MODELS_DIR.mkdir(parents=True, exist_ok=True)
+def train_model(src: str, horizon_bins: int = 3, out_path: str = "model.joblib"):
+    df, X, y, feat_cols = build_training_frame(src, horizon_bins=horizon_bins)
+    if X.empty:
+        raise RuntimeError("Pas de données d'entraînement (X vide). Vérifie la source parquet.")
 
-def _print_dataset_span():
-    df = _load_base_5min()
-    tmin = pd.to_datetime(df["tbin_utc"]).min()
-    tmax = pd.to_datetime(df["tbin_utc"]).max()
-    nrow = len(df)
-    nsta = df["stationcode"].nunique()
-    print(f"[train] parquet span: {tmin} -> {tmax} | rows={nrow} | stations={nsta}")
-    return tmin, tmax, nrow, nsta
-
-def _try_build(horizon_minutes: int, lookback_days: int):
-    try:
-        df, cols = build_training_frame(horizon_minutes=horizon_minutes, lookback_days=lookback_days)
-        return df, cols
-    except Exception as e:
-        print(f"[train] build failed for lookback={lookback_days}: {e}")
-        return pd.DataFrame(), []
-
-def train(horizon_minutes: int = 15, lookback_days: int = 30):
-    """
-    Train LGBM to predict nb bikes at T+horizon_minutes (5-min bins).
-    Robust strategy: try several lookback windows; fallback to full parquet.
-    """
-    _print_dataset_span()
-
-    candidates = [lookback_days, 60, 90, 120, -1]  # -1 => full parquet
-    X = y = feat_cols = None
-
-    for lb in candidates:
-        if lb == -1:
-            df_all, cols_all = _try_build(horizon_minutes, lookback_days=3650)
-            if not df_all.empty:
-                feat_cols = cols_all
-                X = df_all[feat_cols]
-                y = df_all["y_nb"]
-                print(f"[train] using full parquet (rows={len(df_all)})")
-                break
-        else:
-            df, cols = _try_build(horizon_minutes, lookback_days=lb)
-            if not df.empty:
-                feat_cols = cols
-                X = df[feat_cols]
-                y = df["y_nb"]
-                print(f"[train] using lookback_days={lb} (rows={len(df)})")
-                break
-
-    if X is None or len(X) == 0:
-        raise RuntimeError(
-            "[train] No non-empty training dataset. "
-            "Ensure tools.export_training_base produced exports/velib.parquet with enough history."
-        )
-
-    split = int(len(X) * 0.8)
-    X_tr, X_va = X.iloc[:split], X.iloc[split:]
-    y_tr, y_va = y.iloc[:split], y.iloc[split:]
-
-    params = dict(
-        n_estimators=1000,
-        learning_rate=0.08,
-        max_depth=-1,
-        subsample=0.9,
-        colsample_bytree=0.9,
-        random_state=42,
-        n_jobs=-1,
+    # Modèle robuste, rapide, sans preprocessing lourd
+    model = HistGradientBoostingRegressor(
+        loss="squared_error",
+        max_depth=None,
+        max_iter=300,
+        learning_rate=0.06,
+        l2_regularization=0.0,
+        random_state=42
     )
-    model = LGBMRegressor(**params)
-    model.fit(
-        X_tr, y_tr,
-        eval_set=[(X_va, y_va)],
-        eval_metric="l2",
-        callbacks=[
-            lgb.early_stopping(stopping_rounds=50),
-            lgb.log_evaluation(period=100),
-        ],
-    )
+    model.fit(X, y)
 
-    y_true = y_va.values if hasattr(y_va, "values") else np.asarray(y_va)
-    y_pred = np.asarray(model.predict(X_va))
-    mae  = float(np.mean(np.abs(y_true - y_pred)))
-    rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
-    print(f"[train] MAE={mae:.3f} | RMSE={rmse:.3f} on {len(y_true)} samples")
+    # score simple en hold-out temporel: split dernier 10%
+    n = len(X)
+    idx_split = int(n * 0.9)
+    if idx_split > 0 and idx_split < n:
+        yhat = model.predict(X[idx_split:])
+        mae = mean_absolute_error(y[idx_split:], yhat)
+        rmse = mean_squared_error(y[idx_split:], yhat, squared=False)
+        print(f"[train] hold-out MAE={mae:.3f} RMSE={rmse:.3f} (n={n-idx_split})")
 
-    out_path = MODELS_DIR / f"lgb_nbvelos_T+{horizon_minutes}min.joblib"
-    joblib.dump(
-        {"model": model, "feat_cols": feat_cols, "horizon_minutes": horizon_minutes},
-        out_path
-    )
-    if (not out_path.exists()) or (out_path.stat().st_size == 0):
-        raise RuntimeError(f"[train] Save failed → {out_path}")
-    print(f"[train] saved → {out_path.resolve()}")
+    joblib.dump({"model": model, "feat_cols": feat_cols, "horizon_bins": horizon_bins}, out_path)
+    print(f"[train] modèle sauvegardé → {out_path}")
 
-    # --- write metrics.json next to the model ---
-    metrics = {
-        "created_at": datetime.utcnow().isoformat() + "Z",
-        "horizon_minutes": int(horizon_minutes),
-        "rows_training": int(len(X_tr)),
-        "rows_validation": int(len(y_va)),
-        "mae": mae,
-        "rmse": rmse,
-    }
-    (MODELS_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2))
-    print(f"[train] wrote metrics → {(MODELS_DIR / 'metrics.json').resolve()}")
-
-    return {"mae": mae, "rmse": rmse, "n_valid": int(len(y_true)), "model_path": str(out_path)}
-
-def load_model_bundle(horizon_minutes: int = 15, model_dir: str | Path = MODELS_DIR):
+def _latest_feature_frame_for_predict(src: str, horizon_bins: int) -> pd.DataFrame:
     """
-    Load bundle (model, feat_cols, horizon_minutes) from models/.
-    Returns (model, feat_cols).
+    Construit la matrice X* pour prédire y_nb au prochain horizon sur le
+    DERNIER tbin_utc disponible pour chaque station (one-shot forecast).
     """
-    path = Path(model_dir) / f"lgb_nbvelos_T+{horizon_minutes}min.joblib"
-    if not path.exists():
-        raise FileNotFoundError(f"Model not found: {path}")
-    bundle = joblib.load(path)
-    model = bundle.get("model")
-    feat_cols = bundle.get("feat_cols", [])
-    return model, feat_cols
+    df = _read_many_parquets(src)
+    if df.empty:
+        return pd.DataFrame()
+
+    df = _coerce_types(df)
+    df = _dedupe_per_bin(df)
+
+    # garder uniquement le dernier tbin par station
+    last = (df.sort_values(["station_id","tbin_utc"])
+              .groupby("station_id", as_index=False).tail(1)
+              .reset_index(drop=True))
+
+    # recréer lags/rollings/cales pour ce point (il faut un peu d'historique,
+    # donc on prend aussi les 12 bins précédents pour calculer les lags/rollings)
+    hist = (df
+            .merge(last[["station_id","tbin_utc"]], on="station_id", how="inner", suffixes=("","_last"))
+           )
+    hist = hist[hist["tbin_utc"] <= hist["tbin_utc_last"]]
+    hist = hist[hist["tbin_utc"] >= hist["tbin_utc_last"] - pd.Timedelta(minutes=60)]  # 12 bins
+
+    # recalcul features avec cible future (qu'on ignorera)
+    hist2, feat_cols = _add_target_and_lags(hist, horizon_bins=horizon_bins)
+    # reprendre uniquement la dernière ligne par station (celle à tbin_utc_last)
+    Xstar = (hist2.sort_values(["station_id","tbin_utc"])
+                  .groupby("station_id", as_index=False).tail(1)
+                  .reset_index(drop=True))
+    return Xstar[feat_cols + ["station_id","tbin_utc"]], feat_cols
+
+def predict_latest(src: str, model_path: str):
+    pack = joblib.load(model_path)
+    model = pack["model"]
+    feat_cols = pack["feat_cols"]
+    horizon_bins = pack["horizon_bins"]
+
+    Xstar, fcols = _latest_feature_frame_for_predict(src, horizon_bins)
+    if Xstar.empty:
+        print("[predict] pas de base pour prédire.")
+        return pd.DataFrame()
+
+    # aligner colonnes (sécurité)
+    for c in feat_cols:
+        if c not in Xstar.columns:
+            Xstar[c] = 0
+    X = Xstar[feat_cols]
+    yhat = model.predict(X)
+    out = Xstar[["station_id","tbin_utc"]].copy()
+    out["y_hat"] = yhat
+    out["horizon_bins"] = horizon_bins
+    print(f"[predict] prédictions: {len(out)} stations, horizon={horizon_bins} bins")
+    return out
+
+# --------------------- CLI ---------------------
+
+def _cli():
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    ap_tr = sub.add_parser("train", help="Entraîner un modèle")
+    ap_tr.add_argument("--src", required=True, help="fichier/glob/dossier de parquets 5min")
+    ap_tr.add_argument("--horizon", type=int, default=3, help="horizon en bins (5min)")
+    ap_tr.add_argument("--out", default="model.joblib", help="output joblib")
+
+    ap_pr = sub.add_parser("predict", help="Prédire sur le dernier bin observé de chaque station")
+    ap_pr.add_argument("--src", required=True, help="fichier/glob/dossier de parquets 5min")
+    ap_pr.add_argument("--horizon", type=int, default=None, help="(optionnel) override horizon")
+    ap_pr.add_argument("--model", required=True, help="modele joblib")
+
+    args = ap.parse_args()
+
+    if args.cmd == "train":
+        train_model(args.src, horizon_bins=args.horizon, out_path=args.out)
+    elif args.cmd == "predict":
+        # si --horizon fourni, on ignore celui du modèle pour reconstruire les features
+        if args.horizon is not None:
+            pack = joblib.load(args.model)
+            pack["horizon_bins"] = int(args.horizon)
+            joblib.dump(pack, args.model)
+        preds = predict_latest(args.src, args.model)
+        if not preds.empty:
+            print(preds.head(12).to_string(index=False))
 
 if __name__ == "__main__":
-    # lance un entraînement baseline (15 min d’horizon, 30j lookback)
-    train(horizon_minutes=15, lookback_days=30)
+    _cli()

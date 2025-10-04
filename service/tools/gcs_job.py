@@ -1,46 +1,29 @@
 # tools/gcs_job.py
+from __future__ import annotations
 import os, sys, contextlib
 from subprocess import run, CalledProcessError
-from datetime import datetime, timezone, timedelta
+from typing import List, Tuple
 from google.cloud import storage
 
-# Env attendues (selon job)
-# - GCS_DB_URI         : gs://.../velib/db/reporting/velib_reporting.duckdb   (jobs analytics)
-# - GCS_DB_DAILY       : gs://.../velib/db/daily                               (compact/build_daily)
-# - GCS_RAW_PREFIX     : gs://.../velib/bronze                                 (ingest/compact/features)
-# - GCS_SERVING_PREFIX : gs://.../velib/serving/features_4h                    (build_features_4h)
-# - GCS_LOCK           : gs://.../velib/locks/job.lock (optionnel)
-# - DB_LOCAL           : ex: /tmp/velib_reporting.duckdb
-# - JOB                : ingest | compact_daily | build_daily | build_monthly | build_latest | build_windows | dim_station | build_features_4h
-# - DAY / MONTH        : paramètres optionnels
+# === ENV attendu ===
+# - JOB : ingest | compact_daily | compact_monthly | build_latest_7d | build_features_4h | train_model
+# - GCS_RAW_PREFIX     : gs://.../velib/bronze
+# - GCS_SERVING_PREFIX : gs://.../velib/serving/features_4h   (si build_features_4h)
+# - GCS_LOCK           : gs://.../velib/locks/job.lock        (optionnel)
+# - PYTHON_BIN         : binaire python (optionnel, défaut: "python")
 
-BUCKET_URI = os.environ.get("GCS_DB_URI")            # peut être None (selon JOB)
-LOCK_URI   = os.environ.get("GCS_LOCK")              # optionnel
-DB_LOCAL   = os.environ.get("DB_LOCAL", "/tmp/velib.duckdb")
+JOB        = (os.environ.get("JOB", "ingest") or "ingest").strip()
+PYTHON_BIN = os.environ.get("PYTHON_BIN") or "python"
+LOCK_URI   = os.environ.get("GCS_LOCK")
 
-JOB   = os.environ.get("JOB", "ingest")
-DAY   = os.environ.get("DAY")
-MONTH = os.environ.get("MONTH")
-
-def needs_db(job: str) -> bool:
-    """Retourne True si le job nécessite la DB reporting centralisée (GCS_DB_URI)."""
-    return job in {
-        "build_daily",         # écrit/maj reporting
-        "build_monthly",       # (si tu l'ajoutes plus tard)
-        "build_windows",       # écrit/maj reporting
-        "dim_station",         # écrit/maj reporting
-        # "build_latest",
-        # "dedup",
-    }
-
-def parse_gs(uri: str):
-    assert uri.startswith("gs://")
+def parse_gs(uri: str) -> Tuple[str, str]:
+    assert uri.startswith("gs://"), f"invalid GCS URI: {uri}"
     rest = uri[5:]
     bkt, path = rest.split("/", 1)
     return bkt, path
 
-def lock_blob(client, lock_uri):
-    """Crée un lock GCS (objet vide) avec if_generation_match=0. None si absent/non acquis."""
+def lock_blob(client: storage.Client, lock_uri: str | None):
+    """Best-effort lock via objet GCS vide (if_generation_match=0)."""
     if not lock_uri:
         return None
     bkt, key = parse_gs(lock_uri)
@@ -51,7 +34,37 @@ def lock_blob(client, lock_uri):
     except Exception:
         return None
 
-def main():
+def _file(rel: str) -> str:
+    """Résout un chemin de script sous /app et vérifie son existence."""
+    path = rel if os.path.isabs(rel) else os.path.join("/app", rel)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"script introuvable: {path}")
+    return path
+
+def _dispatch_command(job: str) -> List[str]:
+    """
+    Construit la commande Python **par fichier** (pas de -m).
+    Jobs supportés :
+      - ingest                -> pipeline/ingest.py
+      - compact_daily         -> pipeline/compact_daily.py
+      - compact_monthly       -> pipeline/compact_monthly.py
+      - build_latest          -> pipeline/latest_7d.py   (nom historique)
+      - build_features_4h     -> pipeline/build_features_4h.py
+      - train_model           -> tools/train_model.py
+    """
+    paths = {
+        "ingest":            _file("pipeline/ingest.py"),
+        "compact_daily":     _file("pipeline/compact_daily.py"),
+        "compact_monthly":   _file("pipeline/compact_monthly.py"),
+        "build_latest":      _file("pipeline/latest_7d.py"),
+        "build_features_4h": _file("pipeline/build_features_4h.py"),
+        "train_model":       _file("tools/train_model.py"),
+    }
+    if job not in paths:
+        raise ValueError(f"unknown JOB={job}")
+    return [PYTHON_BIN, paths[job]]
+
+def main() -> int:
     client = storage.Client()
 
     # 1) Lock optionnel
@@ -62,70 +75,27 @@ def main():
     elif not LOCK_URI:
         print("[lock] disabled (no GCS_LOCK)")
 
-    db_blob = None
-
     try:
-        # 2) Download DB reporting si nécessaire
-        if needs_db(JOB):
-            if not BUCKET_URI:
-                raise RuntimeError("GCS_DB_URI required for this job")
-            bkt, key = parse_gs(BUCKET_URI)
-            db_blob = client.bucket(bkt).blob(key)
-            if db_blob.exists(client):
-                os.makedirs(os.path.dirname(DB_LOCAL) or "/", exist_ok=True)
-                db_blob.download_to_filename(DB_LOCAL)
-                print("[db] downloaded remote → local")
-            else:
-                print("[db] remote missing, will create fresh local if script writes it")
-
-        # 3) Dispatch job
-        if JOB == "ingest":
-            cmd = ["python", "-m", "pipeline.ingest"]
-
-        elif JOB == "compact_daily":
-            cmd = ["python", "-m", "pipeline.compact_daily"]  # produit un shard daily
-
-        elif JOB == "build_daily":
-            # par défaut J-1 (shard produit par compact_daily)
-            day = DAY or (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
-            cmd = ["python", "-m", "pipeline.build_daily", "--day", day]
-
-        elif JOB == "build_monthly":
-            month = MONTH or datetime.now(timezone.utc).strftime("%Y-%m")
-            cmd = ["python", "-m", "pipeline.build_monthly", "--month", month]
-
-        elif JOB == "build_windows":
-            # par défaut J-1 comme ancre de fenêtre (7j)
-            day = DAY or (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
-            cmd = ["python", "-m", "pipeline.build_windows", "--day", day]
-
-        elif JOB == "dim_station":
-            cmd = ["python", "-m", "pipeline.dim_station"]
-
-        elif JOB == "build_features_4h":
-            # mini magasin de features — ne nécessite pas la DB reporting
-            cmd = ["python", "-m", "pipeline.build_features_4h"]
-
-        elif JOB == "build_latest":
-            # fichier unique “latest” direct depuis bronze (pas reporting)
-            cmd = ["python", "-m", "pipeline.build_latest"]
-
-        elif JOB == "train_model":
-            cmd = ["python", "-m", "tools.train_model"]
-        else:
-            print(f"[job] unknown JOB={JOB}", file=sys.stderr)
+        # 2) Construire la commande
+        try:
+            cmd = _dispatch_command(JOB)
+        except Exception as e:
+            print(f"[job] error while building command: {e}", file=sys.stderr)
             return 2
+
+        # Echo utile debug (sans secrets)
+        keys_to_echo = ["JOB","PYTHONPATH","GCS_RAW_PREFIX","GCS_SERVING_PREFIX"]
+        echo = " ".join(f"{k}={os.environ.get(k)}" for k in keys_to_echo if os.environ.get(k) is not None)
+        if echo:
+            print(f"[env] {echo}")
 
         print("[job] run:", " ".join(cmd))
         run(cmd, check=True)
-
-        # 4) Upload DB reporting si nécessaire
-        if needs_db(JOB) and db_blob is not None and os.path.exists(DB_LOCAL):
-            db_blob.upload_from_filename(DB_LOCAL)
-            print("[db] uploaded local → remote")
-
         return 0
 
+    except FileNotFoundError as e:
+        print(f"[job] error: {e}", file=sys.stderr)
+        return 1
     except CalledProcessError as e:
         print(f"[job] failed: {e}", file=sys.stderr)
         return e.returncode

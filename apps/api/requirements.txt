@@ -1,10 +1,13 @@
+duckdb
+python-dateutil
 fastapi
-uvicorn
+uvicorn[standard]
+pydantic>=2
+pydantic-settings
+google-cloud-storage
 pandas
 numpy
 joblib
 lightgbm
-duckdb
-google-cloud-storage
-python-dateutil
-pydantic
+pyarrow
+# (gcsfs est inutile si on lit via google-cloud-storage; optionnel sinon)

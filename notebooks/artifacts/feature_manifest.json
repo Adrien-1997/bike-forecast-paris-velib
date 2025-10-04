@@ -1,0 +1,30 @@
+{
+  "version": "1.0",
+  "target": "y",
+  "features": [
+    "occ_ratio_bin",
+    "lag_nb_1b",
+    "lag_nb_24b",
+    "lag_occ_1b",
+    "roll_nb_12b",
+    "trend_nb_12b",
+    "trend_occ_12b",
+    "hour"
+  ],
+  "feature_types": {
+    "occ_ratio_bin": "float",
+    "lag_nb_1b": "float",
+    "lag_nb_24b": "float",
+    "lag_occ_1b": "float",
+    "roll_nb_12b": "float",
+    "trend_nb_12b": "float",
+    "trend_occ_12b": "float",
+    "hour": "float",
+    "station_id": "int64",
+    "capacity_bin": "float"
+  },
+  "station_key": "station_id",
+  "timestamp_key": "tbin_utc",
+  "capacity_key": "capacity_bin",
+  "notes": "Feature reduction manifest generated from the study notebook."
+}

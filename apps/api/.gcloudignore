@@ -1,9 +1,6 @@
-# GARDE l'API et le Dockerfile
-!api/**
-!Dockerfile
-
-.git
-.venv
+# garder infra/** et apps/**
+.git/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -16,5 +13,6 @@ exports/
 logs/
 .env
 .env.*
-.ipynb_checkpoints/
 .DS_Store
+.ipynb_checkpoints/
+docs/exports/*

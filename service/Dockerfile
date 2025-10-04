@@ -33,4 +33,6 @@ RUN mkdir -p /app/exports && chown -R appuser:appuser /app
 USER appuser
 
 # ---- Entrypoint ----
-ENTRYPOINT ["python", "-m", "tools.gcs_job"]
+# ---- Entrypoint ----
+ENTRYPOINT ["python"]
+CMD ["-m", "tools.gcs_job"]

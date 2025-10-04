@@ -1,17 +1,27 @@
-# pipeline/ingest.py
-# Ingest Vélib' + météo (Open-Meteo), écrit un snapshot Parquet
-# - local (staging) si INGEST_SAVE_PARQUET=1
-# - et/ou GCS si INGEST_TO_GCS=1 (GCS_RAW_PREFIX=gs://.../velib/bronze)
-# Option: append dans DuckDB locale si APPEND_DB=1 et DB_LOCAL existe.
+# service/pipeline/ingest.py
+# Ingestion 5 minutes : GBFS (status+info → name) + météo (Open-Meteo).
+# Schéma strict écrit (timestamps internes en UTC naïf) :
+# ts_utc, tbin_utc, station_id, bikes, capacity, mechanical, ebike, status,
+# lat, lon, name, temp_C, precip_mm, wind_mps
 #
-# Exécution: python -m pipeline.ingest
+# Chemin ET nom de fichier en UTC :
+#   data_local/raw/date=YYYY-MM-DD/hour=HH/YYYY-MM-DDT%H-%M.parquet
+#   gs://.../bronze/date=YYYY-MM-DD/hour=HH/YYYY-MM-DDT%H-%M.parquet
+#
+# Env utiles :
+#   INGEST_SAVE_PARQUET=1|0     (défaut 1)
+#   LOCAL_RAW_DIR=...           (défaut data_local/raw)
+#   INGEST_TO_GCS=1|0           (défaut 0)
+#   GCS_RAW_PREFIX=gs://.../bronze
+#   OPENMETEO_LAT, OPENMETEO_LON
+#   METEO_DISABLE=1|0
+#   DIAG=1 pour logs détaillés
 
 from __future__ import annotations
 
 import os
 from io import BytesIO
-from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Tuple
 
 import pandas as pd
@@ -19,118 +29,98 @@ import requests
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
-# Optional dependency; DB append skipped if not present / DB file missing
-try:
-    import duckdb  # type: ignore
-except Exception:  # pragma: no cover
-    duckdb = None  # type: ignore
-
-# Optional: GCS upload
 try:
     from google.cloud import storage  # type: ignore
-except Exception:  # pragma: no cover
+except Exception:
     storage = None  # type: ignore
 
-# --------------------------
-# Config
-# --------------------------
+# ───────────────────────── Config ─────────────────────────
+
 URL_STATUS = "https://velib-metropole-opendata.smovengo.cloud/opendata/Velib_Metropole/station_status.json"
 URL_INFO   = "https://velib-metropole-opendata.smovengo.cloud/opendata/Velib_Metropole/station_information.json"
 
-BASE_METEO = "https://api.open-meteo.com/v1/forecast"
-LAT, LON = 48.8566, 2.3522  # Paris centre
+OPEN_METEO = "https://api.open-meteo.com/v1/forecast"
+LAT = float(os.environ.get("OPENMETEO_LAT", "48.8566"))
+LON = float(os.environ.get("OPENMETEO_LON", "2.3522"))
+METEO_DISABLE = os.environ.get("METEO_DISABLE", "0") == "1"
 
-DATA_DIR = Path("data")
-STAGING_DIR = DATA_DIR / "staging"
+DIAG = os.environ.get("DIAG", "0") in ("1", "true", "True")
 
-# --------------------------
-# HTTP utils
-# --------------------------
-def _make_session() -> requests.Session:
-    s = requests.Session()
-    retry = Retry(
-        total=5,
-        backoff_factor=0.3,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET", "HEAD"],
-        raise_on_status=False,
-    )
-    s.mount("https://", HTTPAdapter(max_retries=retry))
-    s.headers.update({"User-Agent": "velib-hf-pipeline/1.0"})
-    return s
+COLS_ORDER = [
+    "ts_utc","tbin_utc","station_id","bikes","capacity","mechanical","ebike",
+    "status","lat","lon","name","temp_C","precip_mm","wind_mps"
+]
 
-def _http_get(url: str, timeout: int = 20) -> dict:
-    verify_ssl = os.environ.get("NO_SSL_VERIFY", "0") != "1"
-    s = _make_session()
-    r = s.get(url, timeout=timeout, verify=verify_ssl)
+# ───────────────────── HTTP session (retries) ─────────────────────
+
+_session: requests.Session | None = None
+def _session_get() -> requests.Session:
+    global _session
+    if _session is None:
+        s = requests.Session()
+        retry = Retry(
+            total=5, connect=5, read=5,
+            backoff_factor=0.4,
+            status_forcelist=[429,500,502,503,504],
+            allowed_methods=["GET","HEAD"],
+            raise_on_status=False,
+        )
+        s.mount("https://", HTTPAdapter(max_retries=retry))
+        s.headers.update({"User-Agent": "velib-pipeline/1.1"})
+        _session = s
+    return _session
+
+def _http_get_json(url: str, timeout: int = 20) -> dict:
+    r = _session_get().get(url, timeout=timeout)
     r.raise_for_status()
     return r.json()
 
-# --------------------------
-# Helpers
-# --------------------------
-def _floor_to_5min(ts_utc: datetime) -> datetime:
-    minute = (ts_utc.minute // 5) * 5
-    return ts_utc.replace(minute=minute, second=0, microsecond=0)
+# ───────────────────────── GBFS ─────────────────────────
 
-def _upload_parquet_gcs(df: pd.DataFrame, gcs_url: str):
-    if storage is None:
-        raise RuntimeError("google-cloud-storage not installed")
-    assert gcs_url.startswith("gs://"), "gcs_url must start with gs://"
-    bkt, key = gcs_url[5:].split("/", 1)
-    buf = BytesIO()
-    df.to_parquet(buf, index=False)
-    buf.seek(0)
-    storage.Client().bucket(bkt).blob(key).upload_from_file(
-        buf, content_type="application/octet-stream"
-    )
-
-# --------------------------
-# Fetch Vélib (status + info)
-# --------------------------
-def fetch_velib() -> pd.DataFrame:
-    js_status = _http_get(URL_STATUS)
-    js_info   = _http_get(URL_INFO)
+def fetch_velib_df() -> pd.DataFrame:
+    """Lit status+info et force l’horodatage au *moment UTC du job* (ts_utc=now_utc)."""
+    js_status = _http_get_json(URL_STATUS)
+    js_info   = _http_get_json(URL_INFO)
 
     status_list = (js_status.get("data") or {}).get("stations") or []
     info_list   = (js_info.get("data") or {}).get("stations") or []
-
     if not status_list or not info_list:
-        print("[ingest] GBFS empty → empty snapshot")
-        return pd.DataFrame()
+        print("[gbfs] empty payloads — status:", len(status_list), "info:", len(info_list))
+        return pd.DataFrame(columns=COLS_ORDER)
 
-    # status
+    # Horloge du job (UTC naïf) — unique référence
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    tbin_now = pd.Timestamp(now_utc).floor("5min").to_pydatetime()
+
+    # STATUS
     st_rows = []
     for s in status_list:
         sid = s.get("station_id")
         if not sid:
             continue
-
-        # dict or list-of-dict depending on payload
+        # num_bikes_available_types peut être list[dict] ou dict
         types = {}
         v = s.get("num_bikes_available_types")
         if isinstance(v, list) and v:
-            types = v[0] or {}
+            for d in v:
+                if isinstance(d, dict):
+                    types.update(d)
         elif isinstance(v, dict):
             types = v
 
-        mech = types.get("mechanical", 0) or 0
-        ebi  = types.get("ebike", 0) or 0
-        ts   = pd.to_datetime(s.get("last_reported"), unit="s", utc=True, errors="coerce")
-
         st_rows.append({
             "station_id": sid,
-            "ts_utc": ts.tz_localize(None) if ts is not pd.NaT else pd.NaT,
-            "numbikesavailable": s.get("num_bikes_available"),
-            "numdocksavailable": s.get("num_docks_available"),
-            "mechanical": mech,
-            "ebike": ebi,
-            "status": s.get("station_status") or ("OK" if (s.get("is_renting", 1) and s.get("is_returning", 1)) else "CLOSED"),
+            "ts_utc": now_utc,  # ← on force l’horodatage du job (UTC)
+            "bikes": s.get("num_bikes_available"),
+            "mechanical": types.get("mechanical", 0),
+            "ebike": types.get("ebike", 0),
+            "status": s.get("station_status") or (
+                "OK" if (s.get("is_renting",1) and s.get("is_returning",1)) else "CLOSED"
+            ),
         })
-
     df_st = pd.DataFrame(st_rows)
 
-    # info
+    # INFO
     in_rows = []
     for i in info_list:
         sid = i.get("station_id")
@@ -139,187 +129,149 @@ def fetch_velib() -> pd.DataFrame:
         in_rows.append({
             "station_id": sid,
             "name": i.get("name"),
-            "lat": i.get("lat"),
-            "lon": i.get("lon"),
+            "lat":  i.get("lat"),
+            "lon":  i.get("lon"),
             "capacity": i.get("capacity"),
         })
     df_in = pd.DataFrame(in_rows)
 
-    # merge
+    # Merge
     df = df_st.merge(df_in, on="station_id", how="inner")
 
-    # normalize
-    if not df.empty:
-        df["tbin_utc"] = pd.to_datetime(df["ts_utc"]).dt.floor("5min")
+    # Normalisation types + bin courant
+    df["ts_utc"]   = pd.to_datetime(df["ts_utc"], utc=True, errors="coerce").dt.tz_localize(None)
+    df["tbin_utc"] = pd.to_datetime(tbin_now)
+
+    # Sanity minimal : valeurs numériques propres
+    for c in ("bikes","mechanical","ebike","capacity","lat","lon"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    if DIAG:
+        print(f"[gbfs] rows={len(df):,} tbin_utc={tbin_now} (UTC)")
+        print(df[["station_id","ts_utc","tbin_utc","bikes","capacity"]].head(5).to_string(index=False))
+    else:
+        print(f"[gbfs] rows={len(df):,} tbin_utc={tbin_now} (UTC)")
 
     return df
 
-# --------------------------
-# Fetch météo (UTC hourly) → m/s
-# --------------------------
-def fetch_weather() -> pd.DataFrame:
+# ───────────────────────── Météo ─────────────────────────
+
+def _weather_window(df_velib: pd.DataFrame) -> Tuple[datetime, datetime]:
+    """Fenêtre ±3h autour du bin courant (UTC naïf)."""
+    hours = pd.to_datetime(df_velib["tbin_utc"], errors="coerce").dt.floor("h")
+    lo, hi = hours.min(), hours.max()
+    if pd.isna(lo) or pd.isna(hi):
+        now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+        return now - timedelta(hours=3), now + timedelta(hours=3)
+    return lo - timedelta(hours=3), hi + timedelta(hours=3)
+
+def fetch_weather_df(df_velib: pd.DataFrame) -> pd.DataFrame:
+    if METEO_DISABLE:
+        print("[weather] disabled by METEO_DISABLE=1")
+        return pd.DataFrame(columns=["hour_utc","temp_C","precip_mm","wind_mps"])
     try:
-        url = (
-            f"{BASE_METEO}?latitude={LAT}&longitude={LON}"
-            "&hourly=temperature_2m,precipitation,wind_speed_10m"
-            "&windspeed_unit=ms&past_days=1&forecast_days=1&timezone=UTC"
-        )
-        j = _http_get(url, timeout=20)
+        lo, hi = _weather_window(df_velib)
+        params = {
+            "latitude": LAT,
+            "longitude": LON,
+            "hourly": "temperature_2m,precipitation,wind_speed_10m",
+            "windspeed_unit": "ms",
+            "past_days": 2, "forecast_days": 2,
+            "timezone": "UTC",
+        }
+        j = _session_get().get(OPEN_METEO, params=params, timeout=20)
+        j.raise_for_status()
+        j = j.json()
+
+        hours = pd.to_datetime(j["hourly"]["time"], utc=True, errors="coerce").tz_convert(None)
+        dfw = pd.DataFrame({
+            "hour_utc":  hours,
+            "temp_C":    j["hourly"]["temperature_2m"],
+            "precip_mm": j["hourly"]["precipitation"],
+            "wind_mps":  j["hourly"]["wind_speed_10m"],
+        })
+        dfw = dfw[(dfw["hour_utc"] >= lo) & (dfw["hour_utc"] <= hi)].copy()
+        print(f"[weather] got={len(j['hourly']['time']):,} kept={len(dfw):,} window={lo}..{hi} (UTC)")
+        return dfw
     except Exception as e:
-        print(f"[weather] fetch failed: {e}")
-        return pd.DataFrame(columns=["hour_utc", "temp_C", "precip_mm", "wind_mps", "weather_src"])
+        print(f"[weather] error: {e}")
+        return pd.DataFrame(columns=["hour_utc","temp_C","precip_mm","wind_mps"])
 
-    hours = pd.to_datetime(j["hourly"]["time"], utc=True, errors="coerce")
-    df = pd.DataFrame({
-        "hour_utc": hours,
-        "temp_C": j["hourly"]["temperature_2m"],
-        "precip_mm": j["hourly"]["precipitation"],
-        "wind_mps": j["hourly"]["wind_speed_10m"],
-        "weather_src": ["open-meteo"] * len(hours),
-    })
-    return df
+# ─────────────────────── GCS helpers ───────────────────────
 
-# --------------------------
-# Consolidation (Parquet)
-# --------------------------
-def consolidate_snapshot() -> pd.DataFrame:
-    df_velib = fetch_velib()
-    df_weather = fetch_weather()
+def _split_gcs(gcs_url: str) -> tuple[str,str]:
+    assert gcs_url.startswith("gs://")
+    b, p = gcs_url[5:].split("/", 1)
+    return b, p
 
-    if df_velib.empty:
-        return df_velib
+def _upload_parquet_gcs(df: pd.DataFrame, gcs_url: str):
+    if storage is None:
+        raise RuntimeError("google-cloud-storage not installed")
+    bkt, key = _split_gcs(gcs_url)
+    buf = BytesIO()
+    df.to_parquet(buf, index=False)
+    buf.seek(0)
+    storage.Client().bucket(bkt).blob(key).upload_from_file(buf, content_type="application/octet-stream")
 
-    # join key = hour_utc (UTC naive)
-    df_velib["hour_utc"] = (
-        pd.to_datetime(df_velib["tbin_utc"], utc=True, errors="coerce")
-        .dt.floor("h")
-        .dt.tz_convert(None)
-    )
-    if not df_weather.empty:
-        df_weather["hour_utc"] = (
-            pd.to_datetime(df_weather["hour_utc"], utc=True, errors="coerce")
-            .dt.tz_convert(None)
-        )
+# ───────────────────────── Main ingest ─────────────────────────
 
-    df = df_velib.merge(df_weather, on="hour_utc", how="left")
+def ingest_once(save: bool = True) -> tuple[int, str | None]:
+    # 1) GBFS (ts_utc = now UTC, bin unique)
+    df_v = fetch_velib_df()
+    if df_v.empty:
+        print("[snapshot] GBFS empty — no output")
+        return 0, None
+
+    # 2) Météo & merge (à l’heure)
+    df_w = fetch_weather_df(df_v)
+    df_v["hour_utc"] = pd.to_datetime(df_v["tbin_utc"], errors="coerce").dt.floor("h")
+    if not df_w.empty:
+        df = df_v.merge(df_w, on="hour_utc", how="left")
+        print(f"[merge] velib={len(df_v):,} weather={len(df_w):,} → merged={len(df):,}")
+    else:
+        df = df_v.assign(temp_C=None, precip_mm=None, wind_mps=None)
+        print(f"[merge] weather empty → filled NaN (rows={len(df):,})")
     df = df.drop(columns=["hour_utc"])
-    return df
 
-# --------------------------
-# API principale
-# --------------------------
+    # 3) Sortie stricte : une ligne par station (comme status.json)
+    df_out = df[COLS_ORDER].copy()
 
-def ingest_once(save: bool = True) -> pd.DataFrame:
-    print(f"[ingest][cfg] TO_GCS={os.environ.get('INGEST_TO_GCS')} RAW_PREFIX={os.environ.get('GCS_RAW_PREFIX')}", flush=True)
-    df = consolidate_snapshot()
+    # 4) Partitionnement ET nom fichier en **UTC**
+    latest_bin_utc = pd.to_datetime(df_out["tbin_utc"].iloc[0])  # naïf UTC
+    day  = latest_bin_utc.strftime("%Y-%m-%d")  # UTC
+    hour = latest_bin_utc.strftime("%H")        # UTC
+    fname = latest_bin_utc.strftime("%Y-%m-%dT%H-%M.parquet")  # UTC
 
-    # bin courant (UTC)
-    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-    tbin = (now.minute // 5) * 5
-    tbin_dt = now.replace(minute=tbin)
-    fname = tbin_dt.strftime("%Y-%m-%dT%H-%M.parquet")
+    if DIAG:
+        print(f"[diag] final rows={len(df_out)} | stations={df_out['station_id'].nunique()} "
+              f"| bin_utc={latest_bin_utc} -> date={day} hour={hour} fname={fname}")
 
-    # 1) Parquet local (optionnel)
-    if save:
-        staging_dir = STAGING_DIR / tbin_dt.strftime("%Y-%m-%d")
-        staging_dir.mkdir(parents=True, exist_ok=True)
-        out_path = staging_dir / fname
-        df.to_parquet(out_path, index=False)
-        print(f"[ingest] saved {len(df)} rows → {out_path}")
+    # 5) Écritures
+    wrote_gcs: str | None = None
 
-    # 2) Parquet GCS (recommandé en prod)
-    to_gcs = os.environ.get("INGEST_TO_GCS", "0") == "1"
-    raw_prefix = os.environ.get("GCS_RAW_PREFIX")
-    if to_gcs:
-        if not raw_prefix:
-            raise RuntimeError("INGEST_TO_GCS=1 but GCS_RAW_PREFIX is not set")
-        day = tbin_dt.strftime("%Y-%m-%d")
-        hour = tbin_dt.strftime("%H")
-        gcs_path = f"{raw_prefix}/date={day}/hour={hour}/{fname}"
-        _upload_parquet_gcs(df, gcs_path)
-        print(f"[ingest] uploaded {len(df)} rows → {gcs_path}")
+    if save or os.environ.get("INGEST_SAVE_PARQUET","1") == "1":
+        local_root = os.environ.get("LOCAL_RAW_DIR", "data_local/raw")
+        local_path = os.path.join(local_root, f"date={day}", f"hour={hour}", fname)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        df_out.to_parquet(local_path, index=False)
+        print(f"[snapshot] wrote {len(df_out):,} rows → {local_path}")
 
-    # 3) Append DB locale (facultatif, pour runs locaux)
-    try:
-        if os.environ.get("APPEND_DB", "0") != "1":
-            return df
-        if duckdb is None:
-            raise RuntimeError("duckdb not installed")
-        db_local = os.environ.get("DB_LOCAL", "velib.duckdb")
-        if not os.path.exists(db_local):
-            print(f"[ingest][warn] DB not found at {db_local}, skipping DB append")
-            return df
+    if os.environ.get("INGEST_TO_GCS","0") == "1":
+        gcs_prefix = os.environ.get("GCS_RAW_PREFIX")
+        if not gcs_prefix or not gcs_prefix.startswith("gs://"):
+            raise RuntimeError("INGEST_TO_GCS=1 mais GCS_RAW_PREFIX absent ou invalide")
+        gcs_url = f"{gcs_prefix}/date={day}/hour={hour}/{fname}"
+        _upload_parquet_gcs(df_out, gcs_url)
+        print(f"[snapshot] uploaded {len(df_out):,} rows → {gcs_url}")
+        wrote_gcs = gcs_url
 
-        df_db = df.copy()
-        df_db.rename(columns={"numbikesavailable": "bikes"}, inplace=True)
-        for c in ["bikes", "capacity", "mechanical", "ebike"]:
-            if c not in df_db.columns: df_db[c] = None
-        if "status" not in df_db.columns: df_db["status"] = "OK"
+    return len(df_out), wrote_gcs
 
-        df_db["tbin_utc"] = pd.to_datetime(df_db.get("tbin_utc"), utc=True, errors="coerce").dt.tz_convert(None)
-        df_db["ts_utc"]   = pd.to_datetime(df_db.get("ts_utc"),   utc=True, errors="coerce").dt.tz_convert(None)
-        df_db.loc[df_db["ts_utc"].isna(), "ts_utc"] = df_db["tbin_utc"]
-        df_db["ts_paris"] = pd.to_datetime(df_db["tbin_utc"], utc=True, errors="coerce").dt.tz_convert("Europe/Paris").dt.tz_localize(None)
-
-        df_db["lat"] = pd.to_numeric(df_db.get("lat"), errors="coerce")
-        df_db["lon"] = pd.to_numeric(df_db.get("lon"), errors="coerce")
-
-        now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0).replace(tzinfo=None)
-        df_db["ingested_at"] = now_utc
-        df_db["ingest_latency_s"] = (now_utc - pd.to_datetime(df_db["ts_utc"])).dt.total_seconds()
-        df_db["source_etag"] = None
-
-        keep = [
-            "ts_utc","ts_paris","tbin_utc","station_id",
-            "bikes","capacity","mechanical","ebike","status",
-            "lat","lon","ingested_at","ingest_latency_s","source_etag"
-        ]
-        for c in keep:
-            if c not in df_db.columns: df_db[c] = None
-        df_db = df_db[keep]
-
-        con = duckdb.connect(db_local)
-        con.execute("PRAGMA threads=4;")
-        con.register("snap_raw", df_db)
-        con.execute("""
-            INSERT INTO bronze.raw_snapshots_5min (
-                ts_utc, ts_paris, tbin_utc, station_id,
-                bikes, capacity, mechanical, ebike, status,
-                lat, lon, ingested_at, ingest_latency_s, source_etag
-            )
-            SELECT
-                ts_utc,
-                ts_paris,
-                tbin_utc,
-                TRY_CAST(station_id AS BIGINT),
-                CAST(bikes AS INTEGER),
-                CAST(capacity AS INTEGER),
-                CAST(mechanical AS INTEGER),
-                CAST(ebike AS INTEGER),
-                status,
-                CAST(lat AS DOUBLE),
-                CAST(lon AS DOUBLE),
-                ingested_at,
-                CAST(ingest_latency_s AS DOUBLE),
-                source_etag
-            FROM snap_raw
-        """)
-        # météo horaire
-        w = fetch_weather()
-        if not w.empty:
-            w["tbin_utc"] = pd.to_datetime(w["hour_utc"], utc=True, errors="coerce").dt.tz_convert(None)
-            w = w[["tbin_utc","temp_C","wind_mps","precip_mm","weather_src"]].dropna(subset=["tbin_utc"]).drop_duplicates("tbin_utc")
-            con.register("wcur", w)
-            con.execute("DELETE FROM bronze.weather_5min WHERE tbin_utc IN (SELECT tbin_utc FROM wcur)")
-            con.execute("INSERT INTO bronze.weather_5min SELECT * FROM wcur")
-        con.close()
-        print("[ingest] DB append OK → bronze.raw_snapshots_5min (+ weather)")
-    except Exception as e:
-        print(f"[ingest][warn] DB append skipped: {e}")
-
-    return df
+def main():
+    print("[ingest] start")
+    n, out = ingest_once(save=os.environ.get("INGEST_SAVE_PARQUET","1") == "1")
+    print(f"[ingest] done rows={n} out={out}")
+    return 0
 
 if __name__ == "__main__":
-    # En prod (Cloud Run): mettre INGEST_SAVE_PARQUET=0, INGEST_TO_GCS=1
-    save_local = os.environ.get("INGEST_SAVE_PARQUET", "1") == "1"
-    ingest_once(save=save_local)
+    raise SystemExit(main())
