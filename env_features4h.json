@@ -1,0 +1,14 @@
+﻿{
+    "WINDOW_HOURS":  "4",
+    "GCS_RAW_PREFIX":  "gs://velib-forecast-472820_cloudbuild/velib/bronze",
+    "PYTHONPATH":  "/app",
+    "GCS_MODEL_URI_T60":  "gs://velib-forecast-472820_cloudbuild/velib/models/lgb_nbvelos_T+60min.joblib",
+    "DIAG":  "0",
+    "JOB":  "build_features_4h",
+    "GCS_LOCK":  "gs://velib-forecast-472820_cloudbuild/velib/locks/job.lock",
+    "WITH_FORECAST":  "1",
+    "SERVING_FORECAST_PREFIX":  "gs://velib-forecast-472820_cloudbuild/velib/serving/forecast",
+    "REPO_ROOT":  "/app",
+    "GCS_MODEL_URI_T15":  "gs://velib-forecast-472820_cloudbuild/velib/models/lgb_nbvelos_T+15min.joblib",
+    "FORECAST_HORIZONS":  "15,60"
+}

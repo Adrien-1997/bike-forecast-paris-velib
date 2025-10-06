@@ -1,15 +1,13 @@
-# apps/api/core/snapshot_live.py
 from __future__ import annotations
 
 import os
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import pandas as pd
 import requests
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
-
 
 # ---------- Config (surchargable via env) ----------
 URL_STATUS = os.getenv(
@@ -21,18 +19,15 @@ URL_INFO = os.getenv(
     "https://velib-metropole-opendata.smovengo.cloud/opendata/Velib_Metropole/station_information.json",
 )
 
-OPEN_METEO = os.getenv("OPENMETEO_URL", "https://api.open-meteo.com/v1/forecast")
-LAT = float(os.environ.get("OPENMETEO_LAT", "48.8566"))
-LON = float(os.environ.get("OPENMETEO_LON", "2.3522"))
-METEO_DISABLE = os.environ.get("METEO_DISABLE", "0") == "1"
-
 COLS_ORDER = [
-    "ts_utc","tbin_utc","station_id","bikes","capacity","mechanical","ebike",
-    "status","lat","lon","name","temp_C","precip_mm","wind_mps"
+    "ts_utc", "tbin_utc", "station_id",
+    "bikes", "capacity", "mechanical", "ebike",
+    "status", "lat", "lon", "name"
 ]
 
 # ---------- HTTP session with retries ----------
 _session: requests.Session | None = None
+
 def _session_get() -> requests.Session:
     global _session
     if _session is None:
@@ -65,17 +60,13 @@ def _fetch_gbfs_velib_df() -> pd.DataFrame:
     info_list   = (js_info.get("data") or {}).get("stations") or []
     if not status_list or not info_list:
         print("[gbfs] empty payloads — status:", len(status_list), "info:", len(info_list))
-        return pd.DataFrame(columns=[
-            "ts_utc","tbin_utc","station_id","bikes","capacity","mechanical","ebike",
-            "status","lat","lon","name"
-        ])
+        return pd.DataFrame(columns=COLS_ORDER)
 
     st_rows = []
     for s in status_list:
         sid = s.get("station_id")
         if not sid:
             continue
-        # types can be list or dict; normalize
         v = s.get("num_bikes_available_types")
         types = (v[0] if isinstance(v, list) and v else (v if isinstance(v, dict) else {})) or {}
         mech = types.get("mechanical", 0) or 0
@@ -117,96 +108,29 @@ def _fetch_gbfs_velib_df() -> pd.DataFrame:
     )
     return df
 
-# ---------- Weather fetch ----------
-def _weather_window(df_velib: pd.DataFrame) -> Tuple[datetime, datetime]:
-    hours = (
-        pd.to_datetime(df_velib["tbin_utc"], utc=True, errors="coerce")
-        .dt.floor("h")
-        .dt.tz_convert(None)
-    )
-    lo = hours.min()
-    hi = hours.max()
-    if pd.isna(lo) or pd.isna(hi):
-        now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-        return now - timedelta(hours=3), now + timedelta(hours=3)
-    lo = (lo - timedelta(hours=3)).replace(tzinfo=None)
-    hi = (hi + timedelta(hours=3)).replace(tzinfo=None)
-    return lo, hi
-
-def _fetch_weather_df(df_velib: pd.DataFrame) -> pd.DataFrame:
-    if METEO_DISABLE:
-        print("[weather] disabled by METEO_DISABLE=1")
-        return pd.DataFrame(columns=["hour_utc","temp_C","precip_mm","wind_mps"])
-
-    try:
-        lo, hi = _weather_window(df_velib)
-        params = {
-            "latitude": LAT,
-            "longitude": LON,
-            "hourly": "temperature_2m,precipitation,wind_speed_10m",
-            "windspeed_unit": "ms",
-            "past_days": 2,
-            "forecast_days": 2,
-            "timezone": "UTC",
-        }
-        resp = _session_get().get(OPEN_METEO, params=params, timeout=20)
-        resp.raise_for_status()
-        j = resp.json()
-
-        hours = pd.to_datetime(j["hourly"]["time"], utc=True, errors="coerce").tz_convert(None)
-        dfw = pd.DataFrame({
-            "hour_utc":  hours,
-            "temp_C":    j["hourly"]["temperature_2m"],
-            "precip_mm": j["hourly"]["precipitation"],
-            "wind_mps":  j["hourly"]["wind_speed_10m"],
-        })
-        dfw = dfw[(dfw["hour_utc"] >= lo) & (dfw["hour_utc"] <= hi)].copy()
-        return dfw
-    except Exception as e:
-        print(f"[weather] error: {e}")
-        return pd.DataFrame(columns=["hour_utc","temp_C","precip_mm","wind_mps"])
-
 # ---------- Public API ----------
 def fetch_live_snapshot() -> pd.DataFrame:
     """
-    Retourne un DataFrame "snapshot live" + météo, schéma:
+    Retourne un DataFrame "snapshot live" (sans météo), schéma :
       ts_utc, tbin_utc, station_id, bikes, capacity, mechanical, ebike,
-      status, lat, lon, name, temp_C, precip_mm, wind_mps
+      status, lat, lon, name
     """
     df_v = _fetch_gbfs_velib_df()
     if df_v.empty:
         return pd.DataFrame(columns=COLS_ORDER)
 
-    # Join with weather by hour
-    df_v["hour_utc"] = (
-        pd.to_datetime(df_v["tbin_utc"], utc=True, errors="coerce")
-        .dt.floor("h")
-        .dt.tz_convert(None)
-    )
-    df_w = _fetch_weather_df(df_v)
-
-    if not df_w.empty:
-        df = df_v.merge(df_w, on="hour_utc", how="left")
-    else:
-        df = df_v.assign(temp_C=None, precip_mm=None, wind_mps=None)
-
-    df = df.drop(columns=["hour_utc"])
-
     out = pd.DataFrame({
-        "ts_utc":     pd.to_datetime(df["ts_utc"],   utc=True, errors="coerce").dt.tz_convert(None),
-        "tbin_utc":   pd.to_datetime(df["tbin_utc"], utc=True, errors="coerce").dt.tz_convert(None),
-        "station_id": df["station_id"].astype(str),
-        "bikes":      pd.to_numeric(df["bikes"],      errors="coerce").fillna(0).astype(int),
-        "capacity":   pd.to_numeric(df["capacity"],   errors="coerce").fillna(0).astype(int),
-        "mechanical": pd.to_numeric(df["mechanical"], errors="coerce").fillna(0).astype(int),
-        "ebike":      pd.to_numeric(df["ebike"],      errors="coerce").fillna(0).astype(int),
-        "status":     df["status"].astype(str),
-        "lat":        pd.to_numeric(df["lat"],        errors="coerce"),
-        "lon":        pd.to_numeric(df["lon"],        errors="coerce"),
-        "name":       df["name"].astype(str),
-        "temp_C":     pd.to_numeric(df["temp_C"],     errors="coerce"),
-        "precip_mm":  pd.to_numeric(df["precip_mm"],  errors="coerce"),
-        "wind_mps":   pd.to_numeric(df["wind_mps"],   errors="coerce"),
+        "ts_utc":     pd.to_datetime(df_v["ts_utc"],   utc=True, errors="coerce").dt.tz_convert(None),
+        "tbin_utc":   pd.to_datetime(df_v["tbin_utc"], utc=True, errors="coerce").dt.tz_convert(None),
+        "station_id": df_v["station_id"].astype(str),
+        "bikes":      pd.to_numeric(df_v["bikes"],      errors="coerce").fillna(0).astype(int),
+        "capacity":   pd.to_numeric(df_v["capacity"],   errors="coerce").fillna(0).astype(int),
+        "mechanical": pd.to_numeric(df_v["mechanical"], errors="coerce").fillna(0).astype(int),
+        "ebike":      pd.to_numeric(df_v["ebike"],      errors="coerce").fillna(0).astype(int),
+        "status":     df_v["status"].astype(str),
+        "lat":        pd.to_numeric(df_v["lat"],        errors="coerce"),
+        "lon":        pd.to_numeric(df_v["lon"],        errors="coerce"),
+        "name":       df_v["name"].astype(str),
     })[COLS_ORDER]
 
     return out

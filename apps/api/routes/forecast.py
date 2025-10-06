@@ -1,133 +1,145 @@
 # apps/api/routes/forecast.py
 from __future__ import annotations
 
-from fastapi import APIRouter
-from pydantic import BaseModel
-import pandas as pd
-import numpy as np
-import joblib
-import fsspec
+from typing import Any, List, Optional
 
-from api.core.features_live import build_live_features
+import pandas as pd
+from fastapi import APIRouter, Body, HTTPException, Query, Response
+from google.api_core.exceptions import NotFound  # type: ignore
+
+from api.core.forecast_reader import load_latest_forecast
 from api.core.settings import settings
 
-router = APIRouter()
+router = APIRouter(prefix="/forecast", tags=["forecast"])
 
-# ---------- Loader tolérant ----------
-def _load_model_and_feats():
+
+# ─────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────
+
+def _parse_station_ids_csv(raw: Optional[str]) -> Optional[List[str]]:
     """
-    Essaie successivement :
-      - model_loader.load_trained_model() -> (model, feat_cols, horizon)
-      - model_loader.load_model() -> (model, meta)  où meta['feat_cols'], meta['horizon_minutes']
-      - lecture directe du joblib settings.models_prefix
+    Parse une liste CSV '6294, 6352' -> ['6294','6352'].
+    Conserve des strings (pas de cast int) pour éviter toute perte (zéros, formats).
     """
-    # 1) load_trained_model()
+    if not raw:
+        return None
+    vals: List[str] = []
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if tok:
+            vals.append(tok)
+    return vals or None
+
+
+def _parse_station_ids_payload(payload: Any) -> Optional[List[str]]:
+    """
+    Extrait une liste d'IDs de stations depuis un body JSON.
+    Accepté:
+      - liste directe: ["6294","6352"]
+      - dict avec une des clés: station_ids, ids, stations, stationcode(s), codes
+    -> retourne une liste de strings (sans cast en int)
+    """
+    if payload is None:
+        return None
+
+    # liste brute
+    if isinstance(payload, list):
+        out = [str(x).strip() for x in payload if str(x).strip()]
+        return out or None
+
+    # dict
+    if isinstance(payload, dict):
+        candidate_keys = (
+            "station_ids", "ids", "stations",
+            "stationcode", "stationcodes", "codes"
+        )
+        for key in candidate_keys:
+            v = payload.get(key)
+            if isinstance(v, list):
+                out = [str(x).strip() for x in v if str(x).strip()]
+                if out:
+                    return out
+            elif isinstance(v, (str, int)):  # autoriser un seul id
+                s = str(v).strip()
+                if s:
+                    return [s]
+    return None
+
+
+def _validate_h(h: int) -> None:
+    supported = {int(x.strip()) for x in (settings.FORECAST_SUPPORTED or "15").split(",") if x.strip()}
+    if h not in supported:
+        raise HTTPException(status_code=400, detail=f"h must be in {sorted(supported)}")
+
+
+# ─────────────────────────────────────────────
+# Routes
+# ─────────────────────────────────────────────
+
+@router.get("/latest")
+def get_latest_forecast(
+    h: int = Query(15, description="Horizon en minutes (ex: 15, 60)"),
+    station_id: Optional[str] = Query(
+        None,
+        description="Liste CSV d'identifiants station ex: '6294,6352' (string, pas besoin d'être numérique)"
+    ),
+):
+    """
+    Renvoie les dernières prévisions pour un horizon donné.
+    Filtrage optionnel sur une liste CSV de station_id (en string).
+    """
+    _validate_h(h)
+    station_ids = _parse_station_ids_csv(station_id)
+
     try:
-        from api.core.model_loader import load_trained_model  # type: ignore
-        mdl, feat_cols, horizon = load_trained_model()
-        return mdl, list(feat_cols or []), int(horizon or 15)
-    except Exception:
-        pass
-
-    # 2) load_model()
-    try:
-        from api.core.model_loader import load_model  # type: ignore
-        res = load_model()
-        if isinstance(res, tuple) and len(res) >= 1:
-            mdl = res[0]
-            meta = res[1] if len(res) > 1 and isinstance(res[1], dict) else {}
-        elif isinstance(res, dict):
-            mdl = res.get("model")
-            meta = res
-        else:
-            mdl, meta = res, {}
-        feat_cols = meta.get("feat_cols")
-        if not feat_cols:
-            # tenter d'inférer à partir du modèle
-            for attr in ("feature_name_", "feature_names_"):
-                if hasattr(mdl, attr):
-                    feat_cols = getattr(mdl, attr)
-                    break
-        if not feat_cols and hasattr(mdl, "booster_"):
-            try:
-                feat_cols = mdl.booster_.feature_name()
-            except Exception:
-                pass
-        horizon = int(meta.get("horizon_minutes", 15))
-        return mdl, list(feat_cols or []), horizon
-    except Exception:
-        pass
-
-    # 3) Lecture directe du joblib à partir de settings.models_prefix
-    uri = getattr(settings, "models_prefix", None) or getattr(settings, "model_uri", None)
-    if not uri:
-        raise RuntimeError("Aucun modèle trouvé (settings.models_prefix manquant)")
-
-    with fsspec.open(uri, "rb") as f:
-        obj = joblib.load(f)
-
-    # le joblib peut être soit un dict {'model','feat_cols','horizon_minutes'} soit directement un modèle
-    if isinstance(obj, dict):
-        mdl = obj.get("model", obj)
-        feat_cols = obj.get("feat_cols")
-        horizon = int(obj.get("horizon_minutes", 15))
-    else:
-        mdl = obj
-        feat_cols, horizon = None, 15
-
-    if not feat_cols:
-        for attr in ("feature_name_", "feature_names_"):
-            if hasattr(mdl, attr):
-                feat_cols = getattr(mdl, attr)
-                break
-    if not feat_cols and hasattr(mdl, "booster_"):
-        try:
-            feat_cols = mdl.booster_.feature_name()
-        except Exception:
-            pass
-
-    return mdl, list(feat_cols or []), horizon
-
-
-# ---------- Schéma d'entrée ----------
-class ForecastBatchIn(BaseModel):
-    stationcodes: list[str] | None = None
-    h: int | None = None  # ignoré si le modèle a un horizon fixé
-
-
-# ---------- Route ----------
-@router.post("/forecast/batch")
-def forecast_batch(payload: ForecastBatchIn):
-    try:
-        # 1) modèle + noms de features
-        model, feat_cols, horizon = _load_model_and_feats()
-
-        # 2) construire les features live alignées
-        X = build_live_features(feat_cols)  # doit renvoyer feat_cols + ['stationcode','capacity','ts_utc']
-        if X is None or X.empty:
-            return []
-
-        # 3) filtrage (optionnel)
-        if payload.stationcodes:
-            want = set(map(str, payload.stationcodes))
-            X = X[X["stationcode"].astype(str).isin(want)]
-        if X.empty:
-            return []
-
-        # 4) prédire
-        X_feats = X[feat_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
-        y = model.predict(X_feats)
-        y = np.maximum(0, np.round(y)).astype(int)
-
-        # 5) sortie JSON-safe
-        out = pd.DataFrame({
-            "stationcode": X["stationcode"].astype(str),
-            "bikes_pred_t15": y,
-            "capacity": pd.to_numeric(X["capacity"], errors="coerce").fillna(0).astype(int),
-            "ts_utc": pd.to_datetime(X["ts_utc"], errors="coerce"),
-        })
-        out["ts_utc"] = out["ts_utc"].dt.strftime("%Y-%m-%dT%H:%M:%S")
-        return out.to_dict(orient="records")
-
+        df = load_latest_forecast(h, station_ids=station_ids)
+    except NotFound:
+        return Response(status_code=204)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        return {"error": str(e), "where": "/forecast/batch"}
+        raise HTTPException(status_code=502, detail=f"Failed to load forecast: {e}")
+
+    if df is None or df.empty:
+        return []
+    return df.to_dict(orient="records")
+
+
+@router.get("")
+def forecast_alias(
+    h: int = Query(15, description="Horizon en minutes (ex: 15, 60)"),
+    station_id: Optional[str] = Query(None, description="Liste CSV ex: '6294,6352'"),
+):
+    return get_latest_forecast(h=h, station_id=station_id)
+
+
+@router.post("/batch")
+def forecast_batch(
+    payload: Any = Body(default=None),
+    h: int = Query(15, description="Horizon en minutes (ex: 15, 60)"),
+):
+    """
+    Renvoie les prévisions pour une liste d'IDs postés dans le body.
+    Body accepté:
+      - ["6294","6352"]
+      - {"station_ids": ["6294","6352"]}
+      - {"ids": [...]}, {"stations": [...]}
+      - compat: {"stationcode": [...]}, {"stationcodes": [...]}, {"codes": [...]}
+    Tous les IDs sont traités comme des strings.
+    """
+    _validate_h(h)
+    station_ids = _parse_station_ids_payload(payload)
+
+    try:
+        df = load_latest_forecast(h, station_ids=station_ids)
+    except NotFound:
+        return Response(status_code=204)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to load forecast: {e}")
+
+    if df is None or df.empty:
+        return []
+    return df.to_dict(orient="records")

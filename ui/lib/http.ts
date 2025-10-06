@@ -1,21 +1,38 @@
 // ui/lib/http.ts
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8081';
+// Centralized HTTP utility — simplified (no cache, no dedupe, no retries)
 
-type JsonInit = RequestInit & { timeoutMs?: number; noCache?: boolean; dedupeKey?: string };
+export const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8081';
 
-const inflight = new Map<string, Promise<any>>();
+type JsonInit = RequestInit & {
+  timeoutMs?: number;
+  noCache?: boolean;
+};
+
+// ───────────────────────────────
+// Helpers
+// ───────────────────────────────
 
 function withTimeout(ms = 10_000) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), ms);
-  return { signal: ctrl.signal, done: () => clearTimeout(id) };
+  return {
+    signal: ctrl.signal,
+    done: () => clearTimeout(id),
+  };
 }
 
-async function _doJson<T>(path: string, init: JsonInit = {}): Promise<T> {
-  const url = `${API_BASE}${path}${path.includes('?') ? '&' : '?'}_ts=${Date.now()}`;
+// ───────────────────────────────
+// Core JSON request
+// ───────────────────────────────
+
+export async function json<T>(path: string, init: JsonInit = {}): Promise<T> {
+  const tsParam = `_ts=${Date.now()}`; // always bust browser cache
+  const url = `${API_BASE}${path}${path.includes('?') ? '&' : '?'}${tsParam}`;
 
   const { timeoutMs = 10_000, noCache = true, ...rest } = init;
   const t = withTimeout(timeoutMs);
+
   try {
     const res = await fetch(url, {
       ...rest,
@@ -29,39 +46,53 @@ async function _doJson<T>(path: string, init: JsonInit = {}): Promise<T> {
     });
 
     const text = await res.text();
+
     if (!res.ok) {
       console.error('[http] error', res.status, res.statusText, text.slice(0, 500));
       throw new Error(`${res.status} ${res.statusText}`);
     }
+
     try {
       return JSON.parse(text) as T;
     } catch {
       console.error('[http] non-JSON body:', text.slice(0, 800));
-      throw new Error('Non-JSON response');
+      throw new Error('Invalid JSON response');
     }
   } finally {
     t.done();
   }
 }
 
-// Retry simple (exponentiel) + dédoublonnage d’appels identiques
-export async function json<T>(path: string, init: JsonInit = {}, retries = 1): Promise<T> {
-  const key = init.dedupeKey ?? `${path}::${init.method ?? 'GET'}::${init.body ?? ''}`;
-  if (inflight.has(key)) return inflight.get(key)!;
+// ───────────────────────────────
+// Convenience wrappers (optionnels)
+// ───────────────────────────────
 
-  const run = async (): Promise<T> => {
-    try {
-      return await _doJson<T>(path, init);
-    } catch (e) {
-      if (retries > 0) {
-        await new Promise(r => setTimeout(r, 500 * Math.pow(2, 1 - retries)));
-        return run.bind(null)() as Promise<T>;
-      }
-      throw e;
-    }
-  };
+export const getJSON = <T>(path: string, init: Omit<JsonInit, 'method' | 'body'> = {}) =>
+  json<T>(path, { ...init, method: 'GET' });
 
-  const p = run().finally(() => inflight.delete(key));
-  inflight.set(key, p);
-  return p;
+export const postJSON = <T>(path: string, body?: unknown, init: Omit<JsonInit, 'method'> = {}) =>
+  json<T>(path, {
+    ...init,
+    method: 'POST',
+    body: body == null ? undefined : JSON.stringify(body),
+  });
+
+// ───────────────────────────────
+// Forecast payload normalizer
+// ───────────────────────────────
+
+/**
+ * Extrait toujours un tableau de lignes de prévision, peu importe la forme renvoyée.
+ * - [{...}]
+ * - { data: { "15": [ {...} ] }, generated_at, horizons }
+ * - { predictions: [ {...} ] }
+ */
+export function selectForecastRows(payload: any, horizonMin = 15): any[] {
+  if (Array.isArray(payload)) return payload;
+  if (payload?.data?.[String(horizonMin)] && Array.isArray(payload.data[String(horizonMin)])) {
+    return payload.data[String(horizonMin)];
+  }
+  if (Array.isArray(payload?.predictions)) return payload.predictions;
+  console.warn('[selectForecastRows] unexpected payload shape:', payload);
+  return [];
 }

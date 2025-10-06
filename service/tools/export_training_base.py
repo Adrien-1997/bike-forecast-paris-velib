@@ -38,11 +38,9 @@ def _read_parquets(paths: list[str]) -> pd.DataFrame:
     if not paths:
         return pd.DataFrame(columns=REQ_COLS)
     if pq is not None:
-        # fast path via pyarrow
         tbl = pq.read_table(paths)
         df = tbl.to_pandas()
     else:
-        # duck typing fallback via pandas
         parts = [pd.read_parquet(p) for p in paths]
         df = pd.concat(parts, ignore_index=True)
     return df
@@ -58,19 +56,17 @@ def main():
         return 0
 
     df = _read_parquets(paths)
-    # sécurité: ne garde que les colonnes utiles
+
+    # Sécurité : ne garde que les colonnes utiles
     for c in REQ_COLS:
         if c not in df.columns:
             df[c] = None
     df = df[REQ_COLS].copy()
 
-    # normalise noms pour training
-    df.rename(columns={"station_id": "stationcode"}, inplace=True)
-    # index temporels
+    # ✅ plus aucune conversion en 'stationcode'
     df["tbin_utc"] = pd.to_datetime(df["tbin_utc"], utc=True, errors="coerce").dt.tz_convert(None)
     df["ts_utc"]   = pd.to_datetime(df["ts_utc"],   utc=True, errors="coerce").dt.tz_convert(None)
 
-    # export unique
     df.to_parquet(OUT_PARQ, index=False)
     print(f"[export_training_base] wrote → {OUT_PARQ} (rows={len(df)})")
     return 0

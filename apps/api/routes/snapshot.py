@@ -1,15 +1,12 @@
-# apps/api/routes/snapshot.py
 from fastapi import APIRouter
 from api.core.snapshot_live import fetch_live_snapshot
 
-router = APIRouter()
+router = APIRouter(prefix="/snapshot", tags=["snapshot"])
 
-@router.get("/snapshot/live")
-def snapshot_live():
+@router.get("")
+def get_snapshot():
+    """
+    Live Vélib snapshot (without weather)
+    """
     df = fetch_live_snapshot()
-    return df.to_dict(orient="records")
-
-@router.get("/snapshot/live/head")
-def snapshot_live_head(n: int = 10):
-    df = fetch_live_snapshot()
-    return df.head(max(1, min(n, 100))).to_dict(orient="records")
+    return df.to_dict(orient="records") if hasattr(df, "to_dict") else []

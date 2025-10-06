@@ -15,9 +15,14 @@
 
 from __future__ import annotations
 import os, glob
-import pandas as pd
 from typing import Iterable, Tuple, List, Optional
-from cal_features import add_time_features
+import pandas as pd
+
+# 🔧 Imports internes : d'abord relatifs (layout aplati /app/train), puis fallback service.*
+try:
+    from .cal_features import add_time_features
+except Exception:
+    from service.train.cal_features import add_time_features
 
 BASE_COLUMNS = [
     "ts_utc","tbin_utc","station_id","bikes","capacity","mechanical","ebike",
@@ -33,7 +38,6 @@ def _read_many_parquets(path_or_glob: str) -> pd.DataFrame:
     if os.path.isdir(path_or_glob):
         paths = sorted(glob.glob(os.path.join(path_or_glob, "*.parquet")))
     else:
-        # fichier unique OU glob
         if "*" in path_or_glob or "?" in path_or_glob:
             paths = sorted(glob.glob(path_or_glob))
         else:
@@ -51,7 +55,9 @@ def _read_many_parquets(path_or_glob: str) -> pd.DataFrame:
             print(f"[features][warn] lecture parquet échouée: {p} → {e}")
     if not dfs:
         return pd.DataFrame(columns=BASE_COLUMNS)
+
     out = pd.concat(dfs, ignore_index=True)
+
     # force présence colonnes
     for c in BASE_COLUMNS:
         if c not in out.columns:
@@ -59,12 +65,20 @@ def _read_many_parquets(path_or_glob: str) -> pd.DataFrame:
     return out[BASE_COLUMNS]
 
 def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
+    # timestamps → naïf UTC
     df["ts_utc"]   = pd.to_datetime(df["ts_utc"],   utc=True, errors="coerce").dt.tz_convert(None)
     df["tbin_utc"] = pd.to_datetime(df["tbin_utc"], utc=True, errors="coerce").dt.tz_convert(None)
-    for c in ["station_id","bikes","capacity","mechanical","ebike"]:
+
+    # station_id doit rester texte (souvent alphanumérique)
+    df["station_id"] = df["station_id"].astype("string")
+
+    # numériques
+    for c in ["bikes","capacity","mechanical","ebike"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     for c in ["lat","lon","temp_C","precip_mm","wind_mps"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # texte
     df["status"] = df["status"].astype("string")
     df["name"]   = df["name"].astype("string")
     return df
@@ -75,7 +89,6 @@ def _dedupe_per_bin(df: pd.DataFrame) -> pd.DataFrame:
     en se basant sur ts_utc (max). Si ts_utc manquant, on garde la première.
     """
     df = df.sort_values(["station_id","tbin_utc","ts_utc"], ascending=[True, True, True])
-    # on prend la dernière par groupe
     dedup = df.groupby(["station_id","tbin_utc"], as_index=False).tail(1)
     return dedup.reset_index(drop=True)
 
@@ -89,6 +102,7 @@ def _add_target_and_lags(
     Ajoute des lags et des rollings simples.
     """
     df = df.sort_values(["station_id","tbin_utc"])
+
     # cible
     df["y_nb"] = df.groupby("station_id", group_keys=False)["bikes"].shift(-horizon_bins)
 
@@ -97,7 +111,6 @@ def _add_target_and_lags(
         df[f"lag_bikes_{L}"] = df.groupby("station_id", group_keys=False)["bikes"].shift(L)
 
     # rollings (utilisent les lags existants pour éviter leak)
-    # fenetres en bins: 3 (15min), 6 (30min), 12 (1h)
     for W in (3,6,12):
         df[f"roll_mean_{W}"] = (
             df.groupby("station_id", group_keys=False)["bikes"]
@@ -108,10 +121,10 @@ def _add_target_and_lags(
               .apply(lambda s: s.shift(1).rolling(W, min_periods=max(1, W//2)).std())
         )
 
-    # ratios simples
+    # ratio simple
     df["occ_ratio"] = df["bikes"] / df["capacity"].where(df["capacity"] > 0)
 
-    # features météo (déjà présentes) : temp_C, precip_mm, wind_mps — on crée aussi des lags météo
+    # lags météo
     for L in (1,):
         for c in ("temp_C","precip_mm","wind_mps"):
             df[f"{c}_lag{L}"] = df.groupby("station_id", group_keys=False)[c].shift(L)
@@ -119,32 +132,25 @@ def _add_target_and_lags(
     # features calendaires
     add_time_features(df, ts_col="tbin_utc", add_paris_derived=True)
 
-    # liste des colonnes features (on exclut l'ID, la cible, et les champs textuels lat/lon/name si tu veux)
+    # encodage status -> code ordinal
+    status_map = {s: i for i, s in enumerate(sorted(df["status"].dropna().unique()))}
+    df["status_code"] = df["status"].map(status_map).astype("Int64")
+
+    # liste des colonnes features
     feat_cols = [
-        # base niveau station + état instantané
-        "capacity","mechanical","ebike","status",
+        "capacity","mechanical","ebike",
         "lat","lon",
         "temp_C","precip_mm","wind_mps",
         "occ_ratio",
-        # lags + rollings
         *(f"lag_bikes_{L}" for L in lag_bins),
         "roll_mean_3","roll_mean_6","roll_mean_12",
         "roll_std_3","roll_std_6","roll_std_12",
-        # météo lag
         "temp_C_lag1","precip_mm_lag1","wind_mps_lag1",
-        # temps
         "hour","minute","dow","month","is_weekend",
         "hod_sin","hod_cos","dow_sin","dow_cos",
         "paris_hour","paris_dow","paris_is_we",
+        "status_code",
     ]
-
-    # cast status (string) -> catégorie ordinale simple (éviter OneHot si modèle sklearn robuste)
-    # si modèle gère string (HGBR), on peut laisser tel quel ; sinon convertir
-    # Ici: on garde la string et laissera le modèle HGBR ignorer (il ne supporte pas string).
-    # Donc on encode rapidement :
-    status_map = {s:i for i, s in enumerate(sorted(df["status"].dropna().unique()))}
-    df["status_code"] = df["status"].map(status_map).astype("Int64")
-    feat_cols = ["status_code" if c=="status" else c for c in feat_cols]
 
     return df, feat_cols
 
@@ -175,7 +181,7 @@ def build_training_frame(
 
     df, feat_cols = _add_target_and_lags(df, horizon_bins=horizon_bins)
 
-    # drop NA sur cible et features essentielles
+    # drop NA sur cible et features
     used_cols = ["station_id","tbin_utc","bikes","y_nb"] + feat_cols
     df_model = df[used_cols].dropna(subset=["y_nb"])
 

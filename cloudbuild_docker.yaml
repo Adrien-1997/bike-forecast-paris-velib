@@ -1,0 +1,5 @@
+﻿steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build','-t','europe-west1-docker.pkg.dev/velib-forecast-472820/velib-docker/pipeline:v7','-f','service/Dockerfile','.']
+images:
+- 'europe-west1-docker.pkg.dev/velib-forecast-472820/velib-docker/pipeline:v7'

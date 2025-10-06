@@ -1,174 +1,183 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import Head from 'next/head';
-import dynamic from 'next/dynamic';
+// ui/pages/index.tsx
+import { useEffect, useMemo, useRef, useState } from 'react'
+import Head from 'next/head'
+import dynamic from 'next/dynamic'
 
-// ─────────────── UI Components ───────────────
-import BadgesBar from '@/components/Badges';
+// UI
+import BadgesBar from '@/components/Badges'
 
-// ─────────────── Data Layer ───────────────
-import { getBadges } from '@/lib/services/badges';
-import { getForecastBatch } from '@/lib/services/forecast';
-import { getStations } from '@/lib/services/stations';
+// Data
+import { computeBadges } from '@/lib/services/badges'
+import { getForecastBatch } from '@/lib/services/forecast'
+import { getStations } from '@/lib/services/stations'
+import { getWeather } from '@/lib/services/weather'
 
-// ─────────────── Types ───────────────
-import type { Station, Forecast } from '@/lib/types';
-import type { Map as LeafletMap } from 'leaflet';
+// Types
+import type { Station, Forecast } from '@/lib/types'
+import type { Map as LeafletMap } from 'leaflet'
 
-// ─────────────── Map Component (no SSR) ───────────────
-const MapView = dynamic(() => import('../components/MapView'), { ssr: false });
+// Map (no SSR)
+const MapView = dynamic(() => import('../components/MapView'), { ssr: false })
 
+/* ----------------- helpers ----------------- */
 
-// ─────────────── Helpers ───────────────
 const toNumber = (x: unknown, fallback = 0) => {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : fallback;
-};
-const getPred = (f?: Forecast) => (f ? toNumber((f as any).bikes_pred_t15, 0) : 0);
+  const n = Number(x)
+  return Number.isFinite(n) ? n : fallback
+}
 
-// Parse timestamp
-const parseIsoToMs = (v: unknown): number => {
-  if (!v) return 0;
-  const t = Date.parse(String(v));
-  return Number.isFinite(t) ? t : 0;
-};
+const getPred = (f?: any) => toNumber(f?.bikes_pred_int ?? f?.bikes_pred ?? 0, 0)
 
-// Compute freshness (minutes)
-const computeFreshnessMin = (updatedAt: unknown): number => {
-  const t = parseIsoToMs(updatedAt);
-  if (!t) return 0;
-  const now = Date.now();
-  const diffMs = Math.max(0, now - t); // avoid negative when TZ in future
-  return Math.floor(diffMs / 60000);
-};
+// clé de jointure — uniquement station_id
+const keyFor = (obj: any): string | null => {
+  if (!obj) return null
+  const id = obj.station_id ?? obj.stationId ?? obj.id ?? null
+  if (id != null && String(id).trim() !== '') return String(id)
+  return null
+}
 
-// Normalize badges freshness
-// Normalize badges freshness
-const normalizeBadges = (bd: any) => {
-  if (!bd) return bd;
-
-  const serverFresh =
-    bd?.meta?.freshness_min ??
-    bd?.freshness?.age_minutes ??
-    bd?.freshness_min ??
-    0;
-
-  // ← on prend le parquet_ts comme updated_at par défaut (cohérent avec age_minutes)
-  const updatedAt =
-    bd?.meta?.updated_at ??
-    bd?.freshness?.parquet_ts_utc ??
-    bd?.weather?.ts_utc ??
-    bd?.updated_at ??
-    bd?.ts ??
-    null;
-
-  const computed = computeFreshnessMin(updatedAt);
-  const finalFresh = Number(serverFresh) > 0 ? Number(serverFresh) : computed;
-
-  // petit check : si l’écart client/serveur > 2 min, log pour enquête
-  if (Number.isFinite(finalFresh) && Number.isFinite(computed)) {
-    const delta = Math.abs(finalFresh - computed);
-    if (delta > 2) {
-      console.warn('[badges] freshness mismatch', { server: finalFresh, client: computed, updatedAt });
-    }
+// accepte soit un array direct, soit le bundle {generated_at, horizons, data: {"15":[...]} }
+function normalizeForecastRows(payload: any, horizon = 15): any[] {
+  if (Array.isArray(payload)) return payload
+  if (payload && payload.data) {
+    const k = String(horizon)
+    if (Array.isArray(payload.data[k])) return payload.data[k]
   }
+  return []
+}
 
-  return {
-    ...bd,
-    meta: {
-      ...(bd.meta || {}),
-      updated_at: updatedAt,
-      freshness_min_norm: finalFresh,
-      freshness_min_server: Number(serverFresh) || 0,
-      freshness_min_client: computed,
-    },
-  };
-};
+/**
+ * Convertit un timestamp ISO (UTC venant de l'API) vers l'heure locale Paris HH:mm,
+ * en tenant compte automatiquement du passage heure d'été/hiver.
+ * Force le parsing en UTC même si le "Z" est absent.
+ */
+const parisHHmmAt = (iso?: string | null): string => {
+  if (!iso) return '—'
+  const utcIso = iso.endsWith('Z') ? iso : `${iso}Z`
+  const d = new Date(utcIso)
+  return new Intl.DateTimeFormat('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'Europe/Paris',
+  }).format(d)
+}
 
+// âge en minutes entre maintenant (local) et un timestamp UTC
+const ageMinutes = (iso?: string | null): number | null => {
+  if (!iso) return null
+  const utcIso = iso.endsWith('Z') ? iso : `${iso}Z`
+  const t = new Date(utcIso).getTime()
+  return Math.max(0, Math.round((Date.now() - t) / 60000))
+}
+
+// util: renvoie la valeur “la plus récente” d’un champ parmi les rows
+const latestIso = (rows: any[], keyA: string, keyB?: string): string | null => {
+  const vals = rows
+    .map(r => (r?.[keyA] ?? (keyB ? r?.[keyB] : null)) as string | null)
+    .filter(Boolean) as string[]
+  if (!vals.length) return null
+  // tri décroissant par time
+  vals.sort(
+    (a, b) =>
+      new Date((b.endsWith('Z') ? b : b + 'Z')).getTime() -
+      new Date((a.endsWith('Z') ? a : a + 'Z')).getTime()
+  )
+  return vals[0] ?? null
+}
+
+/* ----------------- component ----------------- */
 
 export default function HomePage() {
-  const [stations, setStations] = useState<Station[]>([]);
-  const [forecast, setForecast] = useState<Forecast[]>([]);
-  const [badges, setBadges] = useState<any>(null);
-  const [center] = useState<[number, number]>([48.8566, 2.3522]);
-  const [userPos, setUserPos] = useState<[number, number] | null>(null);
-  const mapRef = useRef<LeafletMap | null>(null);
-  const NEARBY_LIMIT = 10;
+  const [stations, setStations] = useState<Station[]>([])
+  const [forecast, setForecast] = useState<Forecast[] | any[]>([])
+  const [badges, setBadges] = useState<any>(null)
 
-  // ─────────────── Chargement et refresh ───────────────
+  const [center, setCenter] = useState<[number, number]>([48.8566, 2.3522])
+  const [userPos, setUserPos] = useState<[number, number] | null>(null)
+  const userCenteredOnce = useRef(false)
+  const mapRef = useRef<LeafletMap | null>(null)
+  const NEARBY_LIMIT = 10
+  const H = 15
+
   useEffect(() => {
-    let alive = true;
+    let alive = true
 
-      const loadOnce = async () => {
-        try {
-          console.debug('[loadOnce] start');
+    const loadOnce = async () => {
+      try {
+        const weather = await getWeather()
+        if (!alive) return
 
-          // 1) Badges d'abord (affichage immédiat)
-          try {
-            const bd = await getBadges();
-            const next = normalizeBadges(bd);
-            console.debug('[badges:first]', {
-              updated_at: next?.meta?.updated_at,
-              server: next?.meta?.freshness_min_server,
-              client: next?.meta?.freshness_min_client,
-              used: next?.meta?.freshness_min_norm,
-            });
-            if (!alive) return;
-            setBadges(next);
-          } catch (e) {
-            console.warn('[badges:first] failed', e);
-          }
+        const st = await getStations()
+        if (!alive) return
+        setStations(st ?? [])
 
-          // 2) Stations + Forecast (en parallèle)
-          const st = await getStations();
-          if (!alive) return;
-          console.debug('[stations]', Array.isArray(st) ? st.length : -1);
-          setStations(st ?? []);
+        // batch forecast
+        const keys = Array.from(
+          new Set((st ?? []).map(s => keyFor(s as any)).filter(Boolean) as string[])
+        )
+        const raw = keys.length ? await getForecastBatch(keys, H) : []
+        if (!alive) return
 
-          const codes = (st ?? []).map(s => String((s as any).stationcode));
-          const [fc] = await Promise.all([
-            getForecastBatch(codes, 15),
-            // (optionnel) un 2e fetch badges pour rafraîchir si le temps a passé :
-            // getBadges().then(bd => setBadges(normalizeBadges(bd))).catch(()=>{})
-          ]);
-          if (!alive) return;
-          console.debug('[forecast]', Array.isArray(fc) ? fc.length : -1);
-          setForecast(fc ?? []);
-        } catch (e) {
-          console.error(e);
-        }
-      };
+        const fcRows = normalizeForecastRows(raw, H)
+        setForecast(fcRows)
 
-    loadOnce();
+        // ─── Références temporelles ───
+        // Fraîcheur des données = dernier 'tbin_latest' (ou fallback 'tbin_utc')
+        const latestBin = latestIso(fcRows, 'tbin_latest', 'tbin_utc')          // données observées
+        // Horodatage du run modèle (informatif)
+        const latestPredTs = latestIso(fcRows, 'pred_ts_utc')                   // génération
+        // Heure de prévision affichée = 'target_ts_utc' (et non plus tbin + H)
+        const latestTarget = latestIso(fcRows, 'target_ts_utc')                 // cible prévisionnelle
 
-    // refresh toutes les 5 min
-    const FIVE_MIN = 300_000;
-    const id = setInterval(loadOnce, FIVE_MIN);
+        const forecastHourParis = parisHHmmAt(latestTarget)                     // HH:mm Paris basé sur target
+        const ageMin = ageMinutes(latestBin)                                    // âge parquet (fraîcheur)
 
-    // refresh à la remise au premier plan
-    const onVis = () => {
-      if (document.visibilityState === 'visible') loadOnce();
-    };
-    document.addEventListener('visibilitychange', onVis);
+        // badges (structure enrichie)
+        const base = computeBadges(weather ?? null, latestPredTs)
+        setBadges({
+          weather: base?.weather ?? null,
+          freshness: { age_minutes: ageMin ?? null },
+          meta: {
+            ...(base?.meta || {}),
+            pred_ts_utc: latestPredTs ?? null,   // quand le modèle a tourné
+            target_ts_utc: latestTarget ?? null, // pour quand la prévision s'applique
+            forecast_hour: forecastHourParis,    // HH:mm Paris de la cible
+            freshness_min: ageMin ?? null,       // âge des données
+          },
+        })
+      } catch (err) {
+        console.error('[loadOnce]', err)
+      }
+    }
 
+    loadOnce()
+    const id = setInterval(loadOnce, 5 * 60 * 1000)
     return () => {
-      alive = false;
-      clearInterval(id);
-      document.removeEventListener('visibilitychange', onVis);
-    };
-  }, []);
+      alive = false
+      clearInterval(id)
+    }
+  }, [])
 
-  // ─────────────── Géoloc utilisateur ───────────────
+  // geoloc + recadrage 1x
   useEffect(() => {
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        pos => setUserPos([pos.coords.latitude, pos.coords.longitude]),
-        err => console.warn(err),
-        { enableHighAccuracy: true }
-      );
+        pos => {
+          const p: [number, number] = [pos.coords.latitude, pos.coords.longitude]
+          setUserPos(p)
+          if (!userCenteredOnce.current) {
+            userCenteredOnce.current = true
+            setCenter(p)
+            mapRef.current?.setView?.(p, 14)
+          }
+        },
+        err => console.warn('[geoloc]', err),
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 15000 }
+      )
     }
-  }, []);
+  }, [])
 
-  // ─────────────── Calculs dérivés ───────────────
   const stationsWithGeo = useMemo(
     () =>
       stations.filter(
@@ -179,52 +188,77 @@ export default function HomePage() {
           Number.isFinite((s as any).lon)
       ),
     [stations]
-  );
+  )
 
-  const forecastByCode = useMemo(
-    () => new Map(forecast.map(f => [String((f as any).stationcode), f])),
-    [forecast]
-  );
+  // index par station_id
+  const forecastByKey = useMemo(() => {
+    const m = new Map<string, any>()
+    ;(forecast as any[]).forEach(f => {
+      const id = f?.station_id
+      if (id != null && String(id).trim() !== '') m.set(String(id), f)
+    })
+    return m
+  }, [forecast])
 
   const kpis = useMemo(() => {
-    if (!stations.length) return { total: 0, bikes: 0, predBikes: 0 };
-    const bikes = stations.reduce((acc, s) => acc + toNumber((s as any).num_bikes_available, 0), 0);
-    const predBikes = stations.reduce(
-      (acc, s) => acc + getPred(forecastByCode.get(String((s as any).stationcode))),
-      0
-    );
-    return { total: stations.length, bikes, predBikes };
-  }, [stations, forecastByCode]);
+    if (!stations.length) return { total: 0, bikes: 0, predBikes: 0 }
+    const bikes = stations.reduce((acc, s) => acc + toNumber((s as any).num_bikes_available, 0), 0)
+    const predBikes = stations.reduce((acc, s) => {
+      const k = keyFor(s as any)
+      const f = k ? forecastByKey.get(k) : undefined
+      return acc + getPred(f)
+    }, 0)
+    return { total: stations.length, bikes, predBikes }
+  }, [stations, forecastByKey])
+
+  // Heure de prévision (affichage) = target_ts_utc
+  const forecastHourParis = useMemo(() => {
+    const latestTarget = latestIso(forecast as any[], 'target_ts_utc')
+    return parisHHmmAt(latestTarget)
+  }, [forecast])
+
+  // distance haversine (m)
+  const R = 6371000
+  const toRad = (deg: number) => (deg * Math.PI) / 180
+  const haversine = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const dLat = toRad(lat2 - lat1)
+    const dLon = toRad(lon2 - lon1)
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2
+    return 2 * R * Math.asin(Math.sqrt(a))
+  }
 
   const nearby = useMemo(() => {
-    if (!userPos || !stationsWithGeo.length || !Array.isArray(forecast)) return [];
+    if (!stationsWithGeo.length || !Array.isArray(forecast)) return []
+    const user = userPos ?? center
     return stationsWithGeo
       .map((s: any) => {
-        const pred = getPred(forecastByCode.get(String(s.stationcode)));
-        const d = Math.hypot(Number(s.lat) - userPos[0], Number(s.lon) - userPos[1]);
-        return { ...s, pred, distance: d };
+        const k = keyFor(s)
+        const f = k ? forecastByKey.get(k) : undefined
+        const pred = getPred(f)
+        const d = haversine(Number(s.lat), Number(s.lon), user[0], user[1])
+        return { ...s, pred, distance: d }
       })
       .filter(s => s.pred >= 2)
       .sort((a, b) => a.distance - b.distance)
-      .slice(0, NEARBY_LIMIT);
-  }, [stationsWithGeo, forecast, forecastByCode, userPos]);
+      .slice(0, 10)
+  }, [stationsWithGeo, forecast, forecastByKey, userPos, center])
 
-  // ─────────────── UI ───────────────
   return (
     <div className="container">
       <Head>
-        <title>Vélib’ Paris — Disponibilités en temps réel et prévisions à 15 minutes</title>
-        <meta
-          name="description"
-          content="Consultez en direct les vélos disponibles dans chaque station Vélib’ à Paris et découvrez les prévisions à 15 minutes."
-        />
+        <title>Vélib’ Paris — Disponibilités et prévisions</title>
+        <meta name="description" content="Disponibilités temps réel et prévisions courtes." />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
 
       <header className="header">
         <h1>
           <span>Vélib’ Paris</span>
-          <span className="subtitle">Disponibilités en temps réel · Prévisions à +15 min</span>
+          <span className="subtitle">
+            Disponibilités en temps réel · Prévision {forecastHourParis}
+          </span>
         </h1>
       </header>
 
@@ -233,12 +267,12 @@ export default function HomePage() {
           <div className="map-fill">
             <MapView
               stations={stationsWithGeo as Station[]}
-              forecast={forecast}
+              forecast={forecast as Forecast[]}
               mode="t15"
               center={center}
               userPos={userPos}
               setMapInstance={(m: LeafletMap) => {
-                mapRef.current = m;
+                mapRef.current = m
               }}
             />
           </div>
@@ -246,11 +280,7 @@ export default function HomePage() {
 
         <aside className="panel side-panel">
           <div className="badges" style={{ marginBottom: 8 }}>
-            {badges ? (
-              <BadgesBar data={badges} />
-            ) : (
-              <div className="small">Badges en cours de chargement…</div>
-            )}
+            {badges ? <BadgesBar data={badges} /> : <div className="small">Chargement…</div>}
           </div>
 
           <div className="kpi">
@@ -268,37 +298,46 @@ export default function HomePage() {
             </div>
           </div>
 
-          <h3 style={{ margin: '20px 0 10px', fontSize: '1rem' }}>Stations proches</h3>
+          <h3 style={{ margin: '20px 0 10px', fontSize: '1rem' }}>
+            Stations proches · prévision {forecastHourParis}
+          </h3>
+
           <div className="list">
-            {nearby.map(s => (
+            {nearby.map((s: any) => (
               <div
-                key={(s as any).stationcode}
+                key={String(s.station_id)}
                 className="row"
                 style={{ background: 'rgba(255,255,255,0.03)', marginBottom: 6, padding: 8 }}
               >
                 <div>
-                  <div style={{ fontWeight: 700 }}>{(s as any).name ?? (s as any).stationcode}</div>
-                  <div className="small">#{(s as any).stationcode}</div>
+                  <div style={{ fontWeight: 700 }}>{s.name ?? s.station_id}</div>
+                  <div className="small">#{String(s.station_id)}</div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  <div className="small">T+15</div>
+                  <div className="small">{forecastHourParis}</div>
                   <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>
-                    {getPred(forecastByCode.get(String((s as any).stationcode)))}
+                    {getPred(forecastByKey.get(String(s.station_id)))}
                   </div>
                 </div>
               </div>
             ))}
-            {!nearby.length && <div className="small">Aucune station proche avec ≥2 vélos prévus</div>}
+            {!nearby.length && (
+              <div className="small">Aucune station proche avec ≥2 vélos prévus</div>
+            )}
           </div>
         </aside>
       </main>
 
       <footer className="footer footer--sticky">
         Fait avec ❤️ par{' '}
-        <a href="https://www.linkedin.com/in/adrien-morel/" target="_blank" rel="noopener noreferrer">
+        <a
+          href="https://www.linkedin.com/in/adrien-morel/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
           Adrien
         </a>
       </footer>
     </div>
-  );
+  )
 }

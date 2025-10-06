@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 from io import BytesIO
 from typing import List, Tuple
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date  # ← NEW
 
 import pandas as pd
 
@@ -167,6 +167,20 @@ def _is_closed_day(day: str) -> bool:
     d = datetime.strptime(day, "%Y-%m-%d").date()
     return d < today
 
+def _infer_single_day_from_tbin(df: pd.DataFrame) -> date:
+    """
+    Déduit le jour UTC unique présent dans tbin_utc.
+    Lève une erreur si plusieurs jours coexistent.
+    """
+    if "tbin_utc" not in df.columns or df["tbin_utc"].isna().all():
+        raise RuntimeError("[daily] impossible d'inférer la date: tbin_utc absent ou vide")
+    days = df["tbin_utc"].dt.normalize().dt.date.unique()
+    if len(days) == 0:
+        raise RuntimeError("[daily] aucune date détectée dans tbin_utc")
+    if len(days) > 1:
+        raise RuntimeError(f"[daily] plusieurs dates détectées dans les snapshots: {sorted(map(str, days))}")
+    return days[0]
+
 # ───────────────────────────── Main ─────────────────────────────
 
 def main():
@@ -219,9 +233,14 @@ def main():
     stations_present = df_all["station_id"].nunique()
     print(f"[daily] bins_present={bins_present} | stations_present={stations_present}")
 
-    out_key_final = f"compact_{DAY}.parquet"
+    # ← NEW: inférer la vraie date des snapshots
+    day_actual = _infer_single_day_from_tbin(df_all)
+    if str(day_actual) != DAY:
+        print(f"[daily][note] inferred day from data = {day_actual} (env DAY was {DAY})")
+
+    out_key_final = f"compact_{day_actual.isoformat()}.parquet"  # ← NEW
     out_final = f"{DAILY_PREFIX.rstrip('/')}/{out_key_final}"
-    out_tmp   = f"{DAILY_PREFIX.rstrip('/')}/_tmp_compact_{DAY}_{int(datetime.now(timezone.utc).timestamp())}.parquet"
+    out_tmp   = f"{DAILY_PREFIX.rstrip('/')}/_tmp_compact_{day_actual.isoformat()}_{int(datetime.now(timezone.utc).timestamp())}.parquet"  # ← NEW
 
     _upload_parquet_df(df_all, out_tmp)
     _copy_blob(out_tmp, out_final)
@@ -229,11 +248,11 @@ def main():
     print(f"[daily] wrote {len(df_all):,} rows → {out_final}")
 
     # Rolling logic: purge uniquement si jour clos ET deletion activée
-    if DELETE_FLAG and _is_closed_day(DAY):
-        _purge_prefix_tree(RAW_PREFIX, DAY)
-        print(f"[daily] deleted snapshots & markers under {RAW_PREFIX}/date={DAY}/")
+    if DELETE_FLAG and _is_closed_day(day_actual.isoformat()):  # ← NEW
+        _purge_prefix_tree(RAW_PREFIX, day_actual.isoformat())  # ← NEW
+        print(f"[daily] deleted snapshots & markers under {RAW_PREFIX}/date={day_actual}/")
     else:
-        print(f"[daily] keeping snapshots for {DAY} (open day or DELETE_AFTER_COMPACT=0)")
+        print(f"[daily] keeping snapshots for {day_actual} (open day or DELETE_AFTER_COMPACT=0)")
 
     print("[daily] done")
     return 0
