@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Response
-from api.core.weather_live import fetch_live_weather
+from core.weather_live import fetch_live_weather
 
 router = APIRouter(prefix="/weather", tags=["weather"])
 

@@ -1,13 +1,30 @@
 substitutions:
   _REGION: europe-west1
   _PROJECT: velib-forecast-472820
-  _REPO: velib
-  _IMAGE: velib-ui
+  _REPO: velib-docker
+  _IMAGE: ui
+  _NEXT_PUBLIC_API_BASE: https://velib-api-160046094975.europe-west1.run.app
 
 steps:
 - name: gcr.io/cloud-builders/docker
-  args: ["build","-f","ui/Dockerfile",
-         "-t","${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID",
-         "ui"]
+  args:
+    - build
+    - -f
+    - ui/Dockerfile
+    - -t
+    - ${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID
+    - -t
+    - ${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:latest
+    - --build-arg
+    - NEXT_PUBLIC_API_BASE=${_NEXT_PUBLIC_API_BASE}
+    - ui
+
+- name: gcr.io/cloud-builders/docker
+  args: ["push", "${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID"]
+
+- name: gcr.io/cloud-builders/docker
+  args: ["push", "${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:latest"]
+
 images:
 - ${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:$BUILD_ID
+- ${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:latest

@@ -7,8 +7,8 @@ import pandas as pd
 from fastapi import APIRouter, Body, HTTPException, Query, Response
 from google.api_core.exceptions import NotFound  # type: ignore
 
-from api.core.forecast_reader import load_latest_forecast
-from api.core.settings import settings
+from core.forecast_reader import load_latest_forecast
+from core.settings import settings
 
 router = APIRouter(prefix="/forecast", tags=["forecast"])
 

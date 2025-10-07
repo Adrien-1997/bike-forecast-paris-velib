@@ -81,7 +81,7 @@ export default function MapView({ stations, forecast, mode, center }: MapViewPro
 
   const markers = useMemo(() =>
     stationsWithGeo.map(s => {
-      const k = keyFor(s as any) ?? String(s.stationcode)
+      const k = keyFor(s as any) ?? String(s.station_id)
       const f = k ? forecastByKey.get(k) : undefined
 
       const current = toNumber(s.num_bikes_available, 0)
@@ -124,11 +124,11 @@ export default function MapView({ stations, forecast, mode, center }: MapViewPro
       const delta = pred - current
 
       return (
-        <Marker key={String(s.stationcode)} position={[s.lat, s.lon]} icon={divIcon as any}>
+        <Marker key={String(s.station_id)} position={[s.lat, s.lon]} icon={divIcon as any}>
           <Popup>
             <div style={{ minWidth: 220 }}>
-              <div style={{ fontWeight: 700 }}>{s.name ?? s.stationcode}</div>
-              <div className="small">#{s.stationcode} • Cap: {cap}</div>
+              <div style={{ fontWeight: 700 }}>{s.name ?? s.station_id}</div>
+              <div className="small">#{s.station_id} • Cap: {cap}</div>
               <div style={{ marginTop: 6 }}>
                 <div>Actuel: <b>{current}</b></div>
                 <div>

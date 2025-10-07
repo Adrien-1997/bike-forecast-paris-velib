@@ -9,7 +9,7 @@ import httpx
 import pandas as pd
 from fastapi import APIRouter, Response
 
-from api.core.settings import settings
+from core.settings import settings
 
 try:
     from google.cloud import storage  # type: ignore

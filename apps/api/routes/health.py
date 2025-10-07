@@ -6,7 +6,7 @@ import datetime as dt
 from typing import Dict, Any, Optional, List
 
 from fastapi import APIRouter
-from api.core.settings import settings
+from core.settings import settings
 
 try:
     from google.cloud import storage  # type: ignore

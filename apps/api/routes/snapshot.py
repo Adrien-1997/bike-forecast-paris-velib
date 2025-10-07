@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from api.core.snapshot_live import fetch_live_snapshot
+from core.snapshot_live import fetch_live_snapshot
 
 router = APIRouter(prefix="/snapshot", tags=["snapshot"])
 

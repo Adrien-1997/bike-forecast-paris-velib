@@ -1,8 +1,11 @@
 // ui/lib/http.ts
-// Centralized HTTP utility — simplified (no cache, no dedupe, no retries)
+// Centralized HTTP utility — no cache/dedupe/retries, with timeout + JSON helpers.
 
 export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8081';
+  (process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8081").replace(/\/$/, "");
+
+// (optional debug – safe to keep)
+console.log("[http] API_BASE =", process.env.NEXT_PUBLIC_API_BASE || "<empty>");
 
 type JsonInit = RequestInit & {
   timeoutMs?: number;
@@ -16,10 +19,7 @@ type JsonInit = RequestInit & {
 function withTimeout(ms = 10_000) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), ms);
-  return {
-    signal: ctrl.signal,
-    done: () => clearTimeout(id),
-  };
+  return { signal: ctrl.signal, done: () => clearTimeout(id) };
 }
 
 // ───────────────────────────────
@@ -27,8 +27,8 @@ function withTimeout(ms = 10_000) {
 // ───────────────────────────────
 
 export async function json<T>(path: string, init: JsonInit = {}): Promise<T> {
-  const tsParam = `_ts=${Date.now()}`; // always bust browser cache
-  const url = `${API_BASE}${path}${path.includes('?') ? '&' : '?'}${tsParam}`;
+  const tsParam = `_ts=${Date.now()}`; // bust browser cache
+  const url = `${API_BASE}${path}${path.includes("?") ? "&" : "?"}${tsParam}`;
 
   const { timeoutMs = 10_000, noCache = true, ...rest } = init;
   const t = withTimeout(timeoutMs);
@@ -37,26 +37,26 @@ export async function json<T>(path: string, init: JsonInit = {}): Promise<T> {
     const res = await fetch(url, {
       ...rest,
       headers: {
-        accept: 'application/json',
-        'Content-Type': 'application/json',
+        accept: "application/json",
+        "Content-Type": "application/json",
         ...(rest.headers || {}),
       },
-      cache: noCache ? 'no-store' : rest.cache,
+      cache: noCache ? "no-store" : rest.cache,
       signal: t.signal,
     });
 
     const text = await res.text();
 
     if (!res.ok) {
-      console.error('[http] error', res.status, res.statusText, text.slice(0, 500));
+      console.error("[http] error", res.status, res.statusText, text.slice(0, 500));
       throw new Error(`${res.status} ${res.statusText}`);
     }
 
     try {
       return JSON.parse(text) as T;
     } catch {
-      console.error('[http] non-JSON body:', text.slice(0, 800));
-      throw new Error('Invalid JSON response');
+      console.error("[http] non-JSON body:", text.slice(0, 800));
+      throw new Error("Invalid JSON response");
     }
   } finally {
     t.done();
@@ -64,16 +64,22 @@ export async function json<T>(path: string, init: JsonInit = {}): Promise<T> {
 }
 
 // ───────────────────────────────
-// Convenience wrappers (optionnels)
+// Convenience wrappers
 // ───────────────────────────────
 
-export const getJSON = <T>(path: string, init: Omit<JsonInit, 'method' | 'body'> = {}) =>
-  json<T>(path, { ...init, method: 'GET' });
+export const getJSON = <T>(
+  path: string,
+  init: Omit<JsonInit, "method" | "body"> = {}
+) => json<T>(path, { ...init, method: "GET" });
 
-export const postJSON = <T>(path: string, body?: unknown, init: Omit<JsonInit, 'method'> = {}) =>
+export const postJSON = <T>(
+  path: string,
+  body?: unknown,
+  init: Omit<JsonInit, "method"> = {}
+) =>
   json<T>(path, {
     ...init,
-    method: 'POST',
+    method: "POST",
     body: body == null ? undefined : JSON.stringify(body),
   });
 
@@ -82,17 +88,22 @@ export const postJSON = <T>(path: string, body?: unknown, init: Omit<JsonInit, '
 // ───────────────────────────────
 
 /**
- * Extrait toujours un tableau de lignes de prévision, peu importe la forme renvoyée.
+ * Normalize forecast payload to a flat array of rows, regardless of shape:
  * - [{...}]
  * - { data: { "15": [ {...} ] }, generated_at, horizons }
  * - { predictions: [ {...} ] }
  */
 export function selectForecastRows(payload: any, horizonMin = 15): any[] {
   if (Array.isArray(payload)) return payload;
-  if (payload?.data?.[String(horizonMin)] && Array.isArray(payload.data[String(horizonMin)])) {
-    return payload.data[String(horizonMin)];
-  }
+  const k = String(horizonMin);
+  if (payload?.data?.[k] && Array.isArray(payload.data[k])) return payload.data[k];
   if (Array.isArray(payload?.predictions)) return payload.predictions;
-  console.warn('[selectForecastRows] unexpected payload shape:', payload);
+  console.warn("[selectForecastRows] unexpected payload shape:", payload);
   return [];
+}
+
+/** Convenience: always return an array of forecast rows for a given horizon. */
+export async function getForecastRows(horizonMin = 15) {
+  const payload = await getJSON(`/forecast/latest?h=${horizonMin}`);
+  return selectForecastRows(payload, horizonMin);
 }

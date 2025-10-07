@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter
 
-from api.core.settings import settings
-from api.core.snapshot_live import fetch_live_snapshot
+from core.settings import settings
+from core.snapshot_live import fetch_live_snapshot
 
 try:
     from google.cloud import storage  # type: ignore

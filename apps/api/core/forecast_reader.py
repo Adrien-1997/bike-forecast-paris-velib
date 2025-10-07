@@ -167,7 +167,7 @@ def _cache_put(h: int, df: pd.DataFrame) -> None:
 # ───────────────────────────────────────────────────────────────
 # Public API
 # ───────────────────────────────────────────────────────────────
-def load_latest_forecast(h: int, station_ids: Optional[List[int]] = None) -> pd.DataFrame:
+def load_latest_forecast(h: int, station_ids: Optional[List[str]] = None) -> pd.DataFrame:
     """
     Nouveau format principal: SERVING_FORECAST_PREFIX/latest_forecast.json
       {
@@ -224,10 +224,12 @@ def load_latest_forecast(h: int, station_ids: Optional[List[int]] = None) -> pd.
                 # Nothing found
                 raise NotFound(f"No forecast found for horizon {h}")
 
-    # Filter station_ids if requested
+    # ───────────────────────────────────────────────
+    # Filter station_ids if requested (string-safe)
+    # ───────────────────────────────────────────────
     if station_ids:
-        sset = {int(x) for x in station_ids if x is not None}
+        sset = {str(x).strip() for x in station_ids if x is not None}
         if "station_id" in df.columns and sset:
-            df = df[df["station_id"].isin(list(sset))].reset_index(drop=True)
+            df = df[df["station_id"].astype(str).isin(sset)].reset_index(drop=True)
 
     return df

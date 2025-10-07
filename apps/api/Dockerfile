@@ -5,18 +5,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    TZ=Europe/Paris \
-    PYTHONPATH=/app
+    TZ=Europe/Paris
 
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/*
 
 # deps
-COPY apps/api/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt ./requirements.txt
+RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
-# code
-COPY apps/api/ /app/api/
+# code (flat: app.py + routes/)
+COPY . /app
 
-# Cloud Run listens on $PORT; default 8080
 ENV PORT=8080
-CMD exec uvicorn api.app:app --host 0.0.0.0 --port ${PORT}
+EXPOSE 8080
+
+CMD exec uvicorn app:app --host 0.0.0.0 --port ${PORT} --workers 1
