@@ -12,7 +12,7 @@ pd.set_option("display.max_colwidth", 200)
 # =========================
 # 1) Charger le fichier
 # =========================
-path = Path(r"H:\Downloads\velib_bronze_date=2025-10-06_hour=13_2025-10-06T13-35.parquet")
+path = Path(r"H:\Downloads\velib_monitoring_health_7d_20251008.parquet")
 if not path.exists():
     raise FileNotFoundError(f"Fichier introuvable: {path}")
 

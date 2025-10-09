@@ -22,7 +22,7 @@ import pandas as pd
 try:
     from .cal_features import add_time_features
 except Exception:
-    from service.train.cal_features import add_time_features
+    from service.core.cal_features import add_time_features
 
 BASE_COLUMNS = [
     "ts_utc","tbin_utc","station_id","bikes","capacity","mechanical","ebike",

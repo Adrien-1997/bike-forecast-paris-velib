@@ -1,4 +1,4 @@
-# service/pipeline/build_features_4h.py
+# service/jobs/build_serving_forecast.py
 from __future__ import annotations
 import os, sys, shutil, json
 from pathlib import Path
@@ -11,75 +11,54 @@ import pandas as pd
 from google.cloud import storage
 
 # ─────────────────────────────────────────────
-#  Fix import path (locate repo root that contains 'service/' or 'train/')
+#  Repo root auto-resolution (service/ or train/)
 # ─────────────────────────────────────────────
 def _ensure_repo_root():
-    # 0) déjà importable ?
     if _iu.find_spec("service") is not None or _iu.find_spec("train") is not None:
         return
-
-    # 1) hint env prioritaire
-    root = os.getenv("REPO_ROOT")
-    if root and ((Path(root) / "service").exists() or (Path(root) / "train").exists()):
-        if root not in sys.path:
-            sys.path.insert(0, root)
-        print(f"[features_4h] repo_root from REPO_ROOT: {root}")
-        return
-
-    # 2) scan depuis ce fichier + chemins probables
     here = Path(__file__).resolve()
-    candidates = [here] + list(here.parents) + [Path("/app"), Path.cwd()]
-    for c in candidates:
-        try:
-            if (c / "service").exists() or (c / "train").exists():
-                c_str = str(c)
-                if c_str not in sys.path:
-                    sys.path.insert(0, c_str)
-                print(f"[features_4h] repo_root resolved: {c_str}")
-                return
-        except Exception:
-            pass
-
-    # 3) dernier filet de sécurité : si /app existe, on l’ajoute
-    if Path("/app").exists():
-        if "/app" not in sys.path:
-            sys.path.insert(0, "/app")
-        print("[features_4h] fallback: added /app to sys.path")
-        return
-
-    print("[features_4h][WARN] could not locate repo root containing 'service/' or 'train/'", file=sys.stderr)
+    for c in [here] + list(here.parents) + [Path("/app"), Path.cwd()]:
+        if (c / "service").exists() or (c / "train").exists():
+            if str(c) not in sys.path:
+                sys.path.insert(0, str(c))
+            print(f"[serving_forecast] repo_root={c}")
+            return
+    if Path("/app").exists() and "/app" not in sys.path:
+        sys.path.insert(0, "/app")
+        print("[serving_forecast] fallback /app")
 
 _ensure_repo_root()
 
 # ─────────────────────────────────────────────
-#  Imports depuis service/train (fallback train/* si image aplatie)
+#  Imports training/forecast (multi-layout safe)
 # ─────────────────────────────────────────────
 try:
-    # layout: /app/service/train/...
-    from service.train.cal_features import add_time_features
-    from service.train.features import BASE_COLUMNS as TRAIN_BASE_COLUMNS
-    from service.train.forecast import predict_from_features_df
+    from service.core.cal_features import add_time_features
+    from service.core.features import BASE_COLUMNS as TRAIN_BASE_COLUMNS
+    from service.core.forecast import predict_from_features_df
 except ModuleNotFoundError:
-    # layout: /app/train/...  (build depuis dossier 'service/')
-    from train.cal_features import add_time_features
-    from train.features import BASE_COLUMNS as TRAIN_BASE_COLUMNS
-    from train.forecast import predict_from_features_df
+    try:
+        from service.core.cal_features import add_time_features
+        from service.core.features import BASE_COLUMNS as TRAIN_BASE_COLUMNS
+        from service.core.forecast import predict_from_features_df
+    except ModuleNotFoundError:
+        from service.core.cal_features import add_time_features
+        from service.core.features import BASE_COLUMNS as TRAIN_BASE_COLUMNS
+        from service.core.forecast import predict_from_features_df
 
 # ─────────────────────────────────────────────
-#  Config via ENV
+#  ENV config
 # ─────────────────────────────────────────────
-RAW_PREFIX = os.environ["GCS_RAW_PREFIX"]  # e.g. gs://velib-.../velib/bronze
+RAW_PREFIX = os.environ["GCS_RAW_PREFIX"]
 BIN_MINUTES = 5
 WINDOW_HOURS = int(os.environ.get("WINDOW_HOURS", "4"))
 LAG_MAX_BINS = 48
 WINDOW_BINS = max(WINDOW_HOURS * 60 // BIN_MINUTES, LAG_MAX_BINS + 1)
 
-# Forecast ONLY
-WITH_FORECAST = str(os.environ.get("WITH_FORECAST", "1")).lower() in ("1", "true", "yes", "y")
-SERVING_FORECAST_PREFIX = os.environ.get("SERVING_FORECAST_PREFIX")  # e.g. gs://.../velib/serving/forecast
+WITH_FORECAST = str(os.environ.get("WITH_FORECAST", "1")).lower() in ("1","true","yes")
+SERVING_FORECAST_PREFIX = os.environ.get("SERVING_FORECAST_PREFIX")
 FORECAST_HORIZONS = os.environ.get("FORECAST_HORIZONS", "15,60")
 
-# Model locations (artefacts .joblib)
 GCS_MODEL_URI_T15 = os.environ.get("GCS_MODEL_URI_T15")
 GCS_MODEL_URI_T60 = os.environ.get("GCS_MODEL_URI_T60")
 
@@ -173,23 +152,18 @@ def _read_concat_parquets(files: List[Path]) -> pd.DataFrame:
         df["name"] = df["name"].astype("string")
 
     # ── station_id robuste ─────────────────────────────────────────────
-    # 1) si absent, créer depuis stationcode
     if "station_id" not in df.columns:
         if "stationcode" in df.columns:
             df["station_id"] = df["stationcode"].astype("string")
         else:
             df["station_id"] = pd.NA
-
-    # 2) caster en string
     df["station_id"] = df["station_id"].astype("string")
-
-    # 3) fallback: si station_id vide/NaN → reprendre stationcode (s’il existe)
     if "stationcode" in df.columns:
         sc = df["stationcode"].astype("string")
         m_empty = df["station_id"].isna() | (df["station_id"].str.strip() == "")
         df.loc[m_empty, "station_id"] = sc
 
-    # dédoublonnage (dernier snapshot par (station_id, tbin_utc))
+    # dédoublonnage
     if set(["station_id","tbin_utc","ts_utc"]).issubset(df.columns):
         df = df.sort_values(["station_id","tbin_utc","ts_utc"])
         df = df.groupby(["station_id","tbin_utc"], as_index=False, dropna=True).tail(1).reset_index(drop=True)
@@ -459,12 +433,11 @@ def main() -> int:
             consolidated[str(hmin)] = []
             continue
 
-        # ── Normalisation & enrichissement pour l’UI ─────────────────────────
         # Réindexer pour alignement positionnel sûr
         preds = preds.reset_index(drop=True).copy()
         feats_idx = feats.reset_index(drop=True).copy()
 
-        # station_id : forcer depuis feats (string), même si déjà présent côté modèle
+        # station_id : forcer depuis feats (string)
         preds["station_id"] = feats_idx["station_id"].astype("string")
 
         # tbin_latest & capacity_bin utiles au front
@@ -490,7 +463,6 @@ def main() -> int:
                 .astype("Int64")
             )
 
-        # échantillon log
         try:
             print("[forecast][sample]",
                   preds[["station_id","bikes_pred","bikes_pred_int"]].head(3).to_dict("records"))

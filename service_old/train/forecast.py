@@ -198,7 +198,7 @@ def _import_build_training_frame():
     except ModuleNotFoundError:
         pass
     try:
-        from service.train.features import build_training_frame  # type: ignore
+        from service.core.features import build_training_frame  # type: ignore
         return build_training_frame
     except ModuleNotFoundError as e:
         raise RuntimeError("Missing 'train.features.build_training_frame' (or 'service.train.features').") from e
@@ -256,7 +256,7 @@ def _import_training_utils_for_offline():
         pass
     # layout service
     try:
-        from service.train.features import (  # type: ignore
+        from service.core.features import (  # type: ignore
             _read_many_parquets,
             _coerce_types,
             _dedupe_per_bin,

@@ -1,0 +1,8 @@
+﻿.venv
+**/__pycache__/
+**/.DS_Store
+logs/**
+data/**
+exports/**
+*.duckdb
+*.parquet

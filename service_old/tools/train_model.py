@@ -207,7 +207,7 @@ def main() -> int:
             module_name = "service.tools.forecast"
         except ModuleNotFoundError:
             try:
-                import service.train.forecast  # layout racine, ancien module
+                import service.core.forecast  # layout racine, ancien module
                 module_name = "service.train.forecast"
             except ModuleNotFoundError:
                 import train.forecast          # layout aplati
