@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     # In-memory cache TTL for reading latest_* bundles (seconds)
     FORECAST_CACHE_TTL_SECONDS: int = 120
 
+    # ---------- Monitoring JSON root (NEW) ----------
+    # Root used by monitoring endpoints (manifest, perf, network, drift, docs)
+    GCS_MONITORING_PREFIX: str = "gs://velib-forecast-472820_cloudbuild/velib/monitoring"
+
     # ---------- Weather (live) ----------
     OPENMETEO_URL: str = "https://api.open-meteo.com/v1/forecast"
     OPENMETEO_LAT: float = 48.8566
@@ -120,6 +124,10 @@ class Settings(BaseSettings):
             object.__setattr__(self, "gcs_serving_prefix", self.GCS_SERVING_PREFIX)
         if not getattr(self, "models_prefix", None):
             object.__setattr__(self, "models_prefix", self.GCS_MODEL_URI)
+
+        # 5) Normalize monitoring prefix (strip trailing slash)
+        if getattr(self, "GCS_MONITORING_PREFIX", None):
+            object.__setattr__(self, "GCS_MONITORING_PREFIX", self.GCS_MONITORING_PREFIX.rstrip("/"))
 
 
 # ---------- Singleton ----------
