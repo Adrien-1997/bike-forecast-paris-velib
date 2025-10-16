@@ -19,20 +19,9 @@ except Exception:
 # ───────────────────────── Routes legacy ─────────────────────────
 from .routes import health, stations, forecast, history, badges, snapshot, weather  # type: ignore
 
-# ───────────────────────── Routes monitoring (import tolérant + log erreur) ─────────────────────────
-_monitoring_import_ok = False
-try:
-    from .routes.monitoring import manifest as mon_manifest  # type: ignore
-    from .routes.monitoring import perf as mon_perf          # type: ignore
-    from .routes.monitoring import network as mon_network    # type: ignore
-    from .routes.monitoring import drift as mon_drift        # type: ignore
-    from .routes.monitoring import docs as mon_docs          # type: ignore
-    _monitoring_import_ok = True
-except Exception as e:
-    import traceback
-    print("[monitoring import error]", e)
-    traceback.print_exc()
-    _monitoring_import_ok = False
+# ───────────────────────── Routes monitoring ─────────────────────────
+from .routes.monitoring import network_overview, network_dynamics, network_stations  # type: ignore
+from .routes.monitoring import model_performance,model_explainability  # ✅ le router modèle est bien dans routes/monitoring/
 
 # ───────────────────────── App ─────────────────────────
 app = FastAPI(title="velib-api", version="0.2.0")
@@ -60,13 +49,13 @@ app.include_router(badges.router)
 app.include_router(snapshot.router)
 app.include_router(weather.router)
 
-# Monitoring (seulement si les imports ont réussi)
-if _monitoring_import_ok:
-    app.include_router(mon_manifest.router)
-    app.include_router(mon_perf.router)
-    app.include_router(mon_network.router)
-    app.include_router(mon_drift.router)
-    app.include_router(mon_docs.router)
+# Monitoring
+app.include_router(network_overview.router)   # /monitoring/network/overview/*
+app.include_router(network_dynamics.router)   # /monitoring/network/dynamics/*
+app.include_router(network_stations.router)   # /monitoring/network/stations/*
+app.include_router(model_performance.router)  # /monitoring/model/*
+app.include_router(model_explainability.router)  # /monitoring/model/*
+
 
 # ───────────────────────── Debug: listing des routes au démarrage ─────────────────────────
 @app.on_event("startup")
@@ -79,4 +68,3 @@ async def _print_routes() -> None:
         except Exception:
             pass
     print("=======================")
-

@@ -1,0 +1,161 @@
+/* ========== Monitoring design system (inspiré de pages/index) ========== */
+:root {
+  --bg-card: rgba(15, 23, 42, 0.4);        /* slate-900/40 */
+  --bg-kpi:  rgba(15, 23, 42, 0.5);
+  --bg-dev:  rgba(15, 23, 42, 0.3);
+  --bg-notice-warn: rgba(234,179,8,.08);
+
+  --bd-soft: #374151;   /* slate-700 */
+  --bd-mid:  #e5e7eb;   /* gray-200 */
+  --bd-pill: #d1d5db;   /* gray-300 */
+
+  --tx-100: #111827;    /* gray-900 */
+  --tx-200: #9CA3AF;    /* gray-400 */
+  --tx-300: #E5E7EB;    /* gray-200 */
+  --tx-link: #60A5FA;   /* blue-400 */
+
+  --ring-ok:    #10B981; /* green-500 */
+  --ring-warn:  #F59E0B; /* amber-500 */
+  --ring-danger:#EF4444; /* red-500 */
+
+  --radius: 12px;
+  --radius-pill: 999px;
+
+  --page-max: 1200px;
+  --page-pad: 2rem;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg-card: #ffffff;
+    --bg-kpi:  #ffffff;
+    --bg-dev:  #ffffff;
+    --bg-notice-warn: #FFF8E1;
+
+    --bd-soft: #e5e7eb;
+    --bd-mid:  #e5e7eb;
+    --bd-pill: #d1d5db;
+
+    --tx-100: #111827;
+    --tx-200: #6B7280;
+    --tx-300: #111827;
+    --tx-link: #2563EB;
+  }
+}
+
+/* ----- Layout ----- */
+.mon-main {
+  padding: var(--page-pad);
+  max-width: var(--page-max);
+  margin: 0 auto;
+}
+
+.mon-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.mon-title { margin: 0; }
+.small     { font-size: 0.875rem; opacity: 0.7; }
+
+/* ----- Navigation pills ----- */
+.mon-nav {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.pill {
+  padding: 6px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--bd-pill);
+  background: #111827;
+  color: #fff;
+  text-decoration: none;
+  font-size: 14px;
+}
+.pill--off {
+  background: #fff;
+  color: var(--tx-100);
+  opacity: .5;
+  pointer-events: none;
+}
+
+/* ----- Cards / KPIs / Sections ----- */
+.section { margin-top: 24px; }
+.section-lg { margin-top: 28px; }
+
+.grid-2, .grid-3, .grid-4, .grid-5 {
+  display: grid; gap: 12px;
+}
+.grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.grid-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+
+.card {
+  border: 1px solid var(--bd-soft);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  padding: 12px;
+}
+
+.kpi {
+  border: 1px solid var(--bd-soft);
+  border-radius: var(--radius);
+  background: var(--bg-kpi);
+  padding: 10px 12px;
+}
+.kpi .kpi-label {
+  font-size: 12px; color: var(--tx-200); text-transform: uppercase;
+}
+.kpi .kpi-value {
+  font-size: 22px; color: var(--tx-300); font-weight: 600; margin-top: 2px;
+}
+.kpi--ring-ok    { border-color: var(--ring-ok); }
+.kpi--ring-warn  { border-color: var(--ring-warn); }
+.kpi--ring-danger{ border-color: var(--ring-danger); }
+
+/* ----- Dev tool / notice ----- */
+.dev {
+  border: 1px dashed var(--bd-soft);
+  padding: 12px; border-radius: var(--radius);
+  background: var(--bg-dev);
+}
+.notice-warn {
+  border: 1px solid #eab308;
+  background: var(--bg-notice-warn);
+  color: #F59E0B;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+/* ----- Links ----- */
+.anchor-like { color: var(--tx-link); text-decoration: underline; cursor: pointer; }
+
+/* ----- Inputs / Buttons ----- */
+.btn {
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--bd-pill);
+  background: #111827; color: white;
+}
+.btn--ghost { background: white; color: var(--tx-100); }
+.btn[disabled] { opacity: .6; cursor: not-allowed; }
+
+.input {
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--bd-mid); min-width: 260px;
+}
+
+/* ----- Tables / Code ----- */
+.table-wrap { overflow-x: auto; }
+.table {
+  width: 100%; border-collapse: collapse;
+}
+pre.code {
+  background: #0b1220; color: #d1d5db; padding: 1rem;
+  border-radius: 8px; overflow-x: auto; max-height: 50vh; margin-top: 8px;
+}
+
+/* ----- Utilities ----- */
+.mt-12 { margin-top: 12px; }
+.mt-16 { margin-top: 16px; }
+.mt-24 { margin-top: 24px; }
+.mt-28 { margin-top: 28px; }

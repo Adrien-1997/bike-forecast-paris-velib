@@ -14,7 +14,7 @@
 #   DELETE_AFTER_COMPACT = 1|0  (défaut 1)  —> ET seulement si day < today_UTC
 #
 # Exécution :
-#   python -m jobs.compact_daily
+#   python -m service.jobs.compact_daily
 
 from __future__ import annotations
 
@@ -56,9 +56,6 @@ def _list_day_parquets(raw_prefix: str, day: str) -> List[storage.Blob]:
     return [b for b in cli.list_blobs(bkt, prefix=pfx) if b.name.endswith(".parquet")]
 
 def _day_from_blob_path(blob: storage.Blob) -> str | None:
-    """
-    Extrait 'YYYY-MM-DD' depuis un chemin contenant '.../date=YYYY-MM-DD/...'.
-    """
     name = blob.name
     i = name.find("date=")
     if i == -1:
@@ -133,13 +130,25 @@ def _purge_prefix_tree(raw_prefix: str, day: str):
 
 # ───────────────────── Normalisation & Qualité ─────────────────────
 
+def _to_naive_utc(s: pd.Series) -> pd.Series:
+    """
+    Parse en UTC et rend naïf (horodatage UTC conservé).
+    - Naive → localise en UTC.
+    - Aware → convertit vers UTC.
+    - Sortie dtype datetime64[ns] naïf (UTC).
+    """
+    x = pd.to_datetime(s, utc=True, errors="coerce")
+    return x.dt.tz_convert("UTC").dt.tz_localize(None)
+
 def _enforce_schema(df: pd.DataFrame) -> pd.DataFrame:
     for c in COLS:
         if c not in df.columns:
             df[c] = None
+
     out = pd.DataFrame({
-        "ts_utc":     pd.to_datetime(df["ts_utc"],   utc=True, errors="coerce").dt.tz_convert(None),
-        "tbin_utc":   pd.to_datetime(df["tbin_utc"], utc=True, errors="coerce").dt.tz_convert(None),
+        "ts_utc":     _to_naive_utc(df["ts_utc"]),
+        # IMPORTANT: respecter tbin_utc source si présent
+        "tbin_utc":   _to_naive_utc(df["tbin_utc"]) if "tbin_utc" in df.columns else pd.NaT,
         "station_id": pd.to_numeric(df["station_id"], errors="coerce"),
         "bikes":      pd.to_numeric(df["bikes"],      errors="coerce"),
         "capacity":   pd.to_numeric(df["capacity"],   errors="coerce"),
@@ -153,16 +162,45 @@ def _enforce_schema(df: pd.DataFrame) -> pd.DataFrame:
         "precip_mm":  pd.to_numeric(df["precip_mm"],  errors="coerce"),
         "wind_mps":   pd.to_numeric(df["wind_mps"],   errors="coerce"),
     })
+
+    # station_id numérique dans la daily
     out["station_id"] = out["station_id"].astype("Int64")
     for c in ["bikes","capacity","mechanical","ebike"]:
         out[c] = out[c].astype("Int64")
+
     return out[COLS]
+
+def _ensure_5min_grid(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Garantit que tbin_utc est calé sur une grille 5 min.
+    - Remplit uniquement les tbin_utc manquants à partir de ts_utc.floor('5min').
+    - Pour les tbin_utc présents mais off-grid, les rabat sur floor('5min') (peu fréquent).
+    """
+    tbin = df["tbin_utc"].copy()
+
+    # Remplir les NaT à partir de ts_utc
+    mask_nat = tbin.isna()
+    if mask_nat.any():
+        tbin.loc[mask_nat] = pd.to_datetime(df.loc[mask_nat, "ts_utc"]).dt.floor("5min")
+
+    # Corriger les valeurs hors-grille (pas multiple de 5 minutes)
+    # On détecte en regardant les minutes % 5 ou les secondes non nulles
+    minutes = tbin.dt.minute
+    seconds = tbin.dt.second
+    offgrid = ((minutes % 5) != 0) | (seconds != 0)
+    if offgrid.any():
+        n = int(offgrid.sum())
+        print(f"[daily] fixing {n} tbin_utc values to 5-min floor")
+        tbin.loc[offgrid] = tbin.loc[offgrid].dt.floor("5min")
+
+    df["tbin_utc"] = tbin.astype("datetime64[ns]")  # naïf UTC
+    return df
 
 def _filter_day_utc(df: pd.DataFrame, day: str) -> pd.DataFrame:
     start = pd.Timestamp(f"{day} 00:00:00")
     end   = start + pd.Timedelta(days=1)
-    if "tbin_utc" not in df or df["tbin_utc"].isna().any():
-        df["tbin_utc"] = pd.to_datetime(df["ts_utc"], errors="coerce").dt.floor("5min")
+    # IMPORTANT: ne plus recalculer toute la colonne — seulement remplir/corriger
+    df = _ensure_5min_grid(df)
     mask = (df["tbin_utc"] >= start) & (df["tbin_utc"] < end)
     kept = df.loc[mask].copy()
     dropped = len(df) - len(kept)
@@ -187,7 +225,7 @@ def _infer_single_day_from_tbin(df: pd.DataFrame) -> date:
     if len(days) == 0:
         raise RuntimeError("[daily] aucune date détectée dans tbin_utc")
     if len(days) > 1:
-        raise RuntimeError(f"[daily] plusieurs dates détectées: {sorted(map(str, days))}")
+        raise RuntimeError(f"[daily] plusieurs dates détectées: {sorted(map[str, str], map(str, days))}")
     return days[0]
 
 # ───────────────────────────── Main ─────────────────────────────
@@ -214,7 +252,7 @@ def main():
         return 0
     print(f"[daily] found {len(blobs)} snapshot files")
 
-    # Verrouille la date depuis les chemins des blobs (source de vérité pour le nommage)
+    # Jour verrouillé par la structure de chemin
     days_from_paths = {_day_from_blob_path(b) for b in blobs}
     days_from_paths.discard(None)
     if not days_from_paths:
@@ -245,7 +283,6 @@ def main():
     print(f"[daily] concatenated rows={len(df_all):,} (failed_files={failed})")
 
     df_all = _enforce_schema(df_all)
-    # Filtrer sur la date issue des chemins (path_day)
     df_all = _filter_day_utc(df_all, path_day)
     before_dedup = len(df_all)
     df_all = _deduplicate_latest(df_all)
@@ -257,7 +294,7 @@ def main():
     stations_present = df_all["station_id"].nunique()
     print(f"[daily] bins_present={bins_present} | stations_present={stations_present}")
 
-    # Contrôle croisé avec la date inférée depuis les données
+    # Contrôle croisé de la date inférée
     try:
         day_actual = _infer_single_day_from_tbin(df_all)
         if str(day_actual) != path_day:
@@ -265,7 +302,7 @@ def main():
     except Exception as e:
         print(f"[daily][warn] could not infer day from data: {e}")
 
-    # Nommage basé STRICTEMENT sur la date des snapshots (path_day)
+    # Écriture daily
     out_key_final = f"compact_{path_day}.parquet"
     out_final = f"{DAILY_PREFIX.rstrip('/')}/{out_key_final}"
     out_tmp   = f"{DAILY_PREFIX.rstrip('/')}/_tmp_compact_{path_day}_{int(datetime.now(timezone.utc).timestamp())}.parquet"
@@ -275,7 +312,7 @@ def main():
     _delete_blob(out_tmp)
     print(f"[daily] wrote {len(df_all):,} rows → {out_final}")
 
-    # Purge basée sur path_day (alignée avec la structure de snapshots)
+    # Purge
     if DELETE_FLAG and _is_closed_day(path_day):
         _purge_prefix_tree(RAW_PREFIX, path_day)
         print(f"[daily] deleted snapshots & markers under {RAW_PREFIX}/date={path_day}/")
