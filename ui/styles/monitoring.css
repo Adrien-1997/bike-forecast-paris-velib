@@ -1,161 +1,373 @@
-/* ========== Monitoring design system (inspiré de pages/index) ========== */
-:root {
-  --bg-card: rgba(15, 23, 42, 0.4);        /* slate-900/40 */
-  --bg-kpi:  rgba(15, 23, 42, 0.5);
-  --bg-dev:  rgba(15, 23, 42, 0.3);
-  --bg-notice-warn: rgba(234,179,8,.08);
+/*
+  ui/styles/monitoring.css — unified style system for Monitoring UI
+  ------------------------------------------------------------------
+  Design goals:
+  - Clean, modern banking‑grade dashboard look
+  - Subtle glassy panels, smooth shadows, strong typography
+  - Orange ↔ Blue accent system (Adrien's preference)
+  - Works in light & dark (prefers-color-scheme); accessible contrasts
+  - Tiny utility classes for fast iteration on pages
 
-  --bd-soft: #374151;   /* slate-700 */
-  --bd-mid:  #e5e7eb;   /* gray-200 */
-  --bd-pill: #d1d5db;   /* gray-300 */
+  How to use:
+  - Wrap each page root with <main class="monitoring">
+  - Use .page, .header, .toolbar, .grid, .panel, .kpi, .card, .table, .btn etc.
+  - Plotly and Leaflet skins included; class "tooltip-dark" already used → styled here
+*/
 
-  --tx-100: #111827;    /* gray-900 */
-  --tx-200: #9CA3AF;    /* gray-400 */
-  --tx-300: #E5E7EB;    /* gray-200 */
-  --tx-link: #60A5FA;   /* blue-400 */
+/* ───────────────────────────────── Root & Theme ───────────────────────────────── */
+.monitoring {
+  /* Base palette (light) */
+  --bg:            #0b1220;                 /* app background (dark default) */
+  --bg-elev:       #0f172a;                 /* slightly lighter than bg */
+  --panel:         #111827;                 /* panel surface */
+  --panel-2:       #0e1528;                 /* deeper panel for contrast */
+  --text:          #e5e7eb;                 /* primary text */
+  --muted:         #94a3b8;                 /* secondary text */
+  --border:        #1f2937;                 /* panel borders */
+  --ring:          #60a5fa;                 /* focus ring */
 
-  --ring-ok:    #10B981; /* green-500 */
-  --ring-warn:  #F59E0B; /* amber-500 */
-  --ring-danger:#EF4444; /* red-500 */
+  /* Accents (orange ↔ blue) */
+  --accent:        #fb923c;                 /* orange-400 */
+  --accent-700:    #ea580c;                 /* orange-600 */
+  --accent-900:    #9a3412;                 /* orange-800 */
+  --primary:       #3b82f6;                 /* blue-500 */
+  --primary-700:   #1d4ed8;                 /* blue-700 */
+  --primary-900:   #172554;                 /* blue-950 */
 
-  --radius: 12px;
-  --radius-pill: 999px;
+  /* Greens / Reds (status) */
+  --ok:            #10b981;                 /* emerald */
+  --warn:          #f59e0b;                 /* amber */
+  --danger:        #ef4444;                 /* red */
 
-  --page-max: 1200px;
-  --page-pad: 2rem;
+  /* Elevation */
+  --shadow-sm:     0 1px 2px rgba(0,0,0,.25);
+  --shadow-md:     0 6px 16px rgba(0,0,0,.25);
+  --shadow-lg:     0 24px 60px rgba(0,0,0,.28), 0 6px 18px rgba(0,0,0,.18);
+
+  /* Radii & spacing */
+  --radius:        18px;                    /* 2xl rounded */
+  --radius-sm:     12px;
+  --radius-xl:     26px;
+  --gap:           16px;
+  --gap-lg:        24px;
+  --gap-xl:        36px;
+
+  /* Typography */
+  --font-sans:     ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+  --h1:            28px;
+  --h2:            20px;
+  --h3:            16px;
+  --body:          15px;
+  --mono:          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg-card: #ffffff;
-    --bg-kpi:  #ffffff;
-    --bg-dev:  #ffffff;
-    --bg-notice-warn: #FFF8E1;
+@media (prefers-color-scheme: light) { .monitoring {
+    --bg:          #f7fafc;
+    --bg-elev:     #ffffff;
+    --panel:       #ffffff;
+    --panel-2:     #fafafa;
+    --text:        #0f172a;
+    --muted:       #475569;
+    --border:      #e5e7eb;
+    --ring:        #2563eb;
 
-    --bd-soft: #e5e7eb;
-    --bd-mid:  #e5e7eb;
-    --bd-pill: #d1d5db;
+    --accent:      #f97316;  /* brighter orange */
+    --primary:     #2563eb;  /* stronger blue */
+    --primary-700: #1d4ed8;
+    --primary-900: #0b1f4b;
 
-    --tx-100: #111827;
-    --tx-200: #6B7280;
-    --tx-300: #111827;
-    --tx-link: #2563EB;
+    --shadow-sm:   0 1px 2px rgba(13, 16, 23, .06);
+    --shadow-md:   0 6px 16px rgba(13, 16, 23, .08);
+    --shadow-lg:   0 24px 60px rgba(13, 16, 23, .10), 0 6px 18px rgba(13, 16, 23, .06);
   }
 }
 
-/* ----- Layout ----- */
-.mon-main {
-  padding: var(--page-pad);
-  max-width: var(--page-max);
-  margin: 0 auto;
+/* ───────────────────────────── Global Reset & Base ───────────────────────────── */
+/* sco.monitoring { .monitoring { min-height: 100%; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; padding: 0; color: var(--text); background: radial-gradient(1200px 1200px at 20% -10%, rgba(59,130,246,.12), transparent 50%), radial-gradient(1200px 1200px at 100% 20%, rgba(251,146,60,.10), transparent 50%), var(--bg);
+  font-family: var(--font-sans); font-size: var(--body); line-height: 1.45; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+* { box-sizing: border-box; }
+
+/* Focus ring */
+:where(a, button, input, select, textarea, [tabindex="0"]) {
+  outline: none;
+}
+:where(a, button, input, select, textarea, [tabindex="0"]):focus-visible {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring);
+  border-radius: 10px; transition: box-shadow .12s ease;
 }
 
-.mon-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: center;
+/* Scrollbar (WebKit) */
+.monitoring *::-webkit-scrollbar { height: 10px; width: 10px; }
+.monitoring *::-webkit-scrollbar-thumb { background: linear-gradient(180deg, var(--primary), var(--accent)); border-radius: 999px; }
+.monitoring *::-webkit-scrollbar-track { background: transparent; }
+
+/* ───────────────────────────────── Page Frame ───────────────────────────────── */
+.monitoring { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; gap: var(--gap-lg); }
+.page {
+  max-width: 1400px; margin: 0 auto; padding: 28px 22px 40px; position: relative;
 }
 
-.mon-title { margin: 0; }
-.small     { font-size: 0.875rem; opacity: 0.7; }
+.header {
+  position: sticky; top: 0; z-index: 50; padding: 12px 20px; backdrop-filter: blur(9px);
+  background: color-mix(in oklab, var(--bg) 86%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, var(--border), transparent 40%);
+}
+.header .breadcrumbs { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 14px; }
+.header .breadcrumbs a { color: inherit; text-decoration: none; }
+.header .breadcrumbs a:hover { color: var(--text); }
 
-/* ----- Navigation pills ----- */
-.mon-nav {
-  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+.title {
+  display: flex; align-items: baseline; gap: 14px; margin: 6px 0 18px;
 }
-.pill {
-  padding: 6px 10px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--bd-pill);
-  background: #111827;
-  color: #fff;
-  text-decoration: none;
-  font-size: 14px;
-}
-.pill--off {
-  background: #fff;
-  color: var(--tx-100);
-  opacity: .5;
-  pointer-events: none;
+.title h1 { font-size: var(--h1); margin: 0; letter-spacing: .2px; }
+.title .meta { color: var(--muted); font-size: 13px; }
+
+.toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 6px 0 18px;
 }
 
-/* ----- Cards / KPIs / Sections ----- */
-.section { margin-top: 24px; }
-.section-lg { margin-top: 28px; }
-
-.grid-2, .grid-3, .grid-4, .grid-5 {
-  display: grid; gap: 12px;
+/* ───────────────────────────────── Panels & Cards ───────────────────────────────── */
+.panel, .card, .plot-card, .map-card {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--panel) 92%, transparent), color-mix(in oklab, var(--panel-2), transparent 8%));
+  border: 1px solid color-mix(in oklab, var(--border), transparent 28%);
+  border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow-md);
 }
-.grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.grid-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.panel:hover, .card:hover, .plot-card:hover, .map-card:hover { box-shadow: var(--shadow-lg); }
 
-.card {
-  border: 1px solid var(--bd-soft);
-  border-radius: var(--radius);
-  background: var(--bg-card);
-  padding: 12px;
-}
+.grid { display: grid; gap: var(--gap); }
+.grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .grid.cols-4 { grid-template-columns: repeat(2,1fr); } }
+@media (max-width: 900px)  { .grid.cols-3 { grid-template-columns: 1fr; } .grid.cols-2 { grid-template-columns: 1fr; } }
+
+.kpi-grid { display: grid; gap: var(--gap); grid-template-columns: repeat(4, minmax(0,1fr)); }
+@media (max-width: 1100px) { .kpi-grid { grid-template-columns: repeat(2,1fr); } }
+@media (max-width: 700px)  { .kpi-grid { grid-template-columns: 1fr; } }
 
 .kpi {
-  border: 1px solid var(--bd-soft);
-  border-radius: var(--radius);
-  background: var(--bg-kpi);
-  padding: 10px 12px;
+  position: relative; overflow: hidden; padding: 14px 16px; border-radius: var(--radius);
+  background: linear-gradient(180deg, color-mix(in oklab, var(--panel) 92%, transparent), color-mix(in oklab, var(--panel-2), transparent 8%));
+  border: 1px solid color-mix(in oklab, var(--border), transparent 22%);
 }
-.kpi .kpi-label {
-  font-size: 12px; color: var(--tx-200); text-transform: uppercase;
-}
-.kpi .kpi-value {
-  font-size: 22px; color: var(--tx-300); font-weight: 600; margin-top: 2px;
-}
-.kpi--ring-ok    { border-color: var(--ring-ok); }
-.kpi--ring-warn  { border-color: var(--ring-warn); }
-.kpi--ring-danger{ border-color: var(--ring-danger); }
+.kpi .label { color: var(--muted); font-size: 12px; letter-spacing: .3px; text-transform: uppercase; }
+.kpi .value { font-size: 26px; font-weight: 700; margin-top: 6px; }
+.kpi .delta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.kpi.ok .value { color: var(--ok); }
+.kpi.warn .value { color: var(--warn); }
+.kpi.danger .value { color: var(--danger); }
 
-/* ----- Dev tool / notice ----- */
-.dev {
-  border: 1px dashed var(--bd-soft);
-  padding: 12px; border-radius: var(--radius);
-  background: var(--bg-dev);
-}
-.notice-warn {
-  border: 1px solid #eab308;
-  background: var(--bg-notice-warn);
-  color: #F59E0B;
-  border-radius: 10px;
-  padding: 10px 12px;
-}
+.badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 999px; font-size: 12px; border: 1px solid color-mix(in oklab, var(--border), transparent 30%); color: var(--text); }
+.badge .dot { width: 8px; height: 8px; border-radius: 999px; }
+.badge.ok .dot { background: var(--ok); }
+.badge.warn .dot { background: var(--warn); }
+.badge.danger .dot { background: var(--danger); }
 
-/* ----- Links ----- */
-.anchor-like { color: var(--tx-link); text-decoration: underline; cursor: pointer; }
-
-/* ----- Inputs / Buttons ----- */
+/* ───────────────────────────────── Buttons & Inputs ───────────────────────────────── */
 .btn {
-  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--bd-pill);
-  background: #111827; color: white;
+  appearance: none; border: 1px solid color-mix(in oklab, var(--border), transparent 24%);
+  background: color-mix(in oklab, var(--panel), transparent 8%);
+  color: var(--text); padding: 10px 14px; border-radius: 12px; cursor: pointer; font-weight: 600;
+  box-shadow: var(--shadow-sm); transition: transform .06s ease, box-shadow .2s ease, background .2s ease, border-color .2s ease;
 }
-.btn--ghost { background: white; color: var(--tx-100); }
+.btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+.btn:active { transform: translateY(0); }
 .btn[disabled] { opacity: .6; cursor: not-allowed; }
 
-.input {
-  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--bd-mid); min-width: 260px;
+.btn-primary {
+  background: linear-gradient(135deg, var(--primary), color-mix(in oklab, var(--accent), var(--primary) 38%));
+  border-color: transparent; color: white;
 }
+.btn-primary:hover { filter: saturate(1.05) brightness(1.02); }
 
-/* ----- Tables / Code ----- */
-.table-wrap { overflow-x: auto; }
+.btn-outline { background: transparent; border-color: color-mix(in oklab, var(--primary), var(--border)); color: var(--primary); }
+.btn-outline:hover { background: color-mix(in oklab, var(--primary) 12%, transparent); }
+
+.btn-ghost { background: transparent; border-color: transparent; color: var(--text); }
+.btn-ghost:hover { background: color-mix(in oklab, var(--border) 22%, transparent); }
+
+.input, .select {
+  width: 100%; padding: 10px 12px; border-radius: 10px; color: var(--text);
+  background: color-mix(in oklab, var(--panel), transparent 6%);
+  border: 1px solid color-mix(in oklab, var(--border), transparent 24%);
+}
+.input::placeholder { color: color-mix(in oklab, var(--muted), transparent 30%); }
+
+.switch { position: relative; width: 46px; height: 26px; background: color-mix(in oklab, var(--muted), var(--panel) 60%); border-radius: 999px; transition: background .2s ease; }
+.switch:has(input:checked) { background: var(--primary); }
+.switch input { appearance: none; width: 100%; height: 100%; margin: 0; }
+.switch .knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 999px; background: #fff; transition: left .2s ease; }
+.switch:has(input:checked) .knob { left: 23px; }
+
+/* ───────────────────────────────── Tables ───────────────────────────────── */
 .table {
-  width: 100%; border-collapse: collapse;
+  width: 100%; border-collapse: separate; border-spacing: 0; overflow: hidden; border-radius: var(--radius);
+  border: 1px solid color-mix(in oklab, var(--border), transparent 22%);
 }
-pre.code {
-  background: #0b1220; color: #d1d5db; padding: 1rem;
-  border-radius: 8px; overflow-x: auto; max-height: 50vh; margin-top: 8px;
+.table thead th {
+  position: sticky; top: 0; z-index: 1; text-align: left; font-size: 12px; letter-spacing: .3px;
+  text-transform: uppercase; color: var(--muted); background: color-mix(in oklab, var(--panel-2), var(--panel) 60%);
+  padding: 10px 12px; border-bottom: 1px solid color-mix(in oklab, var(--border), transparent 16%);
+}
+.table tbody td { padding: 10px 12px; border-bottom: 1px solid color-mix(in oklab, var(--border), transparent 14%); }
+.table tbody tr:hover { background: color-mix(in oklab, var(--panel), transparent 8%); }
+.table-compact thead th, .table-compact tbody td { padding: 8px 10px; }
+
+/* Density helpers */
+.dense .table thead th { padding: 8px 10px; }
+.dense .table tbody td { padding: 8px 10px; }
+
+/* Status pills */
+.pill { display:inline-flex; align-items:center; gap:8px; padding:4px 10px; border-radius:999px; font-size:12px; border:1px solid color-mix(in oklab, var(--border), transparent 40%); }
+.pill .dot { width:8px; height:8px; border-radius:999px; }
+.pill.ok { color:var(--ok); border-color: color-mix(in oklab, var(--ok), var(--border)); }
+.pill.warn { color:var(--warn); border-color: color-mix(in oklab, var(--warn), var(--border)); }
+.pill.danger { color:var(--danger); border-color: color-mix(in oklab, var(--danger), var(--border)); }
+
+/* Empty & error states */
+.empty { display:grid; place-items:center; padding: 32px; color: var(--muted); border: 1px dashed color-mix(in oklab, var(--border), transparent 30%); border-radius: var(--radius); }
+.error { color: #fecaca; background: color-mix(in oklab, #ef4444 16%, transparent); border: 1px solid color-mix(in oklab, #ef4444, var(--border) 60%); padding: 10px 14px; border-radius: 12px; }
+
+/* Skeleton loader */
+.skel { position: relative; overflow: hidden; background: color-mix(in oklab, var(--panel), transparent 18%); border-radius: 10px; }
+.skel::after { content:""; position:absolute; inset:0; background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--panel-2), transparent 30%), transparent); transform: translateX(-100%); animation: shimmer 1.1s infinite; }
+@keyframes shimmer { to { transform: translateX(100%); } }
+
+/* ───────────────────────────────── Plotly ───────────────────────────────── */
+/* Plotly container should auto-size nicely within panels */
+.plot-card { padding: 10px 10px 14px; }
+.monitoring .js-plotly-plot, .monitoring .plotly, .monitoring .plot-container { width: 100% !important; }
+
+/* Plotly modebar */
+.monitoring .js-plotly-plot .modebar { background: color-mix(in oklab, var(--panel), transparent 20%) !important; border-radius: 10px; border: 1px solid color-mix(in oklab, var(--border), transparent 24%); box-shadow: var(--shadow-sm); }
+.monitoring .js-plotly-plot .modebar-btn { color: var(--muted) !important; }
+.js-plotly-plot .modebar-btn:hover { color: var(--text) !important; }
+
+/* Plotly axis & grid (via CSS variables supported by Plotly SVG) */
+:root {
+  --plot-axis: color-mix(in oklab, var(--muted), var(--text) 20%);
+  --plot-grid: color-mix(in oklab, var(--border), transparent 10%);
 }
 
-/* ----- Utilities ----- */
-.mt-12 { margin-top: 12px; }
-.mt-16 { margin-top: 16px; }
-.mt-24 { margin-top: 24px; }
-.mt-28 { margin-top: 28px; }
+/* Let traces breathe */
+.monitoring .plot-tight .js-plotly-plot .plotly .xaxislayer-above text,
+.plot-tight .js-plotly-plot .plotly .yaxislayer-above text { font-size: 11px; }
+
+/* ───────────────────────────────── Leaflet ───────────────────────────────── */
+.map-card { padding: 0; overflow: hidden; }
+.monitoring .leaflet-container { font-family: var(--font-sans); }
+.monitoring .leaflet-control-attribution { opacity: .6; }
+.monitoring .leaflet-tooltip.tooltip-dark {
+  background: #0b1220; color: #f1f5f9; border: 1px solid color-mix(in oklab, var(--border), transparent 10%);
+  border-radius: 10px; box-shadow: var(--shadow-md);
+}
+.monitoring .leaflet-tooltip.tooltip-dark::before { border-top-color: #0b1220; }
+
+/* On-map legend chips */
+.map-legend { position:absolute; right:10px; bottom:10px; background: color-mix(in oklab, var(--panel), transparent 10%); color: var(--text); padding:10px 12px; border-radius:12px; box-shadow: var(--shadow-md); border:1px solid color-mix(in oklab, var(--border), transparent 26%); }
+.map-legend .row { display:flex; align-items:center; gap:8px; font-size:12px; margin:4px 0; }
+.map-legend .swatch { width:12px; height:12px; border-radius:999px; border:1px solid #0002; }
+
+/* ───────────────────────────────── Layout Helpers ───────────────────────────────── */
+.row { display: flex; gap: var(--gap); align-items: stretch; }
+.col { display: grid; gap: var(--gap); }
+
+.center { display: grid; place-items: center; }
+.right { margin-left: auto; }
+
+.m0 { margin:0 !important; }
+.mt0 { margin-top:0 !important; }
+.mt1 { margin-top:6px !important; }
+.mt2 { margin-top:10px !important; }
+.mt3 { margin-top:16px !important; }
+.mt4 { margin-top:24px !important; }
+
+.p0 { padding:0 !important; }
+.p1 { padding:8px !important; }
+.p2 { padding:12px !important; }
+.p3 { padding:16px !important; }
+.p4 { padding:22px !important; }
+
+.w-full { width: 100%; }
+.h-300 { height: 300px; }
+.h-360 { height: 360px; }
+.h-420 { height: 420px; }
+.h-520 { height: 520px; }
+
+/* ───────────────────────────────── Tags, Chips, Tiny UI ───────────────────────────────── */
+.tag { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:999px; font-size:12px; background: color-mix(in oklab, var(--panel), transparent 10%); border:1px solid color-mix(in oklab, var(--border), transparent 26%); }
+.tag .icon { width:14px; height:14px; border-radius:4px; background: linear-gradient(135deg, var(--primary), var(--accent)); }
+
+.code { font-family: var(--mono); font-size: 12px; padding: 3px 6px; border-radius: 6px; background: color-mix(in oklab, var(--panel), transparent 16%); border: 1px solid color-mix(in oklab, var(--border), transparent 26%); }
+
+/* ───────────────────────────────── Headings & Links ───────────────────────────────── */
+.h2 { font-size: var(--h2); margin: 0 0 10px; letter-spacing: .2px; }
+.h3 { font-size: var(--h3); margin: 0 0 8px; letter-spacing: .2px; color: var(--muted); }
+
+.monitoring a { color: color-mix(in oklab, var(--primary), var(--accent)); text-underline-offset: 3px; }
+a:hover { color: var(--primary); }
+
+/* 
+  Accent divider — use <div class="divider"></div>
+*/
+.divider { height: 1px; background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--primary) 60%, var(--accent) 40%), transparent); border-radius: 999px; opacity: .9; }
+
+/* ───────────────────────────────── Alerts ───────────────────────────────── */
+.alert { display:grid; grid-template-columns: 20px 1fr; gap: 12px; padding: 12px 14px; border-radius: 12px; border:1px solid; }
+.alert .dot { width: 10px; height: 10px; border-radius: 999px; margin-top: 4px; }
+.alert.ok { color: var(--ok); background: color-mix(in oklab, var(--ok) 10%, transparent); border-color: color-mix(in oklab, var(--ok), var(--border) 60%); }
+.alert.warn { color: var(--warn); background: color-mix(in oklab, var(--warn) 12%, transparent); border-color: color-mix(in oklab, var(--warn), var(--border) 60%); }
+.alert.danger { color: var(--danger); background: color-mix(in oklab, var(--danger) 12%, transparent); border-color: color-mix(in oklab, var(--danger), var(--border) 60%); }
+
+/* ───────────────────────────────── Footer / Muted text ───────────────────────────────── */
+.muted { color: var(--muted); }
+.footer-note { color: var(--muted); font-size: 12px; }
+
+/* ───────────────────────────────── Utilities for Pages ───────────────────────────────── */
+/* Quickly compose sections without inline styles */
+.section { display: grid; gap: var(--gap); }
+.section .lead { color: var(--muted); }
+
+/* Sticky sub-toolbars on long pages */
+.sticky-subbar { position: sticky; top: 62px; z-index: 40; backdrop-filter: blur(8px); padding: 8px 10px; border: 1px solid color-mix(in oklab, var(--border), transparent 24%); border-radius: 12px; background: color-mix(in oklab, var(--bg) 86%, transparent); }
+
+/* KPI ribbon (small highlight bar on panels) */
+.ribbon { position: relative; }
+.ribbon::before { content:""; position: absolute; left: 12px; right: 12px; top: 0; height: 3px; border-radius: 4px; background: linear-gradient(90deg, var(--primary), var(--accent)); opacity: .9; }
+
+/* 
+  Hero banner (optional): use at top of overview page
+  <div class="hero"><div class="hero-bg"></div><div class="hero-content">...</div></div>
+*/
+.hero { position: relative; border-radius: var(--radius-xl); overflow: hidden; padding: 22px; background: linear-gradient(135deg, color-mix(in oklab, var(--primary) 12%, transparent), color-mix(in oklab, var(--accent) 10%, transparent)); border: 1px solid color-mix(in oklab, var(--border), transparent 24%); box-shadow: var(--shadow-lg); }
+.hero-bg { position:absolute; inset:-20%; filter: blur(40px) saturate(1.2) opacity(.9); background: radial-gradient(500px 500px at 20% 20%, color-mix(in oklab, var(--primary) 40%, transparent), transparent), radial-gradient(500px 500px at 80% 40%, color-mix(in oklab, var(--accent) 40%, transparent), transparent); }
+.hero-content { position: relative; }
+
+/* ───────────────────────────────── Accessibility ───────────────────────────────── */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+/* ───────────────────────────────── Page-specific helpers (optional) ───────────────────────────────── */
+/* Overview */
+.overview-kpis .kpi .value { font-variant-numeric: tabular-nums; }
+.curves { display: grid; gap: var(--gap); grid-template-columns: 2.2fr 1.2fr; }
+@media (max-width: 1100px) { .curves { grid-template-columns: 1fr; } }
+
+/* Performance */
+.horizon-tabs { display:flex; gap:8px; flex-wrap: wrap; }
+.horizon-tabs .btn { padding: 8px 12px; }
+
+/* Data Health */
+.health-cards { display:grid; gap: var(--gap); grid-template-columns: repeat(3, minmax(0,1fr)); }
+@media (max-width: 1100px) { .health-cards { grid-template-columns: 1fr; } }
+
+/* Data Drift */
+.psi-controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+
+/* Network */
+.map-wrap { height: 420px; }
+
+/* Fin. */

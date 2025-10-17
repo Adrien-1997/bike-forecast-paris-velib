@@ -2,6 +2,7 @@
 import type { AppProps } from 'next/app';
 import Head from 'next/head';
 import '@/styles/globals.css';
+import '@/styles/monitoring.css';
 import 'leaflet/dist/leaflet.css';
 
 export default function MyApp({ Component, pageProps }: AppProps) {

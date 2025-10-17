@@ -21,7 +21,9 @@ from .routes import health, stations, forecast, history, badges, snapshot, weath
 
 # ───────────────────────── Routes monitoring ─────────────────────────
 from .routes.monitoring import network_overview, network_dynamics, network_stations  # type: ignore
-from .routes.monitoring import model_performance,model_explainability  # ✅ le router modèle est bien dans routes/monitoring/
+from .routes.monitoring import model_performance,model_explainability # type: ignore
+from .routes.monitoring import data_health, data_drift  # type: ignore
+
 
 # ───────────────────────── App ─────────────────────────
 app = FastAPI(title="velib-api", version="0.2.0")
@@ -55,6 +57,9 @@ app.include_router(network_dynamics.router)   # /monitoring/network/dynamics/*
 app.include_router(network_stations.router)   # /monitoring/network/stations/*
 app.include_router(model_performance.router)  # /monitoring/model/*
 app.include_router(model_explainability.router)  # /monitoring/model/*
+app.include_router(data_health.router)  # /monitoring/data/*
+app.include_router(data_drift.router)  # /monitoring/data/*
+
 
 
 # ───────────────────────── Debug: listing des routes au démarrage ─────────────────────────

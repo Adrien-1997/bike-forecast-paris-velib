@@ -29,11 +29,12 @@ BASE_COLUMNS = [
     "status","lat","lon","name","temp_C","precip_mm","wind_mps"
 ]
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Lecture et nettoyage
+# ──────────────────────────────────────────────────────────────────────────────
+
 def _read_many_parquets(path_or_glob: str) -> pd.DataFrame:
-    """
-    Lit un fichier, un glob (*.parquet) ou un dossier (concat de *.parquet).
-    Retourne un DataFrame concaténé.
-    """
+    """Lit un fichier, un glob (*.parquet) ou un dossier (concat de *.parquet)."""
     paths: List[str] = []
     if os.path.isdir(path_or_glob):
         paths = sorted(glob.glob(os.path.join(path_or_glob, "*.parquet")))
@@ -64,54 +65,55 @@ def _read_many_parquets(path_or_glob: str) -> pd.DataFrame:
             out[c] = pd.NA
     return out[BASE_COLUMNS]
 
+
 def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
-    # timestamps → naïf UTC
+    """Typage et nettoyage des colonnes brutes."""
     df["ts_utc"]   = pd.to_datetime(df["ts_utc"],   utc=True, errors="coerce").dt.tz_convert(None)
     df["tbin_utc"] = pd.to_datetime(df["tbin_utc"], utc=True, errors="coerce").dt.tz_convert(None)
-
-    # station_id doit rester texte (souvent alphanumérique)
     df["station_id"] = df["station_id"].astype("string")
 
-    # numériques
     for c in ["bikes","capacity","mechanical","ebike"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     for c in ["lat","lon","temp_C","precip_mm","wind_mps"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # texte
     df["status"] = df["status"].astype("string")
     df["name"]   = df["name"].astype("string")
     return df
 
+
 def _dedupe_per_bin(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Plusieurs lignes possibles par (station_id, tbin_utc). On garde la dernière
-    en se basant sur ts_utc (max). Si ts_utc manquant, on garde la première.
-    """
+    """Si plusieurs lignes par (station_id, tbin_utc), garde la dernière (ts_utc max)."""
     df = df.sort_values(["station_id","tbin_utc","ts_utc"], ascending=[True, True, True])
     dedup = df.groupby(["station_id","tbin_utc"], as_index=False).tail(1)
     return dedup.reset_index(drop=True)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Feature engineering principal
+# ──────────────────────────────────────────────────────────────────────────────
+
 def _add_target_and_lags(
     df: pd.DataFrame,
     horizon_bins: int = 3,
-    lag_bins: Iterable[int] = (1,2,3,6,12),
+    # Historique étendu : 48 bins = 4 heures (1 bin = 5 min)
+    lag_bins: Iterable[int] = (1, 2, 3, 6, 12, 24, 36, 48),
 ) -> Tuple[pd.DataFrame, List[str]]:
     """
     Cible y_nb = bikes à +horizon_bins (par station).
-    Ajoute des lags et des rollings simples.
+    Ajoute des lags, rollings, météo lag, et features calendaires.
     """
     df = df.sort_values(["station_id","tbin_utc"])
 
-    # cible
+    # Cible
     df["y_nb"] = df.groupby("station_id", group_keys=False)["bikes"].shift(-horizon_bins)
 
-    # lags
+    # Lags bikes
     for L in lag_bins:
         df[f"lag_bikes_{L}"] = df.groupby("station_id", group_keys=False)["bikes"].shift(L)
 
-    # rollings (utilisent les lags existants pour éviter leak)
-    for W in (3,6,12):
+    # Rollings alignées sur s.shift(1) pour éviter le leakage
+    rolling_windows = (3, 6, 12, 24, 36, 48)
+    for W in rolling_windows:
         df[f"roll_mean_{W}"] = (
             df.groupby("station_id", group_keys=False)["bikes"]
               .apply(lambda s: s.shift(1).rolling(W, min_periods=max(1, W//2)).mean())
@@ -121,30 +123,31 @@ def _add_target_and_lags(
               .apply(lambda s: s.shift(1).rolling(W, min_periods=max(1, W//2)).std())
         )
 
-    # ratio simple
+    # Ratio d'occupation
     df["occ_ratio"] = df["bikes"] / df["capacity"].where(df["capacity"] > 0)
 
-    # lags météo
+    # Lags météo
     for L in (1,):
         for c in ("temp_C","precip_mm","wind_mps"):
             df[f"{c}_lag{L}"] = df.groupby("station_id", group_keys=False)[c].shift(L)
 
-    # features calendaires
+    # Features calendaires
     add_time_features(df, ts_col="tbin_utc", add_paris_derived=True)
 
-    # encodage status -> code ordinal
+    # Encodage status -> code ordinal
     status_map = {s: i for i, s in enumerate(sorted(df["status"].dropna().unique()))}
     df["status_code"] = df["status"].map(status_map).astype("Int64")
 
-    # liste des colonnes features
+    # Colonnes features finales
     feat_cols = [
         "capacity","mechanical","ebike",
         "lat","lon",
         "temp_C","precip_mm","wind_mps",
         "occ_ratio",
         *(f"lag_bikes_{L}" for L in lag_bins),
-        "roll_mean_3","roll_mean_6","roll_mean_12",
-        "roll_std_3","roll_std_6","roll_std_12",
+        # Rollings jusqu'à 48 bins
+        *(f"roll_mean_{W}" for W in rolling_windows),
+        *(f"roll_std_{W}" for W in rolling_windows),
         "temp_C_lag1","precip_mm_lag1","wind_mps_lag1",
         "hour","minute","dow","month","is_weekend",
         "hod_sin","hod_cos","dow_sin","dow_cos",
@@ -153,6 +156,10 @@ def _add_target_and_lags(
     ]
 
     return df, feat_cols
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pipeline d'entraînement complet
+# ──────────────────────────────────────────────────────────────────────────────
 
 def build_training_frame(
     src: str,
@@ -163,8 +170,8 @@ def build_training_frame(
     """
     Construit le DF d'entraînement à partir des parquets 5min:
       - charge + typage + dédoublonnage par (station_id, tbin_utc)
-      - filtre date [start_date, end_date] (UTC, sur tbin_utc)
-      - ajoute cible y_nb (horizon_bins), lags/rollings, météo lag, features calendaires
+      - filtre date [start_date, end_date] (UTC)
+      - ajoute cible y_nb (horizon_bins), lags, rollings, météo lag, features calendaires
     Retourne: (df_full, X, y, feat_cols)
     """
     df = _read_many_parquets(src)
@@ -181,7 +188,7 @@ def build_training_frame(
 
     df, feat_cols = _add_target_and_lags(df, horizon_bins=horizon_bins)
 
-    # drop NA sur cible et features
+    # Drop NA sur cible
     used_cols = ["station_id","tbin_utc","bikes","y_nb"] + feat_cols
     df_model = df[used_cols].dropna(subset=["y_nb"])
 
