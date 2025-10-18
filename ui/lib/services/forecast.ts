@@ -2,7 +2,7 @@
 // Centralized forecast service: batch fetching + normalization
 
 import { json, selectForecastRows } from '@/lib/http'
-import type { Forecast } from '@/lib/types'
+import type { Forecast } from '@/lib/types/types'
 
 // ───────────────────────────────
 // Helpers

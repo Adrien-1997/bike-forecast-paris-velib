@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import io
-from typing import List, Optional
+import os
+import json
+import math
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter
 
+# settings + live snapshot helper
 from core.settings import settings
 from core.snapshot_live import fetch_live_snapshot
 
@@ -19,17 +23,22 @@ except Exception:  # pragma: no cover
 router = APIRouter(tags=["stations"])
 
 
+# ───────────────────────── Helpers JSON ─────────────────────────
 def _json_safe_df(df: pd.DataFrame) -> list[dict]:
     if df is None or df.empty:
         return []
     df = df.copy()
+
+    # Datetimes → ISO 8601 Z
     for c in df.columns:
         if pd.api.types.is_datetime64_any_dtype(df[c]):
             s = pd.to_datetime(df[c], errors="coerce", utc=True)
             df[c] = s.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Inf/NaN → None
     df = df.replace([np.inf, -np.inf], np.nan)
     recs = df.to_dict(orient="records")
-    import math
+
     for r in recs:
         for k, v in list(r.items()):
             if pd.isna(v):
@@ -47,16 +56,26 @@ def _json_safe_df(df: pd.DataFrame) -> list[dict]:
     return recs
 
 
+# ───────────────────────── GCS / Serving helpers ─────────────────────────
 def _serving_forecast_prefix() -> str:
+    """
+    Source de vérité pour le bundle latest_forecast.json.
+    1) ENV GCS_SERVING_PREFIX (si présent)
+    2) settings.SERVING_FORECAST_PREFIX (legacy)
+    """
+    env_val = (os.environ.get("GCS_SERVING_PREFIX") or "").strip()
+    if env_val:
+        return env_val.rstrip("/")
     return (getattr(settings, "SERVING_FORECAST_PREFIX", "") or "").rstrip("/")
 
 
 def _bundle_uri() -> str:
     base = _serving_forecast_prefix()
-    return f"{base}/latest_forecast.json"
+    # si base est vide → on tentera de lire un chemin local "latest_forecast.json"
+    return f"{base}/latest_forecast.json" if base else "latest_forecast.json"
 
 
-def _split_gs(uri: str) -> tuple[str, str]:
+def _split_gs(uri: str) -> Tuple[str, str]:
     assert uri.startswith("gs://"), f"Invalid GCS URI: {uri}"
     b, k = uri[5:].split("/", 1)
     return b, k
@@ -68,21 +87,23 @@ def _read_forecast_bundle_latest() -> dict:
     Forme attendue: {"generated_at": "...", "horizons":[...], "data":{"15":[...], ...}}
     """
     uri = _bundle_uri()
+
+    # Lecture locale si pas de GCS disponible ou si l'URI n'est pas gs://
     if not uri.startswith("gs://") or storage is None:
         try:
-            import json
             with open(uri, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}
-    bkt, key = _split_gs(uri)
-    cli = storage.Client()
-    blob = cli.bucket(bkt).get_blob(key)
-    if not blob:
-        return {}
-    data = blob.download_as_bytes()
+
+    # Lecture GCS
     try:
-        import json
+        bkt, key = _split_gs(uri)
+        cli = storage.Client()
+        blob = cli.bucket(bkt).get_blob(key)
+        if not blob:
+            return {}
+        data = blob.download_as_bytes()
         return json.loads(data.decode("utf-8"))
     except Exception:
         return {}
@@ -93,11 +114,13 @@ def _to_int_series(s: pd.Series, default: int = 0) -> pd.Series:
     return v.astype(int)
 
 
+# ───────────────────────── Route: /stations ─────────────────────────
 @router.get("/stations")
 def list_stations():
     """
     Liste minimale pour la carte :
-      station_id (string), name, lat, lon, capacity, num_bikes_available, num_docks_available.
+      station_id (string), name, lat, lon, capacity,
+      num_bikes_available, num_docks_available.
 
     Priorité:
       1) snapshot live (GBFS) → plus frais

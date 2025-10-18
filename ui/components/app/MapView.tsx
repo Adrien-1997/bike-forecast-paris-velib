@@ -1,7 +1,7 @@
 import dynamic from 'next/dynamic'
 import { useMemo, useEffect, useState } from 'react'
 import { useMap } from 'react-leaflet'
-import type { Station, Forecast } from '@/lib/types'
+import type { Station, Forecast } from '@/lib/types/types'
 import type * as LType from 'leaflet'
 
 /* Leaflet côté client uniquement */

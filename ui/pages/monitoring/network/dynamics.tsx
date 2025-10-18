@@ -5,25 +5,19 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import type * as Plotly from "plotly.js";
+import MonitoringNav from "@/components/monitoring/MonitoringNav";
 
-/* ───────────────────────── Plotly (client only) ───────────────────────── */
-export const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
+/* ───────────────── Plotly (client only) ───────────────── */
+const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ssr: false,
   loading: () => (
     <div style={{ height: 320, display: "grid", placeItems: "center", opacity: 0.7 }}>
-      Chargement du graphique…
+      Loading chart…
     </div>
   ),
 });
 
-/* ───────────────────────── Leaflet (client only) ───────────────────────── */
-const LMap = dynamic(() => import("react-leaflet").then((m) => m.MapContainer), { ssr: false }) as any;
-const LTile = dynamic(() => import("react-leaflet").then((m) => m.TileLayer), { ssr: false }) as any;
-const LMarker = dynamic(() => import("react-leaflet").then((m) => m.Marker), { ssr: false }) as any;
-const LCircle = dynamic(() => import("react-leaflet").then((m) => m.CircleMarker), { ssr: false }) as any;
-const LPopup = dynamic(() => import("react-leaflet").then((m) => m.Popup), { ssr: false }) as any;
-
-/* ───────────────────────── Helpers HTTP & utils ───────────────────────── */
+/* ───────────────── HTTP & utils ───────────────── */
 async function getJSON<T = unknown>(path: string): Promise<T> {
   const base =
     (typeof window !== "undefined" ? (window as any).NEXT_PUBLIC_API_BASE : undefined) ||
@@ -64,24 +58,22 @@ function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-/* ───────────────────────── Types (API Dynamics) ───────────────────────── */
+/* ───────────────── Types (API Dynamics) ───────────────── */
 type HeatmapsProfilesDoc = {
   schema_version: string;
   generated_at: string;
   heatmap: {
-    occ_mean: (number | null)[][];         // 7 x 24
-    penury_rate: (number | null)[][];      // 7 x 24 (0..1)
-    saturation_rate: (number | null)[][];  // 7 x 24 (0..1)
+    occ_mean: (number | null)[][];
+    penury_rate: (number | null)[][];
+    saturation_rate: (number | null)[][];
   };
-  profiles_occ_by_dow: Record<string, (number | null)[]>; // "0".."6" → 24 points (0..1)
+  profiles_occ_by_dow: Record<string, (number | null)[]>;
 };
-
 type HourlyDoc = {
   schema_version: string;
   generated_at: string;
   rows: Array<{ hour: number; penury_rate: number | null; saturation_rate: number | null }>;
 };
-
 type EpisodesDoc = {
   schema_version: string;
   generated_at: string;
@@ -95,7 +87,6 @@ type EpisodesDoc = {
     duration_min: number | null;
   }>;
 };
-
 type TensionByStationDoc = {
   schema_version: string;
   generated_at: string;
@@ -108,50 +99,139 @@ type TensionByStationDoc = {
     penury_rate: number | null;
     saturation_rate: number | null;
     occ_mean: number | null;
-    tension_index: number | null; // penury + saturation (0..2)
+    tension_index: number | null; // 0..2
     n_obs: number;
   }>;
 };
 
-/** Unwrap payloads possibly nested under a key */
-function unwrapHeatmapsProfiles(payload: any): HeatmapsProfilesDoc | null {
-  if (!payload) return null;
-  return (payload.heatmaps_profiles ?? payload) as HeatmapsProfilesDoc;
-}
-function unwrapHourly(payload: any): HourlyDoc | null {
-  if (!payload) return null;
-  return (payload.hourly ?? payload) as HourlyDoc;
-}
-function unwrapEpisodes(payload: any): EpisodesDoc | null {
-  if (!payload) return null;
-  return (payload.episodes ?? payload) as EpisodesDoc;
-}
-function unwrapTension(payload: any): TensionByStationDoc | null {
-  if (!payload) return null;
-  return (payload.tension_by_station ?? payload) as TensionByStationDoc;
-}
+function unwrapHeatmapsProfiles(p: any): HeatmapsProfilesDoc | null { return (p?.heatmaps_profiles ?? p) || null; }
+function unwrapHourly(p: any): HourlyDoc | null { return (p?.hourly ?? p) || null; }
+function unwrapEpisodes(p: any): EpisodesDoc | null { return (p?.episodes ?? p) || null; }
+function unwrapTension(p: any): TensionByStationDoc | null { return (p?.tension_by_station ?? p) || null; }
 
-/* ───────────────────────── Stations index (pour noms + coords) ───────────────────────── */
+/* ───────────────── Stations index (noms + coords) ───────────────── */
 type StationMeta = { station_id: string; name?: string | null; lat?: number | null; lon?: number | null };
 async function fetchStationsIndex(): Promise<Record<string, StationMeta>> {
   const arr = await getJSON<any[]>("/stations").catch(() => []);
   const idx: Record<string, StationMeta> = {};
   for (const s of arr) {
     const sid = String((s as any).station_id);
+    const lat = Number((s as any).lat ?? NaN);
+    const lon = Number((s as any).lon ?? NaN);
     idx[sid] = {
       station_id: sid,
       name: (s as any).name ?? null,
-      lat: Number((s as any).lat ?? NaN),
-      lon: Number((s as any).lon ?? NaN),
+      lat: Number.isFinite(lat) ? lat : null,
+      lon: Number.isFinite(lon) ? lon : null,
     };
-    if (!Number.isFinite(idx[sid].lat!)) idx[sid].lat = null;
-    if (!Number.isFinite(idx[sid].lon!)) idx[sid].lon = null;
   }
   return idx;
 }
 
-/* ───────────────────────── Page ───────────────────────── */
-export default function DynamicsPage() {
+/* ───────────────── Episodes Map (identique Stations) ───────────────── */
+type EpisodePoint = {
+  station_id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  type: "penury" | "saturation";
+  start_utc: string;
+  end_utc: string;
+  duration_min: number | null;
+};
+
+const EpisodesMap = dynamic(async () => {
+  const RL = await import("react-leaflet");
+  const { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } = RL as any;
+  const { useEffect, useMemo, useState } = await import("react");
+
+  function FitBounds({ rows }: { rows: EpisodePoint[] }) {
+    const map = useMap();
+    useEffect(() => {
+      if (!rows.length) return;
+      let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+      for (const r of rows) {
+        if (r.lat < minLat) minLat = r.lat;
+        if (r.lat > maxLat) maxLat = r.lat;
+        if (r.lon < minLon) minLon = r.lon;
+        if (r.lon > maxLon) maxLon = r.lon;
+      }
+      if (minLat <= maxLat && minLon <= maxLon) {
+        map.fitBounds([[minLat, minLon], [maxLat, maxLon]], { padding: [20, 20] });
+      }
+    }, [rows, map]);
+    return null;
+  }
+
+  function MapInner({ rows }: { rows: EpisodePoint[] }) {
+    const valid = useMemo(() => rows.filter(r => Number.isFinite(r.lat) && Number.isFinite(r.lon)), [rows]);
+    const latMed = valid.length ? [...valid].map(r=>r.lat).sort((a,b)=>a-b)[Math.floor(valid.length/2)] : 48.8566;
+    const lonMed = valid.length ? [...valid].map(r=>r.lon).sort((a,b)=>a-b)[Math.floor(valid.length/2)] : 2.3522;
+
+    const [tileUrl, setTileUrl] = useState("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png");
+    useEffect(() => {
+      const img = new Image();
+      img.onerror = () => setTileUrl("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png");
+      img.src = "https://a.basemaps.cartocdn.com/light_nolabels/3/4/2.png";
+    }, []);
+
+    return (
+      <div className="map-wrap" style={{ width: "100%", height: 520 }}>
+        <MapContainer center={[latMed, lonMed]} zoom={12} className="leaflet-container">
+          <TileLayer
+            url={tileUrl}
+            attribution='&copy; OpenStreetMap, &copy; <a href="https://carto.com/">CARTO</a>'
+            detectRetina
+          />
+          <FitBounds rows={valid} />
+          {valid.map((r, i) => {
+            const col = r.type === "penury" ? "#ef4444" : "#3b82f6";
+            return (
+              <CircleMarker
+                key={`${r.station_id}-${i}`}
+                center={[r.lat, r.lon]}
+                radius={5}
+                pathOptions={{ color: col, weight: 0.8, fillColor: col, fillOpacity: 0.85 }}
+              >
+                <Tooltip>
+                  <div style={{display:"grid", gap:4}}>
+                    <div><b>{r.name}</b> <span style={{opacity:.6}}>({r.station_id})</span></div>
+                    <div>Type : <b style={{ color: col }}>{r.type}</b></div>
+                    <div>Début : {new Date(r.start_utc).toLocaleString("fr-FR")}</div>
+                    <div>Fin : {new Date(r.end_utc).toLocaleString("fr-FR")}</div>
+                    <div>Durée : {fmtInt(r.duration_min)}</div>
+                    <a href={`/monitoring/network/dynamics?station_id=${encodeURIComponent(r.station_id)}`} style={{textDecoration:"underline"}}>
+                      Voir épisodes →
+                    </a>
+                  </div>
+                </Tooltip>
+              </CircleMarker>
+            );
+          })}
+        </MapContainer>
+
+        {/* Légende identique Stations */}
+        <div className="cluster-legend">
+          <div className="cluster-legend__title">Épisodes</div>
+          <div className="cluster-legend__row">
+            <span className="cluster-legend__dot" style={{ background: "#ef4444" }} />
+            <span>Pénurie</span>
+          </div>
+        <div className="cluster-legend__row">
+            <span className="cluster-legend__dot" style={{ background: "#3b82f6" }} />
+            <span>Saturation</span>
+          </div>
+          <div className="cluster-legend__meta">{valid.length} points</div>
+        </div>
+      </div>
+    );
+  }
+
+  return MapInner;
+}, { ssr: false });
+
+/* ───────────────── Page ───────────────── */
+export default function NetworkDynamicsPage() {
   const router = useRouter();
   const qStation = typeof router.query.station_id === "string" ? router.query.station_id : "";
   const [stationId, setStationId] = useState<string>(qStation);
@@ -162,7 +242,7 @@ export default function DynamicsPage() {
   const [tension, setTension] = useState<TensionByStationDoc | null>(null);
   const [stationsIdx, setStationsIdx] = useState<Record<string, StationMeta>>({});
 
-  const [dowSel, setDowSel] = useState<number>(1); // 1 = Lundi
+  const [dowSel, setDowSel] = useState<number>(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -200,21 +280,14 @@ export default function DynamicsPage() {
   const generatedAt =
     heat?.generated_at ?? hourly?.generated_at ?? episodes?.generated_at ?? tension?.generated_at;
 
-  /* ───────────────────────── Heatmaps 7×24 ───────────────────────── */
+  /* ───────────────── Heatmaps 7×24 — empilées ───────────────── */
   const heatmap = (title: string, matrix: (number | null)[][], isPct01 = false): JSX.Element => {
     const z = matrix?.map((row) => row?.map((v) => (Number.isFinite(Number(v)) ? (isPct01 ? Number(v) * 100 : Number(v)) : null))) ?? [];
     const y = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"];
-    const x = [...Array(24)].map((_,i)=>`${String(i).padStart(2,"0")}:00`);
+    const x = [...Array(24)].map((_, i) => `${String(i).padStart(2, "0")}:00`);
     return (
       <Plot
-        data={[
-          {
-            z, x, y,
-            type: "heatmap",
-            hoverongaps: false,
-            colorbar: { title: isPct01 ? "%" : "Occ" },
-          } as Partial<Plotly.PlotData> as any
-        ]}
+        data={[{ z, x, y, type: "heatmap", hoverongaps: false, colorbar: { title: isPct01 ? "%" : "Occ" } } as any]}
         layout={{
           autosize: true,
           height: 300,
@@ -225,34 +298,33 @@ export default function DynamicsPage() {
           plot_bgcolor: "rgba(0,0,0,0)",
         }}
         config={{ displayModeBar: false, responsive: true }}
-        style={{ width: "100%" }}
+        className="plot plot--lg"
       />
     );
   };
 
-  /* ───────────────────────── Profils par jour ───────────────────────── */
+  /* ───────────────── Profils par jour ───────────────── */
   const selectedProfile = useMemo(() => {
     const key = String(dowSel ?? 1);
     const arr = heat?.profiles_occ_by_dow?.[key] ?? [];
     return arr.map((v) => (Number.isFinite(Number(v)) ? Number(v) * 100 : null));
   }, [heat, dowSel]);
 
-  // ▼ Y-range dynamique pour le profil
   const profileYMax = useMemo(() => {
     const vals = (selectedProfile || []).filter((v) => Number.isFinite(Number(v))) as number[];
     const maxv = vals.length ? Math.max(...vals) : 100;
     return clamp(Math.ceil(maxv + 5), 20, 100);
   }, [selectedProfile]);
 
-  /* ───────────────────────── Barres horaires ───────────────────────── */
+  /* ───────────────── Barres horaires ───────────────── */
   const hourlyBars: Partial<Plotly.PlotData>[] = useMemo(() => {
     const rows = hourly?.rows ?? [];
-    const hours = [...Array(24)].map((_,i)=>i);
+    const hours = [...Array(24)].map((_, i) => i);
     return [
       {
         x: hours,
-        y: hours.map(h => {
-          const r = rows.find(q => q.hour === h);
+        y: hours.map((h) => {
+          const r = rows.find((q) => q.hour === h);
           return clamp01(r?.penury_rate) != null ? Number(r!.penury_rate) * 100 : null;
         }),
         type: "bar",
@@ -260,8 +332,8 @@ export default function DynamicsPage() {
       },
       {
         x: hours,
-        y: hours.map(h => {
-          const r = rows.find(q => q.hour === h);
+        y: hours.map((h) => {
+          const r = rows.find((q) => q.hour === h);
           return clamp01(r?.saturation_rate) != null ? Number(r!.saturation_rate) * 100 : null;
         }),
         type: "bar",
@@ -270,11 +342,10 @@ export default function DynamicsPage() {
     ];
   }, [hourly]);
 
-  // ▼ Y-range dynamique pour les barres
   const hourlyYMax = useMemo(() => {
     const vals: number[] = [];
     for (const s of hourlyBars) {
-      for (const v of ((s.y as (number|null)[]) ?? [])) {
+      for (const v of ((s.y as (number | null)[]) ?? [])) {
         if (Number.isFinite(Number(v))) vals.push(Number(v));
       }
     }
@@ -282,185 +353,143 @@ export default function DynamicsPage() {
     return clamp(Math.ceil(maxv + 5), 10, 100);
   }, [hourlyBars]);
 
-  /* ───────────────────────── Episodes (filtre station) ───────────────────────── */
+  /* ───────────────── Episodes (filtre station) ───────────────── */
   const episodesFiltered = useMemo(() => {
     const rows = episodes?.rows ?? [];
     const sid = (stationId || "").trim();
-    return sid ? rows.filter(r => r.station_id === sid) : rows;
+    return sid ? rows.filter((r) => r.station_id === sid) : rows;
   }, [episodes, stationId]);
 
-  /* ───────────────────────── Tension par station (recherche) ───────────────────────── */
+  /* ───────────────── Tension par station (recherche) ───────────────── */
   const [search, setSearch] = useState("");
   const tensionRows = useMemo(() => {
     const rows = tension?.rows ?? [];
     const q = (search || "").toLowerCase();
     const filtered = q
-      ? rows.filter(r => r.station_id.toLowerCase().includes(q) || (r.name ?? "").toLowerCase().includes(q))
+      ? rows.filter((r) => r.station_id.toLowerCase().includes(q) || (r.name ?? "").toLowerCase().includes(q))
       : rows;
     return filtered
-      .map(r => ({
-        ...r,
-        _name: stationsIdx[r.station_id]?.name ?? r.name ?? r.station_id,
-      }))
-      .sort((a,b) => Number(b.tension_index ?? 0) - Number(a.tension_index ?? 0))
+      .map((r) => ({ ...r, _name: stationsIdx[r.station_id]?.name ?? r.name ?? r.station_id }))
+      .sort((a, b) => Number(b.tension_index ?? 0) - Number(a.tension_index ?? 0))
       .slice(0, 200);
   }, [tension, search, stationsIdx]);
 
-  /* ───────────────────────── Helpers cartes ───────────────────────── */
-  const PARIS = { lat: 48.8566, lon: 2.3522 };
-
-  /* ───────────────────────── Carte des épisodes ───────────────────────── */
-  function EpisodesMap() {
-    const pts = useMemo(() => {
-      const rows = episodesFiltered ?? [];
-      const out: Array<{ lat: number; lon: number; name: string; type: "penury"|"saturation"; start: string; end: string; dur: number|null; sid: string }> = [];
-      for (const r of rows) {
-        const meta = stationsIdx[r.station_id];
-        if (meta?.lat != null && meta?.lon != null) {
-          out.push({
-            lat: meta.lat!, lon: meta.lon!,
-            name: meta.name ?? r.station_id,
-            type: r.type,
-            start: r.start_utc, end: r.end_utc, dur: r.duration_min ?? null,
-            sid: r.station_id,
-          });
-        }
+  /* ───────────────── Rows pour EpisodesMap ───────────────── */
+  const episodePoints: EpisodePoint[] = useMemo(() => {
+    const rows = episodesFiltered ?? [];
+    const out: EpisodePoint[] = [];
+    for (const r of rows) {
+      const meta = stationsIdx[r.station_id];
+      if (meta?.lat != null && meta?.lon != null) {
+        out.push({
+          station_id: r.station_id,
+          name: meta.name ?? r.station_id,
+          lat: meta.lat!,
+          lon: meta.lon!,
+          type: r.type,
+          start_utc: r.start_utc,
+          end_utc: r.end_utc,
+          duration_min: r.duration_min ?? null,
+        });
       }
-      return out;
-    }, [episodesFiltered, stationsIdx]);
-
-    return (
-      <div style={{ width: "100%", height: 360, borderRadius: 10, overflow: "hidden" }}>
-        <LMap center={[PARIS.lat, PARIS.lon]} zoom={12} style={{ width: "100%", height: "100%" }}>
-          <LTile attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-          {pts.map((p, i) => (
-            <LCircle
-              key={`${p.sid}-${i}`}
-              center={[p.lat, p.lon]}
-              radius={6}
-              pathOptions={{ color: p.type === "penury" ? "#ef4444" : "#3b82f6", fillOpacity: 0.7 }}
-            >
-              <LPopup>
-                <div style={{ fontSize: 12 }}>
-                  <div><b>{p.name}</b> <span style={{ opacity: 0.6 }}>({p.sid})</span></div>
-                  <div>Type : <b style={{ color: p.type === "penury" ? "#ef4444" : "#3b82f6" }}>{p.type}</b></div>
-                  <div>Début : {new Date(p.start).toLocaleString("fr-FR")}</div>
-                  <div>Fin : {new Date(p.end).toLocaleString("fr-FR")}</div>
-                  <div>Durée : {fmtInt(p.dur)}</div>
-                </div>
-              </LPopup>
-            </LCircle>
-          ))}
-        </LMap>
-      </div>
-    );
-  }
+    }
+    return out;
+  }, [episodesFiltered, stationsIdx]);
 
   return (
-    <>
+    <div className="monitoring">
       <Head>
         <title>Monitoring — Network / Dynamics</title>
         <meta name="description" content="Dynamiques réseau: heatmaps, profils, épisodes, tension par station." />
-        {/* ▼ Fix scroll global (comme la page Overview) */}
-        <style
-          dangerouslySetInnerHTML={{
-            __html: `
-              html, body, #__next { height: auto !important; }
-              html, body { overflow-y: auto !important; }
-            `,
-          }}
-        />
-        {/* Leaflet CSS (pour éviter de modifier _app.tsx) */}
+        <link rel="stylesheet" href="/css/monitoring.css" />
+        {/* Leaflet CSS + small global fixes */}
         <link
           rel="stylesheet"
           href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
           crossOrigin=""
         />
+        <style
+          dangerouslySetInnerHTML={{
+            __html: `
+              .leaflet-container { background: #fff !important; }
+              html, body, #__next { height: auto !important; }
+              html, body { overflow-y: auto !important; }
+            `,
+          }}
+        />
       </Head>
 
-      <main style={{ padding: "2rem", maxWidth: 1300, margin: "0 auto" }}>
-        {/* Header */}
-        <header style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-          <div>
-            <h1 style={{ margin: 0 }}>Network — Dynamics</h1>
-            <div className="small" style={{ opacity: 0.7 }}>
-              {generatedAt ? `Généré : ${new Date(generatedAt).toLocaleString("fr-FR")}` : "—"}
-            </div>
-          </div>
-          <nav style={{ display: "flex", gap: 8 }}>
-            <Link href="/monitoring/network/overview"
-              style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: "white", color: "#111827", textDecoration: "none" }}>
-              Overview
-            </Link>
-            <Link href="/monitoring/network/stations"
-              style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: "white", color: "#111827", textDecoration: "none" }}>
-              Stations
-            </Link>
-          </nav>
-        </header>
+      <main className="page">
+        <MonitoringNav
+          title="Network — Dynamics"
+          subtitle="Heatmaps 7×24, profils par jour, épisodes et tension"
+          generatedAt={generatedAt}
+          crumbs={[
+            { label: "Accueil", href: "/" },
+            { label: "Monitoring", href: "/monitoring" },
+            { label: "App", href: "/app" },
+          ]}
+          extraActions={[
+            { label: "Overview", href: "/monitoring/network/overview" },
+            { label: "Stations", href: "/monitoring/network/stations" },
+          ]}
+        />
 
-        {loading && <Banner kind="info">Chargement…</Banner>}
-        {error && <Banner kind="error">{error}</Banner>}
+        {loading && <div className="banner">Loading…</div>}
+        {error && <div className="banner banner--error">{error}</div>}
 
-        {/* Heatmaps */}
-        <section style={{ marginTop: 24 }}>
-          <h2 style={{ margin: "12px 0" }}>Heatmaps 7×24</h2>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(1, minmax(0, 1fr))", gap: 16 }}>
-            <Card>{heat ? heatmap("Occupation moyenne (0..1)", heat.heatmap?.occ_mean ?? [], false) : <Empty>—</Empty>}</Card>
-            <Card>{heat ? heatmap("Pénurie (%)", heat.heatmap?.penury_rate ?? [], true) : <Empty>—</Empty>}</Card>
-            <Card>{heat ? heatmap("Saturation (%)", heat.heatmap?.saturation_rate ?? [], true) : <Empty>—</Empty>}</Card>
-          </div>
+        {/* Heatmaps — EMPILÉES */}
+        <section className="mt-6">
+          <h2>Heatmaps 7×24</h2>
+          <div className="card">{heat ? heatmap("Occupation moyenne (0..1)", heat.heatmap?.occ_mean ?? [], false) : <div className="empty">—</div>}</div>
+          <div className="card mt-4">{heat ? heatmap("Pénurie (%)", heat.heatmap?.penury_rate ?? [], true) : <div className="empty">—</div>}</div>
+            <div className="card mt-4">{heat ? heatmap("Saturation (%)", heat.heatmap?.saturation_rate ?? [], true) : <div className="empty">—</div>}</div>
         </section>
 
-        {/* Profils par jour de semaine */}
-        <section style={{ marginTop: 24 }}>
-          <h2 style={{ margin: "12px 0" }}>Profils d’occupation par jour</h2>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
-            <label style={{ fontSize: 13, opacity: 0.8 }}>Jour :</label>
+        {/* Profils par jour */}
+        <section className="mt-6">
+          <h2>Profils d’occupation par jour</h2>
+          <div className="filters" style={{ marginBottom: 8 }}>
+            <label className="small" style={{ opacity: .8 }}>Jour :</label>
             {[1,2,3,4,5,6,0].map((d) => {
-              const lbl = ["Dim","Lun","Mar","Mer","Jeu","Ven","Sam"][d]; // pour ordre visuel
-              const val = d === 0 ? 0 : d; // 0..6
+              const lbl = ["Dim","Lun","Mar","Mer","Jeu","Ven","Sam"][d];
+              const val = d === 0 ? 0 : d;
+              const active = val === dowSel;
               return (
-                <button key={d}
-                  onClick={() => setDowSel(val)}
-                  style={{
-                    padding: "6px 10px",
-                    borderRadius: 8,
-                    border: "1px solid #d1d5db",
-                    background: val === dowSel ? "#111827" : "white",
-                    color: val === dowSel ? "white" : "#111827",
-                    cursor: "pointer",
-                  }}>
+                <button key={d} onClick={() => setDowSel(val)} className={`btn ${active ? "btn-primary" : ""}`}>
                   {lbl}
                 </button>
               );
             })}
           </div>
-          <Card>
+          <div className="card">
             {selectedProfile.length ? (
               <Plot
-                data={[{ x: [...Array(24)].map((_,i)=>`${String(i).padStart(2,"0")}:00`), y: selectedProfile, type: "scatter", mode: "lines", name: "Occupation (%)" } as any]}
+                data={[{
+                  x: [...Array(24)].map((_, i) => `${String(i).padStart(2, "0")}:00`),
+                  y: selectedProfile, type: "scatter", mode: "lines", name: "Occupation (%)"
+                } as any]}
                 layout={{
                   autosize: true,
                   height: 340,
                   margin: { l: 52, r: 10, t: 20, b: 40 },
                   yaxis: { title: { text: "%" }, range: [0, profileYMax] },
-                  xaxis: { title: { text: "Heure (locale jour sélectionné)" } },
+                  xaxis: { title: { text: "Heure (locale — jour sélectionné)" } },
                   paper_bgcolor: "rgba(0,0,0,0)",
                   plot_bgcolor: "rgba(0,0,0,0)",
                 }}
                 config={{ displayModeBar: false, responsive: true }}
-                style={{ width: "100%" }}
+                className="plot plot--lg"
               />
-            ) : <Empty>Profil indisponible.</Empty>}
-          </Card>
+            ) : <div className="empty">Profil indisponible.</div>}
+          </div>
         </section>
 
         {/* Barres horaires pen/sat */}
-        <section style={{ marginTop: 24 }}>
-          <h2 style={{ margin: "12px 0" }}>Pénurie & Saturation par heure</h2>
-          <Card>
+        <section className="mt-6">
+          <h2>Pénurie & Saturation par heure</h2>
+          <div className="card">
             {hourlyBars?.length ? (
               <Plot
                 data={hourlyBars as Plotly.Data[]}
@@ -476,37 +505,48 @@ export default function DynamicsPage() {
                   plot_bgcolor: "rgba(0,0,0,0)",
                 }}
                 config={{ displayModeBar: false, responsive: true }}
-                style={{ width: "100%" }}
+                className="plot plot--sm"
               />
-            ) : <Empty>—</Empty>}
-          </Card>
+            ) : <div className="empty">—</div>}
+          </div>
         </section>
 
-        {/* Episodes */}
-        <section style={{ marginTop: 24 }}>
-          <h2 style={{ margin: "12px 0" }}>Épisodes (fenêtre récente)</h2>
-          <Card>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-              <label style={{ fontSize: 13, opacity: 0.8 }}>Filtrer station_id :</label>
-              <input
-                value={stationId}
-                onChange={(e)=>setStationId(e.target.value)}
-                placeholder="ex: 12123"
-                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", outline: "none" }}
-              />
-              <button
-                onClick={()=>router.push({ pathname: "/monitoring/network/dynamics", query: stationId ? { station_id: stationId } : {} }, undefined, { shallow: true })}
-                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #111827", background: "#111827", color: "white", cursor: "pointer" }}>
-                Appliquer
-              </button>
-              {episodes && <span style={{ fontSize: 12, opacity: 0.7 }}>Fenêtre: {episodes.last_days} j</span>}
+        {/* Épisodes — même intégration carte que Stations */}
+        <section className="mt-6">
+          <h2>Épisodes (fenêtre récente)</h2>
+          <div className="filters">
+            <label className="small" style={{ opacity: .8 }}>Filtrer station_id :</label>
+            <input
+              value={stationId}
+              onChange={(e)=>setStationId(e.target.value)}
+              placeholder="ex: 12123"
+              className="input"
+            />
+            <button
+              onClick={() =>
+                router.push(
+                  { pathname: "/monitoring/network/dynamics", query: stationId ? { station_id: stationId } : {} },
+                  undefined,
+                  { shallow: true }
+                )
+              }
+              className="btn btn-primary"
+            >
+              Appliquer
+            </button>
+            {episodes && <span className="small" style={{ opacity: .7 }}>Fenêtre: {episodes.last_days} j</span>}
+          </div>
+
+          {/* ⚠️ pas de .card ici — on fait comme Stations: map-block direct */}
+          <div className="map-block">
+            <div className="map-wrap" style={{ width: "100%", height: 520 }}>
+              {episodePoints.length ? <EpisodesMap rows={episodePoints} /> : <div className="empty">Aucun point à afficher.</div>}
             </div>
+          </div>
 
-            {/* ▼ Carte des épisodes */}
-            <EpisodesMap />
-
-            {episodesFiltered?.length ? (
-              <div style={{ overflowX: "auto", marginTop: 12 }}>
+          {episodesFiltered?.length ? (
+            <div className="card mt-4">
+              <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                   <thead>
                     <tr style={{ textAlign: "left" }}>
@@ -536,22 +576,23 @@ export default function DynamicsPage() {
                   </tbody>
                 </table>
               </div>
-            ) : <Empty>Aucun épisode.</Empty>}
-          </Card>
+            </div>
+          ) : <div className="empty mt-4">Aucun épisode.</div>}
         </section>
 
         {/* Tension par station */}
-        <section style={{ marginTop: 24 }}>
-          <h2 style={{ margin: "12px 0" }}>Tension par station</h2>
-          <Card>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+        <section className="mt-6">
+          <h2>Tension par station</h2>
+          <div className="card">
+            <div className="filters">
               <input
                 value={search}
                 onChange={(e)=>setSearch(e.target.value)}
                 placeholder="Recherche station_id ou nom…"
-                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", outline: "none", minWidth: 280 }}
+                className="input"
+                style={{ minWidth: 280 }}
               />
-              {tension && <span style={{ fontSize: 12, opacity: 0.7 }}>Fenêtre: {tension.last_days} j</span>}
+              {tension && <span className="small" style={{ opacity: 0.7 }}>Fenêtre: {tension.last_days} j</span>}
             </div>
             {tensionRows?.length ? (
               <div style={{ overflowX: "auto" }}>
@@ -571,7 +612,7 @@ export default function DynamicsPage() {
                       <tr key={`${r.station_id}-${i}`} style={{ borderTop: "1px solid #374151" }}>
                         <td>
                           <div style={{ whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden", maxWidth: 240 }}>
-                            <b>{r._name}</b> <span style={{ opacity: 0.6 }}>({r.station_id})</span>
+                            <b>{(r as any)._name}</b> <span style={{ opacity: 0.6 }}>({r.station_id})</span>
                           </div>
                         </td>
                         <td>{fmtPct(Number(r.penury_rate ?? NaN) * 100, 1)}</td>
@@ -584,44 +625,10 @@ export default function DynamicsPage() {
                   </tbody>
                 </table>
               </div>
-            ) : <Empty>—</Empty>}
-          </Card>
+            ) : <div className="empty">—</div>}
+          </div>
         </section>
       </main>
-    </>
-  );
-}
-
-/* ───────────────────────── UI atoms ───────────────────────── */
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ border: "1px solid #374151", background: "rgba(15, 23, 42, 0.5)", borderRadius: 12, padding: 12 }}>
-      {children}
-    </div>
-  );
-}
-function Banner({ kind, children }: { kind: "info" | "error"; children: React.ReactNode }) {
-  const style =
-    kind === "error"
-      ? { border: "1px solid #DC2626", background: "rgba(220, 38, 38, 0.08)", color: "#F87171" }
-      : { border: "1px solid #374151", background: "rgba(15, 23, 42, 0.5)", color: "inherit", opacity: 0.85 };
-  return (
-    <div style={{ marginTop: 16, borderRadius: 10, padding: "10px 12px", fontSize: 13, ...style }}>{children}</div>
-  );
-}
-function Empty({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        border: "1px solid #374151",
-        background: "rgba(15,23,42,0.35)",
-        borderRadius: 12,
-        padding: "14px",
-        color: "#9CA3AF",
-        fontSize: 13,
-      }}
-    >
-      {children}
     </div>
   );
 }

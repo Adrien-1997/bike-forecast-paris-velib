@@ -1,5 +1,5 @@
 // components/BadgesBar.tsx
-import type { Badges } from "@/lib/types";
+import type { Badges } from "@/lib/types/types";
 
 export type BadgesProps = { data?: Badges | null };
 

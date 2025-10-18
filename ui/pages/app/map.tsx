@@ -1,7 +1,7 @@
 // ui/components/MapView.tsx
 import dynamic from 'next/dynamic'
 import { useMemo } from 'react'
-import type { Station, Forecast } from '@/lib/types'
+import type { Station, Forecast } from '@/lib/types/types'
 
 // Leaflet côté client uniquement
 let L: typeof import('leaflet') | null = null
