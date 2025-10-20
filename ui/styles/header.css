@@ -1,0 +1,270 @@
+/* ===================================================================
+   GlobalHeader — sticky, panneau mobile (dark/light)
+   + auto-hide (classes .autohide / .is-hidden)
+   =================================================================== */
+
+/* Liens nav : jamais soulignés par défaut */
+.site-header .nav-trigger,
+.site-header .nav-trigger:hover,
+.site-header .nav-trigger:focus-visible {
+  text-decoration: none !important;
+}
+
+/* =================== HEADER sticky + variantes =================== */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-header, 100);
+  padding-top: var(--safe-top, 0px);
+  backdrop-filter: saturate(120%) blur(10px);
+  background: linear-gradient(180deg, rgba(11,18,32,.85), rgba(11,18,32,.55) 70%, transparent);
+  border-bottom: 1px solid var(--ring, rgba(255,255,255,.14));
+  box-shadow: 0 10px 30px rgba(0,0,0,.25);
+  will-change: transform, background;
+  transition: transform .22s ease, background .25s ease, box-shadow .25s ease;
+}
+.site-header::after {
+  content:"";
+  position:absolute; inset:auto 0 0 0; height:2px; opacity:.9;
+  background: linear-gradient(90deg, transparent, var(--primary), var(--primary-2), transparent);
+}
+
+/* —— Auto-hide —— */
+.site-header.autohide { transform: translateY(0); }
+.site-header.autohide.is-hidden {
+  transform: translateY(calc(-100% - var(--safe-top, 0px)));
+}
+
+@media (prefers-color-scheme: light) {
+  .site-header {
+    background: linear-gradient(180deg, rgba(255,255,255,.9), rgba(255,255,255,.7) 70%, transparent);
+    border-bottom: 1px solid var(--ring, rgba(0,0,0,.10));
+    box-shadow: 0 8px 20px rgba(0,0,0,.05);
+  }
+}
+
+/* =================== Layout container =================== */
+.site-header .container.nav {
+  max-width: var(--content-max, 1200px);
+  margin: 0 auto;
+  padding: 14px max(22px, env(safe-area-inset-left));
+  padding-right: max(22px, env(safe-area-inset-right));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* =================== Branding =================== */
+.site-header .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text, #e6eaf2);
+  text-decoration: none !important;
+}
+.site-header .brand .mark {
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+}
+.site-header .brand svg { width: 100%; height: 100%; display: block; }
+
+.site-header .brandtext {
+  display: inline-flex;
+  gap: 6px;
+  font-weight: 700;
+  letter-spacing: .2px;
+  text-transform: lowercase;
+  font-size: clamp(16px, 1.6vw, 22px);
+  color: var(--text, #e6eaf2);
+}
+.site-header .brand-velo { color: var(--primary, #ff6a00); }
+.site-header .brand-sep  { opacity: .6; color: var(--text, #e6eaf2); }
+.site-header .brand-paris{ color: var(--primary-2, #1d7fff); }
+
+/* =================== Desktop nav (≥980px) =================== */
+.site-header .nav-desktop { display: none; }
+@media (min-width:980px) {
+  .site-header .nav-desktop { display:block; }
+  .site-header .nav-desktop ul {
+    display:flex; gap:18px; align-items:center; margin:0; padding:0; list-style:none;
+  }
+}
+
+/* =================== Liens nav =================== */
+.site-header .nav-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 12px;
+  color: var(--muted, #9ca3af);
+  border: none;
+  transition: transform .15s ease, background-color .15s ease, color .15s ease;
+}
+.site-header .nav-trigger:hover {
+  color: var(--text, #e6eaf2);
+  background: color-mix(in srgb, var(--panel, #0f172a) 42%, transparent);
+}
+.site-header .nav-trigger.active {
+  color: var(--text, #e6eaf2);
+  background: color-mix(in srgb, var(--primary-2, #1d7fff) 14%, transparent);
+}
+@media (prefers-color-scheme: light) {
+  .site-header .nav-trigger { color: var(--muted, #4b5563); }
+  .site-header .nav-trigger:hover {
+    background: color-mix(in srgb, #000 6%, transparent);
+  }
+  .site-header .nav-trigger.active {
+    background: color-mix(in srgb, var(--primary-2) 18%, transparent);
+  }
+}
+
+/* =================== Burger (mobile, clair et net) =================== */
+.site-header .burger {
+  display: inline-flex;
+  align-items:center; justify-content:center;
+  width:42px; height:42px;
+  border-radius:12px;
+  border:none;
+  background: rgba(255,255,255,.12);
+  transition: background .15s ease, transform .15s ease, box-shadow .15s ease;
+  backdrop-filter: none !important;        /* ❌ ne jamais se flouter */
+  -webkit-backdrop-filter: none !important;
+  position: relative;
+  z-index: 999;
+}
+.site-header .burger:hover {
+  background: rgba(255,255,255,.18);
+  box-shadow: 0 0 8px rgba(255,255,255,.15);
+}
+
+/* ✅ Icône claire */
+.site-header .burger .icon svg {
+  display:block;
+  width:22px; height:22px;
+  stroke:#f9fafb;
+  stroke-width:2px;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+  fill:none;
+  transition:stroke .15s ease;
+}
+.site-header .burger:hover .icon svg { stroke:#ffffff; }
+
+/* ✅ Gestion lignes / croix */
+.site-header .burger .lines rect { opacity:1; transition:opacity .18s ease; }
+.site-header .burger .cross rect { opacity:0; transition:opacity .18s ease; }
+.site-header .burger.close .lines rect { opacity:0; }   /* ✅ bon sélecteur */
+.site-header .burger.close .cross rect { opacity:1; }
+
+/* ✅ Empêche le flou du header sur les éléments internes du burger */
+.site-header .burger * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+@media (prefers-color-scheme: light) {
+  .site-header .burger {
+    background: rgba(0,0,0,.06);
+  }
+  .site-header .burger:hover {
+    background: rgba(0,0,0,.10);
+  }
+  .site-header .burger .icon svg { stroke:#1f2937; }
+  .site-header .burger:hover .icon svg { stroke:#111827; }
+}
+@media (min-width:980px) { .site-header .burger { display:none; } }
+
+/* =================== Mobile drawer =================== */
+.site-header .mobile-drawer {
+  position: fixed;
+  inset: calc(var(--header-h, 70px) + var(--safe-top, 0px)) 0 auto 0;
+  translate: 0 -8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease, translate .18s ease;
+  z-index: calc(var(--z-header, 100) - 1);
+}
+.site-header .mobile-drawer.open {
+  opacity:1; translate:0 0; pointer-events:auto;
+}
+
+.site-header .mobile-nav {
+  margin: 8px 12px 16px;
+  border-radius: 16px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--panel, #0f172a) 92%, transparent);
+  border: 1px solid var(--ring, rgba(255,255,255,0.14));
+  box-shadow: var(--shadow, 0 10px 30px rgba(0,0,0,.35));
+  backdrop-filter: blur(10px) saturate(140%);
+}
+.site-header .mobile-nav ul {
+  display:grid; gap:6px; list-style:none; margin:0; padding:6px;
+}
+.site-header .mobile-nav .nav-trigger {
+  width:100%; padding:12px 14px; border-radius:12px; border:none;
+}
+.site-header .mobile-nav .nav-trigger:hover {
+  background: color-mix(in srgb, var(--panel, #0f172a) 52%, transparent);
+}
+@media (prefers-color-scheme: light) {
+  .site-header .mobile-nav {
+    background: linear-gradient(180deg, rgba(255,255,255,.94), rgba(255,255,255,.84));
+    border-color: var(--ring, rgba(0,0,0,.10));
+    box-shadow: 0 12px 28px rgba(0,0,0,.12), 0 2px 8px rgba(0,0,0,.06);
+  }
+  .site-header .mobile-nav .nav-trigger:hover {
+    background: rgba(0,0,0,.05);
+  }
+}
+
+/* =================== Backdrop =================== */
+.site-header .backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.28);
+  backdrop-filter: blur(1px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease;
+  z-index: calc(var(--z-header, 100) - 2);
+  border: 0;
+}
+.site-header .backdrop.visible {
+  opacity:1; pointer-events:auto;
+}
+@media (prefers-color-scheme: light) {
+  .site-header .backdrop { background: rgba(0,0,0,0.20); }
+}
+
+/* =================== A11y focus =================== */
+.site-header .nav-trigger:focus-visible,
+.site-header .burger:focus-visible {
+  outline:none;
+  box-shadow:0 0 0 3px rgba(29,127,255,.35);
+  border-radius:12px;
+}
+
+/* =================== Reduced motion & @supports =================== */
+@media (prefers-reduced-motion: reduce) {
+  .site-header .mobile-drawer,
+  .site-header .backdrop,
+  .site-header.autohide { transition: none; }
+}
+@supports not (backdrop-filter: blur(8px)) {
+  .site-header { background: rgba(11,18,32,.92); }
+}
+
+/* -------------------------------------------------------------------
+  Hook JS minimal pour l’auto-hide :
+
+  let prev = window.scrollY;
+  const header = document.querySelector('.site-header.autohide');
+  window.addEventListener('scroll', () => {
+    const y = window.scrollY;
+    const goingDown = y > prev && y > 10;
+    header?.classList.toggle('is-hidden', goingDown);
+    prev = y;
+  }, { passive: true });
+------------------------------------------------------------------- */

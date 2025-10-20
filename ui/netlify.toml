@@ -1,0 +1,20 @@
+[build]
+command = "npm run build"
+publish = ".next"
+
+# Active le runtime SSR/ISR de Next.js sur Netlify
+[[plugins]]
+package = "@netlify/plugin-nextjs"
+
+# Proxy vers ton API Cloud Run (évite le CORS côté client)
+[[redirects]]
+from = "/api/*"
+to = "https://velib-forecast-472820-uc.a.run.app/:splat"  # ← ton domaine Cloud Run
+status = 200
+force = true
+
+# (Optionnel) Caching pour les proxys API
+[[headers]]
+for = "/api/*"
+  [headers.values]
+  Cache-Control = "public, max-age=0, s-maxage=60, stale-while-revalidate=300"

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="velibGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ff6a00"/>
+      <stop offset="100%" stop-color="#1d7fff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Cercle dégradé -->
+  <circle cx="50" cy="50" r="46"
+          fill="none"
+          stroke="url(#velibGradient)"
+          stroke-width="5" />
+
+  <!-- V centré dégradé -->
+  <path d="M30 30 L50 75 L70 30"
+        fill="none"
+        stroke="url(#velibGradient)"
+        stroke-width="8"
+        stroke-linecap="round"
+        stroke-linejoin="round" />
+</svg>

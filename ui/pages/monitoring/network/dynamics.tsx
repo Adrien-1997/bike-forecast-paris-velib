@@ -6,6 +6,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import type * as Plotly from "plotly.js";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
+import GlobalHeader from "@/components/layout/GlobalHeader";
+import GlobalFooter from "@/components/layout/GlobalFooter";
 
 /* ───────────────── Plotly (client only) ───────────────── */
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
@@ -217,7 +219,7 @@ const EpisodesMap = dynamic(async () => {
             <span className="cluster-legend__dot" style={{ background: "#ef4444" }} />
             <span>Pénurie</span>
           </div>
-        <div className="cluster-legend__row">
+          <div className="cluster-legend__row">
             <span className="cluster-legend__dot" style={{ background: "#3b82f6" }} />
             <span>Saturation</span>
           </div>
@@ -401,7 +403,6 @@ export default function NetworkDynamicsPage() {
       <Head>
         <title>Monitoring — Network / Dynamics</title>
         <meta name="description" content="Dynamiques réseau: heatmaps, profils, épisodes, tension par station." />
-        <link rel="stylesheet" href="/css/monitoring.css" />
         {/* Leaflet CSS + small global fixes */}
         <link
           rel="stylesheet"
@@ -420,16 +421,15 @@ export default function NetworkDynamicsPage() {
         />
       </Head>
 
-      <main className="page">
+      {/* Header global sticky */}
+      <GlobalHeader />
+
+      {/* Contenu principal */}
+      <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
           title="Network — Dynamics"
           subtitle="Heatmaps 7×24, profils par jour, épisodes et tension"
           generatedAt={generatedAt}
-          crumbs={[
-            { label: "Accueil", href: "/" },
-            { label: "Monitoring", href: "/monitoring" },
-            { label: "App", href: "/app" },
-          ]}
           extraActions={[
             { label: "Overview", href: "/monitoring/network/overview" },
             { label: "Stations", href: "/monitoring/network/stations" },
@@ -444,7 +444,7 @@ export default function NetworkDynamicsPage() {
           <h2>Heatmaps 7×24</h2>
           <div className="card">{heat ? heatmap("Occupation moyenne (0..1)", heat.heatmap?.occ_mean ?? [], false) : <div className="empty">—</div>}</div>
           <div className="card mt-4">{heat ? heatmap("Pénurie (%)", heat.heatmap?.penury_rate ?? [], true) : <div className="empty">—</div>}</div>
-            <div className="card mt-4">{heat ? heatmap("Saturation (%)", heat.heatmap?.saturation_rate ?? [], true) : <div className="empty">—</div>}</div>
+          <div className="card mt-4">{heat ? heatmap("Saturation (%)", heat.heatmap?.saturation_rate ?? [], true) : <div className="empty">—</div>}</div>
         </section>
 
         {/* Profils par jour */}
@@ -629,6 +629,9 @@ export default function NetworkDynamicsPage() {
           </div>
         </section>
       </main>
+
+      {/* Footer global */}
+      <GlobalFooter />
     </div>
   );
 }

@@ -3,6 +3,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Head from "next/head";
 import dynamic from "next/dynamic";
 
+// Layout
+import GlobalHeader from "@/components/layout/GlobalHeader";
+import GlobalFooter from "@/components/layout/GlobalFooter";
+
 // UI
 import BadgesBar from "@/components/app/Badges";
 
@@ -47,9 +51,7 @@ function normalizeForecastRows(payload: any, horizon = 15): any[] {
 }
 
 /**
- * Convertit un timestamp ISO (UTC venant de l'API) vers l'heure locale Paris HH:mm,
- * en tenant compte automatiquement du passage heure d'été/hiver.
- * Force le parsing en UTC même si le "Z" est absent.
+ * Convertit un timestamp ISO (UTC venant de l'API) vers l'heure locale Paris HH:mm.
  */
 const parisHHmmAt = (iso?: string | null): string => {
   if (!iso) return "—";
@@ -77,7 +79,6 @@ const latestIso = (rows: any[], keyA: string, keyB?: string): string | null => {
     .map(r => (r?.[keyA] ?? (keyB ? r?.[keyB] : null)) as string | null)
     .filter(Boolean) as string[];
   if (!vals.length) return null;
-  // tri décroissant par time
   vals.sort(
     (a, b) =>
       new Date((b.endsWith("Z") ? b : b + "Z")).getTime() -
@@ -101,7 +102,6 @@ export default function AppHomePage() {
 
   useEffect(() => {
     let alive = true;
-
     const loadOnce = async () => {
       try {
         const weather = await getWeather();
@@ -111,7 +111,6 @@ export default function AppHomePage() {
         if (!alive) return;
         setStations(st ?? []);
 
-        // batch forecast
         const keys = Array.from(
           new Set((st ?? []).map(s => keyFor(s as any)).filter(Boolean) as string[])
         );
@@ -121,15 +120,13 @@ export default function AppHomePage() {
         const fcRows = normalizeForecastRows(raw, H);
         setForecast(fcRows);
 
-        // ─── Références temporelles ───
-        const latestBin = latestIso(fcRows, "tbin_latest", "tbin_utc"); // données observées
-        const latestPredTs = latestIso(fcRows, "pred_ts_utc"); // génération
-        const latestTarget = latestIso(fcRows, "target_ts_utc"); // cible prévisionnelle
+        const latestBin = latestIso(fcRows, "tbin_latest", "tbin_utc");
+        const latestPredTs = latestIso(fcRows, "pred_ts_utc");
+        const latestTarget = latestIso(fcRows, "target_ts_utc");
 
-        const forecastHourParis = parisHHmmAt(latestTarget); // HH:mm Paris basé sur target
-        const ageMin = ageMinutes(latestBin); // âge parquet (fraîcheur)
+        const forecastHourParis = parisHHmmAt(latestTarget);
+        const ageMin = ageMinutes(latestBin);
 
-        // badges (structure enrichie)
         const base = computeBadges(weather ?? null, latestPredTs);
         setBadges({
           weather: base?.weather ?? null,
@@ -186,7 +183,6 @@ export default function AppHomePage() {
     [stations]
   );
 
-  // index par station_id
   const forecastByKey = useMemo(() => {
     const m = new Map<string, any>();
     (forecast as any[]).forEach(f => {
@@ -210,7 +206,6 @@ export default function AppHomePage() {
     return { total: stations.length, bikes, predBikes };
   }, [stations, forecastByKey]);
 
-  // Heure de prévision (affichage) = target_ts_utc
   const forecastHourParis = useMemo(() => {
     const latestTarget = latestIso(forecast as any[], "target_ts_utc");
     return parisHHmmAt(latestTarget);
@@ -244,31 +239,25 @@ export default function AppHomePage() {
       .slice(0, 10);
   }, [stationsWithGeo, forecast, forecastByKey, userPos, center]);
 
+  // items du header (adaptés à l'app)
+  const headerItems = [
+    { label: "Carte", href: "/app" },
+    { label: "Monitoring", href: "/monitoring" },
+    { label: "Accueil", href: "/" },
+  ];
+
   return (
-    <div className="app">
+    <>
       <Head>
         <title>Vélib’ Paris — Disponibilités et prévisions</title>
         <meta name="description" content="Disponibilités temps réel et prévisions courtes." />
-        {/* Scoped CSS for the app context */}
-        <link rel="stylesheet" href="/css/app.css" />
-        {/* Leaflet only where needed */}
-        <link
-          rel="stylesheet"
-          href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-          crossOrigin=""
-        />
       </Head>
 
-      <div className="container">
-        <header className="header">
-          <h1>
-            <span>Vélib’ Paris</span>
-            <span className="subtitle">
-              Disponibilités en temps réel · Prévision {forecastHourParis}
-            </span>
-          </h1>
-        </header>
+      {/* Header global */}
+      <GlobalHeader items={headerItems} brandHref="/" />
+
+      {/* Contenu */}
+      <div className="container" style={{ paddingTop: "16px" }}>
 
         <main className="main">
           <div className="panel map-card">
@@ -335,18 +324,10 @@ export default function AppHomePage() {
             </div>
           </aside>
         </main>
-
-        <footer className="footer footer--sticky">
-          Fait avec ❤️ par{" "}
-          <a
-            href="https://www.linkedin.com/in/adrien-morel/"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Adrien
-          </a>
-        </footer>
       </div>
-    </div>
+
+      {/* Footer global */}
+      <GlobalFooter />
+    </>
   );
 }

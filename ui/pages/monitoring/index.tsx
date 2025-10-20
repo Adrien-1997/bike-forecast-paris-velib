@@ -3,6 +3,10 @@ import Head from "next/head";
 import Link from "next/link";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
 
+// ✅ Header / Footer globaux (stylés par /styles/header.css et /styles/footer.css)
+import GlobalHeader from "@/components/layout/GlobalHeader";
+import GlobalFooter from "@/components/layout/GlobalFooter";
+
 export default function MonitoringIntroPage() {
   const generatedAt: string | null = null;
 
@@ -14,14 +18,20 @@ export default function MonitoringIntroPage() {
           name="description"
           content="Monitoring dashboard overview: network health, data quality, and model performance at a glance."
         />
-        <link rel="stylesheet" href="/css/monitoring.css" />
       </Head>
 
-      <main className="page">
+      {/* Header global sticky */}
+      <GlobalHeader />
+
+      {/* Contenu principal monitoring */}
+      <main
+        className="page"
+        // évite que le header sticky recouvre le contenu
+        style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}
+      >
         <MonitoringNav
           title="Monitoring"
           generatedAt={generatedAt}
-          crumbs={[]} // ❌ on enlève les breadcrumbs
         />
 
         {/* Hero status */}
@@ -144,15 +154,24 @@ export default function MonitoringIntroPage() {
           <h3>Tips</h3>
           <ul className="tips">
             <li>Use the top tabs to switch between Network, Data and Model sections.</li>
-            <li>On station maps, enable <b>Auto-fit</b> and <b>Size = capacity</b> for quick exploration.</li>
+            <li>
+              On station maps, enable <b>Auto-fit</b> and <b>Size = capacity</b> for quick exploration.
+            </li>
             <li>Export CSV from Stations to share cluster assignments with ops.</li>
           </ul>
           <div className="row mt-2">
-            <Link href="/monitoring/data/drift" className="btn btn-ghost">See drift</Link>
-            <Link href="/monitoring/network/stations" className="btn btn-primary">Open stations</Link>
+            <Link href="/monitoring/data/drift" className="btn btn-ghost">
+              See drift
+            </Link>
+            <Link href="/monitoring/network/stations" className="btn btn-primary">
+              Open stations
+            </Link>
           </div>
         </section>
       </main>
+
+      {/* Footer global */}
+      <GlobalFooter />
     </div>
   );
 }

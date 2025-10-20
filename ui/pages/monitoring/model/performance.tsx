@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type * as Plotly from "plotly.js";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
+import GlobalHeader from "@/components/layout/GlobalHeader";
+import GlobalFooter from "@/components/layout/GlobalFooter";
 
 /* ───────────────────────── Plotly (client only) ───────────────────────── */
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
@@ -285,7 +287,6 @@ export default function ModelPerformancePage() {
       <Head>
         <title>Monitoring — Model / Performance</title>
         <meta name="description" content="Comparatif modèle vs baseline, lift, histogrammes, découpes et stations." />
-        <link rel="stylesheet" href="/css/monitoring.css" />
         {/* Ajout minime: barre de progression réutilisable */}
         <style
           dangerouslySetInnerHTML={{
@@ -298,16 +299,15 @@ export default function ModelPerformancePage() {
         />
       </Head>
 
-      <main className="page">
+      {/* Header global sticky */}
+      <GlobalHeader />
+
+      {/* Contenu principal */}
+      <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
           title="Model — Performance"
           subtitle={`MAE/RMSE vs baseline, lift, histogrammes & découpes (h=${h} min)`}
           generatedAt={generatedAt ?? undefined}
-          crumbs={[
-            { label: "Accueil", href: "/" },
-            { label: "Monitoring", href: "/monitoring" },
-            { label: "App", href: "/app" },
-          ]}
           extraActions={[
             { label: "Explainability", href: "/monitoring/model/explainability" },
           ]}
@@ -497,6 +497,9 @@ export default function ModelPerformancePage() {
           </div>
         </section>
       </main>
+
+      {/* Footer global */}
+      <GlobalFooter />
     </div>
   );
 }

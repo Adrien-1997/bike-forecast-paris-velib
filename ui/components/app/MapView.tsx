@@ -80,20 +80,6 @@ function MapLocateControl({ userPos }: { userPos?: [number, number] | null }) {
         map.flyTo(userPos, targetZoom, { animate: true, duration: 1.2 })
       }}
       aria-label="Centrer sur ma position"
-      style={{
-        position: 'absolute',
-        left: 12,
-        bottom: 12,
-        zIndex: 1000,
-        background: '#1b1d27',
-        color: '#fff',
-        border: '1px solid rgba(255,255,255,.12)',
-        borderRadius: 999,
-        padding: '10px 14px',
-        fontWeight: 600,
-        boxShadow: '0 10px 24px rgba(0,0,0,.35)',
-        cursor: 'pointer',
-      }}
     >
       📍 Ma position
     </button>
@@ -112,7 +98,6 @@ export default function MapView({ stations, forecast, mode, center, userPos, set
     return () => mq?.removeEventListener?.('change', handler)
   }, [])
 
-  // 1) Index des prévisions par station_id (string). Si doublons, on garde la plus récente via pred_ts_utc || tbin_latest.
   const forecastById = useMemo(() => {
     const m = new Map<string, Forecast>()
     for (const f of Array.isArray(forecast) ? forecast : []) {
@@ -130,44 +115,39 @@ export default function MapView({ stations, forecast, mode, center, userPos, set
     return m
   }, [forecast])
 
-  // 2) Filtrer les stations valides (avec géo)
   const stationsWithGeo = useMemo(
     () => (Array.isArray(stations) ? stations.filter(hasGeo) : []),
     [stations]
   )
 
-  // 3) Marqueurs
   const markers = useMemo(() => {
     return stationsWithGeo.map(s => {
       const id = keyFor(s as any)
       const f  = id ? forecastById.get(id) : undefined
-
       const current = Math.max(0, Math.round(toNum((s as any).num_bikes_available, 0)))
       const pred    = getPred(f)
       const value   = mode === 'current' ? current : pred
-
       const cap = Math.max(1, Math.round(toNum((s as any).capacity, 0)))
       const occ = value / cap
-
       const colRing = ringColor(occ)
       const deg     = Math.min(360, Math.max(0, occ * 360))
       const size    = 44
 
       const iconHtml = `
-        <div style="position:relative; width:${size}px; height:${size}px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.25));">
-          <div style="width:100%; height:100%; border-radius:50%;
-                      background: conic-gradient(${colRing} ${deg}deg, #e5e7eb 0deg);
-                      display:flex; align-items:center; justify-content:center;
-                      border:2px solid #263238; box-sizing:border-box;">
-            <div style="width:${size - 12}px; height:${size - 12}px; border-radius:50%; background:#fff;
-                        display:flex; align-items:center; justify-content:center;
-                        font: 700 ${Math.floor(size * 0.42)}px/1 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:#263238;">
+        <div style="position:relative;width:${size}px;height:${size}px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.25));">
+          <div style="width:100%;height:100%;border-radius:50%;
+                      background:conic-gradient(${colRing} ${deg}deg, #e5e7eb 0deg);
+                      display:flex;align-items:center;justify-content:center;
+                      border:2px solid #263238;">
+            <div style="width:${size - 12}px;height:${size - 12}px;border-radius:50%;background:#fff;
+                        display:flex;align-items:center;justify-content:center;
+                        font:700 ${Math.floor(size * 0.42)}px/1 'Inter',system-ui,sans-serif;color:#263238;">
               ${value}
             </div>
           </div>
-          <div style="position:absolute; left:50%; bottom:-12px; transform:translateX(-50%);
-                      width:0; height:0; border-left:8px solid transparent; border-right:8px solid transparent;
-                      border-top:12px solid #263238; opacity:.9;"></div>
+          <div style="position:absolute;left:50%;bottom:-12px;transform:translateX(-50%);
+                      width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;
+                      border-top:12px solid #263238;opacity:.9;"></div>
         </div>`
 
       const divIcon =
@@ -182,25 +162,21 @@ export default function MapView({ stations, forecast, mode, center, userPos, set
       const deltaPct = cap > 0 ? ((pred - current) / cap) * 100 : 0
       const deltaBadge =
         Math.abs(deltaPct) < 0.5
-          ? `<span style="padding:.2rem .5rem;border-radius:8px;background:#e5e7eb;color:#111827;border:1px solid rgba(0,0,0,.08)">▬ 0%</span>`
+          ? `<span class="badge neutral">▬ 0%</span>`
           : deltaPct > 0
-          ? `<span style="padding:.2rem .5rem;border-radius:8px;background:#dcfce7;color:#166534;border:1px solid rgba(0,0,0,.08)">▲ ${deltaPct.toFixed(0)}%</span>`
-          : `<span style="padding:.2rem .5rem;border-radius:8px;background:#fee2e2;color:#991b1b;border:1px solid rgba(0,0,0,.08)">▼ ${deltaPct.toFixed(0)}%</span>`
+          ? `<span class="badge up">▲ ${deltaPct.toFixed(0)}%</span>`
+          : `<span class="badge down">▼ ${deltaPct.toFixed(0)}%</span>`
 
       const popupHtml = `
-        <div style="font-family:Inter,system-ui,Segoe UI,Roboto,sans-serif;">
-          <div style="font-weight:700;margin-bottom:.15rem">${(s as any).name ?? (s as any).station_id}</div>
-          <div style="color:#6b7280;margin-bottom:.35rem">#${String((s as any).station_id ?? '')}</div>
-          <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.35rem">
-            <span style="padding:.2rem .5rem;border-radius:8px;background:#f3f4f6">
-              Actuel&nbsp;: <b>${current}</b> / ${cap}
-            </span>
-            <span style="padding:.2rem .5rem;border-radius:8px;background:#eef2ff">
-              Prévision T+15&nbsp;: <b>${pred}</b>
-            </span>
+        <div class="popup-content">
+          <div class="popup-title">${(s as any).name ?? (s as any).station_id}</div>
+          <div class="popup-sub">#${String((s as any).station_id ?? '')}</div>
+          <div class="popup-row">
+            <span class="badge current">Actuel&nbsp;: <b>${current}</b> / ${cap}</span>
+            <span class="badge pred">Prévision T+15&nbsp;: <b>${pred}</b></span>
             ${deltaBadge}
           </div>
-          ${Number.isFinite(delta) && delta !== 0 ? `<div style="color:${delta >= 0 ? '#166534' : '#991b1b'}">
+          ${Number.isFinite(delta) && delta !== 0 ? `<div class="popup-delta ${delta >= 0 ? 'up' : 'down'}">
             Δ vélos: <b>${delta >= 0 ? `+${delta}` : delta}</b>
           </div>` : ''}
         </div>`
@@ -215,13 +191,13 @@ export default function MapView({ stations, forecast, mode, center, userPos, set
     })
   }, [stationsWithGeo, forecastById, mode])
 
-  // 4) Icône de cluster
   const clusterIcon = (cluster: any) => {
     const count = cluster.getChildCount()
-    const bg =
-      count >= 100 ? '#263238' :
-      count >= 50  ? '#37474f' :
-      count >= 20  ? '#455a64' : '#546e7a'
+    const bg = count >= 100
+      ? 'linear-gradient(135deg, #ff6a00, #1d7fff)'
+      : count >= 50
+      ? 'linear-gradient(135deg, rgba(255,106,0,.8), rgba(29,127,255,.8))'
+      : 'linear-gradient(135deg, rgba(255,106,0,.6), rgba(29,127,255,.6))'
     const s = count >= 100 ? 46 : count >= 50 ? 42 : count >= 20 ? 38 : 34
 
     return (L as typeof import('leaflet')).divIcon({
@@ -229,31 +205,22 @@ export default function MapView({ stations, forecast, mode, center, userPos, set
         <div style="
           width:${s}px;height:${s}px;border-radius:50%;
           background:${bg};color:#fff;display:flex;align-items:center;justify-content:center;
-          border:2px solid rgba(255,255,255,.85); font:700 ${Math.floor(s*0.42)}px/1 Inter,system-ui,sans-serif;
-          box-shadow:0 6px 16px rgba(0,0,0,.25);
-        ">${count}</div>
-      `,
+          border:2px solid rgba(255,255,255,.85);font:700 ${Math.floor(s*0.42)}px/1 Inter,sans-serif;
+          box-shadow:0 6px 16px rgba(0,0,0,.25);">
+          ${count}
+        </div>`,
       className: 'cluster-icon',
       iconSize: [s, s],
     })
   }
 
-  // 5) Marqueur utilisateur
   const userMarker = useMemo(() => {
     if (!userPos || !L) return null
     const size = 22
     const html = `
-      <div style="position:relative;width:${size}px;height:${size}px;">
-        <div style="position:absolute;inset:0;border-radius:50%;background:#3b82f6;border:2px solid #ffffff;"></div>
-        <div style="position:absolute;inset:-6px;border-radius:50%;background:rgba(59,130,246,.15);animation:pulse 2s infinite;"></div>
-      </div>
-      <style>
-        @keyframes pulse {
-          0% { transform: scale(0.9); opacity: 0.7; }
-          70% { transform: scale(1.4); opacity: 0; }
-          100% { transform: scale(0.9); opacity: 0; }
-        }
-      </style>`
+      <div class="user-marker" style="width:${size}px;height:${size}px;">
+        <div class="dot"></div><div class="pulse"></div>
+      </div>`
     const icon = L.divIcon({ html, className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2] })
     return (
       <Marker key="userpos" position={userPos} icon={icon as any}>
@@ -271,16 +238,13 @@ export default function MapView({ stations, forecast, mode, center, userPos, set
       dragging
       preferCanvas
       attributionControl
-      style={{ width: '100%', height: '100%', borderRadius: 14, position: 'relative' }}
-      className="leaflet-container"
+      className="map-fill"
     >
       <TileLayer
         attribution="&copy; OpenStreetMap contributors & CartoDB"
         url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
       />
-
       <ZoomControl position="bottomright" />
-
       <MarkerClusterGroup
         maxClusterRadius={70}
         disableClusteringAtZoom={19}
@@ -295,7 +259,6 @@ export default function MapView({ stations, forecast, mode, center, userPos, set
       >
         {markers}
       </MarkerClusterGroup>
-
       {userMarker}
       <MapInstanceBridge setMapInstance={setMapInstance} />
       <MapLocateControl userPos={userPos} />

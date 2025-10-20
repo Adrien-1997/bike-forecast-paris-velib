@@ -1,14 +1,10 @@
 // ui/components/monitoring/MonitoringNav.tsx
 import Link from "next/link";
 import { useRouter } from "next/router";
+import { useState } from "react";
 
-type Crumb = { label: string; href?: string };
 type Action = { label: string; href: string };
-
-type Group = {
-  label: string;
-  items: Action[];
-};
+type Group = { label: string; items: Action[] };
 
 const GROUPS: Group[] = [
   {
@@ -46,107 +42,124 @@ export default function MonitoringNav({
   title,
   subtitle,
   generatedAt,
-  crumbs,
   extraActions = [],
 }: {
   title: string;
   subtitle?: string;
   generatedAt?: string | null;
-  crumbs: Crumb[];
   extraActions?: Action[];
 }) {
   const { pathname } = useRouter();
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
 
-  const showBreadcrumbs = (crumbs?.length ?? 0) > 0 || !!generatedAt;
+  const handleEnter = (label: string) => setOpenGroup(label);
+  const handleLeave = () => setOpenGroup(null);
 
   return (
     <header className="mn-header">
-      <div className="mn-page">
-        {/* Breadcrumbs (only if we have crumbs or a timestamp) */}
-        {showBreadcrumbs && (
-          <nav className="breadcrumbs" aria-label="Breadcrumb">
-            {crumbs.map((c, i) =>
-              c.href ? (
-                <Link key={i} href={c.href} className="crumb">
-                  {c.label}
-                </Link>
-              ) : (
-                <span key={i} className="crumb current" aria-current="page">
-                  {c.label}
-                </span>
-              )
-            )}
-            {generatedAt && (
-              <span className="right footer-note">
-                Generated: {new Date(generatedAt).toLocaleString("en-GB")}
-              </span>
-            )}
-          </nav>
-        )}
-
-        {/* Title */}
+      {/* ───────────── Title & generated time ───────────── */}
+      <div className="mn-titlebar">
         <div className="title">
           <h1>{title}</h1>
           {subtitle && <span className="meta">{subtitle}</span>}
         </div>
+        {generatedAt && (
+          <div className="mn-meta">
+            <span className="generated-at">
+              <span className="dot" aria-hidden="true"></span>
+              Généré : {new Date(generatedAt).toLocaleString("fr-FR")}
+            </span>
+          </div>
+        )}
+      </div>
 
-        {/* The three grouped tabs */}
-        <div className="toolbar toolbar-wrap" role="menubar" aria-label="Monitoring sections">
-          <div className="groups">
-            {GROUPS.map((group) => {
-              const groupActive = isGroupActive(pathname, group);
-              return (
-                <div
-                  key={group.label}
-                  className={`nav-group ${groupActive ? "active" : ""}`}
-                  role="menuitem"
-                  tabIndex={0}
-                  aria-haspopup="true"
-                  aria-expanded={groupActive ? true : undefined}
+      {/* ───────────── Toolbar ───────────── */}
+      <div
+        className="toolbar-wrap"
+        role="menubar"
+        aria-label="Monitoring sections"
+      >
+        <div className="groups">
+          {GROUPS.map((group) => {
+            const groupActive = isGroupActive(pathname, group);
+            const isOpen = openGroup === group.label;
+
+            return (
+              <div
+                key={group.label}
+                className={`nav-group ${groupActive ? "active" : ""} ${
+                  isOpen ? "open" : ""
+                }`}
+                role="menuitem"
+                tabIndex={0}
+                aria-haspopup="true"
+                aria-expanded={isOpen || groupActive ? true : undefined}
+                onMouseEnter={() => handleEnter(group.label)}
+                onMouseLeave={handleLeave}
+              >
+                <button
+                  type="button"
+                  className={
+                    groupActive
+                      ? "btn btn--primary nav-trigger"
+                      : "btn btn--ghost nav-trigger"
+                  }
+                  aria-controls={`dropdown-${group.label}`}
                 >
-                  <span className={groupActive ? "btn btn--primary" : "btn btn--ghost nav-trigger"}>
-                    {group.label}
-                  </span>
+                  {group.label}
+                </button>
 
-                  <div className="dropdown" role="menu" aria-label={`${group.label} pages`}>
-                    {group.items.map((item) => {
-                      const active = isActive(pathname, item.href);
-                      return (
-                        <Link
-                          key={item.href}
-                          href={item.href}
-                          className={active ? "dropdown-item active" : "dropdown-item"}
-                          aria-current={active ? "page" : undefined}
-                        >
-                          {item.label}
-                        </Link>
-                      );
-                    })}
-                  </div>
+                <div
+                  id={`dropdown-${group.label}`}
+                  className="dropdown"
+                  role="menu"
+                  aria-label={`${group.label} pages`}
+                >
+                  {group.items.map((item) => {
+                    const active = isActive(pathname, item.href);
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        className={
+                          active
+                            ? "dropdown-item active"
+                            : "dropdown-item"
+                        }
+                        aria-current={active ? "page" : undefined}
+                        onClick={() => setOpenGroup(null)}
+                      >
+                        {item.label}
+                      </Link>
+                    );
+                  })}
                 </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ───────────── Extra actions (restaurées) ───────────── */}
+        {extraActions.length > 0 && (
+          <div className="extras">
+            {extraActions.map((a) => {
+              const active = isActive(pathname, a.href);
+              return (
+                <Link
+                  key={a.href}
+                  href={a.href}
+                  className={
+                    active ? "btn btn--primary" : "btn btn--ghost"
+                  }
+                  aria-current={active ? "page" : undefined}
+                  style={{ textDecoration: "none", fontWeight: 600 }}
+                >
+                  {a.label}
+                </Link>
               );
             })}
           </div>
-
-          {/* Right-side actions (optional) */}
-          {extraActions.length > 0 && (
-            <div className="extras">
-              {extraActions.map((a) => {
-                const active = isActive(pathname, a.href);
-                return (
-                  <Link
-                    key={a.href}
-                    href={a.href}
-                    className={active ? "btn btn--primary" : "btn btn--ghost"}
-                    aria-current={active ? "page" : undefined}
-                  >
-                    {a.label}
-                  </Link>
-                );
-              })}
-            </div>
-          )}
-        </div>
+        )}
       </div>
     </header>
   );

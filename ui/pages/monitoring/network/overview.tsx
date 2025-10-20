@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type * as Plotly from "plotly.js";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
+import GlobalHeader from "@/components/layout/GlobalHeader";
+import GlobalFooter from "@/components/layout/GlobalFooter";
 
 /* ───────────────────────── Plotly (client only) ───────────────────────── */
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
@@ -364,7 +366,6 @@ export default function OverviewPage() {
       <Head>
         <title>Monitoring — Network / Overview</title>
         <meta name="description" content="KPIs réseau, snapshot, courbes et carte." />
-        <link rel="stylesheet" href="/css/monitoring.css" />
         {/* Leaflet CSS + petits correctifs globaux */}
         <link
           rel="stylesheet"
@@ -383,16 +384,14 @@ export default function OverviewPage() {
         />
       </Head>
 
-      <main className="page">
+      {/* Header global sticky */}
+      <GlobalHeader />
+
+      <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
           title="Network — Overview"
           subtitle="KPIs, snapshot distribution, daily curves & map"
           generatedAt={generatedAt}
-          crumbs={[
-            { label: "Accueil", href: "/" },
-            { label: "Monitoring", href: "/monitoring" },
-            { label: "App", href: "/app" },
-          ]}
           extraActions={[
             { label: "Stations", href: "/monitoring/network/stations" },
             { label: "Dynamics", href: "/monitoring/network/dynamics" },
@@ -611,6 +610,9 @@ export default function OverviewPage() {
           )}
         </section>
       </main>
+
+      {/* Footer global */}
+      <GlobalFooter />
     </div>
   );
 }

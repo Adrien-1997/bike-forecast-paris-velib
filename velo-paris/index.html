@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="fr" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>velo-paris.fr — Observatoire de la mobilité cyclable à Paris</title>
+    <meta name="description" content="Projet indépendant d’analyse et de visualisation des données ouvertes sur la mobilité cyclable à Paris. Monitoring, prévisions et indicateurs dynamiques." />
+    <meta name="keywords" content="vélo, Paris, mobilité, data, prévisions, open data, vélo en libre-service, statistiques, environnement, transports durables" />
+    <meta name="author" content="Adrien Morel" />
+
+    <!-- Open Graph / Social -->
+    <meta property="og:title" content="velo-paris.fr — Observatoire vélo à Paris" />
+    <meta property="og:description" content="Visualisation et analyse des données vélo à Paris. Un projet indépendant de data science sur la mobilité urbaine." />
+    <meta property="og:url" content="https://velo-paris.fr" />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://velo-paris.fr/favicon.svg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="velo-paris.fr — Observatoire vélo à Paris" />
+    <meta name="twitter:description" content="Données, prévisions et monitoring de la mobilité cyclable parisienne." />
+    <meta name="twitter:image" content="https://velo-paris.fr/favicon.svg" />
+
+    <!-- Favicon -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <meta name="theme-color" content="#0b1220" />
+    <meta name="color-scheme" content="dark light" />
+
+    <!-- Styles -->
+    <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css" />
+  </head>
+
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="container">
+          <a class="brand" href="#" aria-label="Accueil velo-paris">
+            <img class="mark" src="/favicon.svg" width="40" height="40" alt="Logo velo-paris" />
+            <span class="brandtext">
+              <span class="brand-velo">vélo</span>
+              <span class="brand-sep">·</span>
+              <span class="brand-paris">paris</span>
+            </span>
+          </a>
+          <span class="badge">
+            <span class="dot" aria-hidden="true"></span>
+            Site en construction
+          </span>
+        </div>
+      </header>
+
+      <main class="hero">
+        <section class="panel">
+          <div class="halo" aria-hidden="true"></div>
+          <div class="cover">
+            <h1>Observatoire vélo Paris</h1>
+            <p class="lead">
+              Cartes en direct, prévisions et monitoring arrivent très bientôt.
+              Pendant que l’atelier tourne, merci de votre passage !
+            </p>
+          </div>
+          <div class="under">
+            <div class="row">
+              <span class="pill">Déploiement UI</span>
+              <span class="pill">API & monitoring</span>
+              <span class="pill">Données ouvertes Paris</span>
+            </div>
+            <div class="progress"><div class="bar"></div></div>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <div class="footer-grid">
+          <div>© <span id="year"></span> velo-paris.fr — Projet indépendant</div>
+          <div class="social">
+            <a href="https://www.linkedin.com/in/adrien-morel/" target="_blank" aria-label="LinkedIn Adrien Morel">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512" fill="currentColor" aria-hidden="true">
+                <path d="M100.3 448H7.4V149.1h92.9V448zM53.8 108.1C24.1 108.1 0 83.9 0 54.2 0 24.5 24.1.4 53.8.4s53.8 24.1 53.8 53.8c0 29.7-24.1 53.9-53.8 53.9zM447.9 448h-92.7V302.4c0-34.7-.7-79.2-48.2-79.2-48.2 0-55.6 37.7-55.6 76.6V448h-92.8V149.1h89.1v40.8h1.3c12.4-23.6 42.6-48.2 87.6-48.2 93.7 0 110.9 61.7 110.9 141.9V448z"/>
+              </svg>
+            </a>
+            <div class="social-label">Suivez Adrien Morel sur LinkedIn</div>
+          </div>
+        </div>
+
+        <p class="disclaimer">
+          <strong>Mention légale :</strong> Ce site est un projet indépendant,
+          non affilié à une institution publique, ni au service de vélos en libre-service de la Ville de Paris.
+          Les données utilisées proviendront de sources ouvertes (Open Data Paris, etc.).
+          « Vélib’ » est une marque déposée appartenant à ses titulaires respectifs.
+        </p>
+      </footer>
+    </div>
+
+    <script>
+      document.getElementById("year").textContent = new Date().getFullYear();
+    </script>
+  </body>
+</html>

@@ -1,13 +1,197 @@
-/* Reset de base */
-html, body {
-  margin: 0;               /* <- enlève le liseré blanc */
-  padding: 0;
+/* ========================================================================
+   ui/styles/globals.css
+   Global resets + variables + intégration Urbanist (sans styles header)
+   Font unique : var(--font-urbanist) (next/font)
+   ======================================================================== */
+
+/* ======================= Variables ======================= */
+:root {
+  /* Couleurs / thème */
+  --bg:#0b1220; --bg-soft:#111a2b;
+  --panel:#0f172a; --panel-2:#0c1324;
+  --text:#e6eaf2; --muted:#9ca3af; --muted-2:#93a0b5;
+  --primary:#ff6a00; --primary-2:#1d7fff; --accent:#59d4ff;
+
+  --ok:#22c55e; --warn:#f59e0b; --err:#ef4444; --info:#38bdf8;
+
+  --ring:rgba(255,255,255,.14);
+  --shadow:0 10px 30px rgba(0,0,0,.35);
+  --shadow-sm:0 6px 18px rgba(0,0,0,.25);
+  --shadow-lg:0 18px 54px rgba(0,0,0,.45);
+
+  --z-header:100; --z-backdrop:90; --z-tooltip:400; --z-toast:450; --z-modal:500;
+
+  /* Typo (adoucie) */
+  --fs-base:clamp(15px, .85vw + 8px, 16px);
+  --fs-hero:clamp(28px, 4.6vw, 54px);
+  --fs-h2:clamp(22px, 3vw, 34px);
+  --fs-h3:clamp(17px, 1.9vw, 22px);
+  --fs-lead:clamp(14px, 1vw + 11px, 17px);
+
+  /* Font unique (fourni par next/font) */
+  --font-sans: var(--font-urbanist), system-ui, -apple-system, "Segoe UI",
+               Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  /* Layout */
+  --content-max:1200px;
+  --header-h:70px;
+  --safe-top:env(safe-area-inset-top, 0px);
+  --safe-bot:env(safe-area-inset-bottom, 0px);
 }
 
-* { box-sizing: border-box; }
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#f9fafb; --bg-soft:#ffffff;
+    --panel:#ffffff; --panel-2:#f7f9fd;
+    --text:#111827; --muted:#4b5563; --muted-2:#6e7788;
 
-/* Optionnel: fond global foncé pour éviter tout flash/blanc hors containers */
-html, body, #__next {
-  background: #0b1220;     /* même teinte que --bg de .monitoring */
-  min-height: 100%;
+    --shadow:0 10px 25px rgba(0,0,0,.08);
+    --shadow-sm:0 6px 16px rgba(0,0,0,.06);
+    --shadow-lg:0 20px 60px rgba(0,0,0,.15);
+    --ring:rgba(0,0,0,.10);
+
+    /* mêmes ratios en clair */
+    --fs-base:clamp(15px, .85vw + 8px, 16px);
+    --fs-hero:clamp(28px, 4.6vw, 54px);
+    --fs-h2:clamp(22px, 3vw, 34px);
+    --fs-h3:clamp(17px, 1.9vw, 22px);
+    --fs-lead:clamp(14px, 1vw + 11px, 17px);
+  }
 }
+
+@media (prefers-contrast: more){
+  :root{ --muted: color-mix(in srgb, var(--text) 70%, #888);
+         --muted-2: color-mix(in srgb, var(--text) 60%, #888); }
+}
+
+/* ============================ Reset ============================ */
+html, body { margin: 0; padding: 0; }
+*, *::before, *::after { box-sizing: border-box; }
+html{ color-scheme: light dark; }
+html, body, #__next{ min-height:100%; }
+
+/* ======= Font unique + fond global ======= */
+body{
+  background: var(--bg);
+  background-image:
+    radial-gradient(80vmax 80vmax at 20% 0%, rgba(255,106,0,.08), transparent 50%),
+    radial-gradient(70vmax 70vmax at 80% 100%, rgba(29,127,255,.10), transparent 40%),
+    linear-gradient(180deg, rgba(255,106,0,.06), rgba(29,127,255,.06));
+  color: var(--text);
+  font-family: var(--font-sans);   /* ← UNE SEULE FONTE POUR TOUT */
+  font-size: var(--fs-base);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  overscroll-behavior:auto; touch-action:auto;
+}
+
+/* Tous les éléments héritent la même fonte */
+h1,h2,h3,h4,h5,h6,
+p, span, a, small, strong, b, em, i, u, mark,
+button, input, select, textarea,
+label, legend, figcaption, table, th, td, li, dt, dd {
+  font-family: inherit;
+}
+
+/* Titres (même fonte, juste taille/poids) */
+h1,h2,h3,h4,h5,h6{
+  font-weight:700; letter-spacing:-.02em; line-height:1.2; margin:0;
+  color:var(--text);
+}
+h1{ font-size: var(--fs-hero); line-height:1.04; letter-spacing:-.2px; }
+h2{ font-size: var(--fs-h2); letter-spacing:-.2px; }
+h3{ font-size: var(--fs-h3); letter-spacing:-.2px; }
+.lead{ font-size: var(--fs-lead); color: var(--muted); max-width:60ch; }
+
+strong, b{ font-weight:700; letter-spacing:-.01em; color:var(--text); }
+
+img{ max-width:100%; display:block; }
+a{ color: var(--primary); text-decoration: none; }
+a:hover, a:focus-visible{ text-decoration: underline; }
+
+/* Code reste en monospace (exception voulue) */
+code, pre, kbd, samp{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+               "Liberation Mono", "Courier New", monospace !important;
+}
+
+/* Conteneur global */
+.container{ max-width: var(--content-max); margin: 0 auto; padding: 0 24px; }
+
+/* A11y */
+.sr-only{
+  position:absolute!important; width:1px!important; height:1px!important;
+  padding:0!important; margin:-1px!important; overflow:hidden!important;
+  clip:rect(0,0,0,0)!important; border:0!important;
+}
+
+/* =============================== (Header retiré) ===============================
+   Tous les styles .site-header / branding / nav ont été retirés pour
+   laisser la main à /public/css/header.css et GlobalHeader.tsx.
+   ============================================================================== */
+
+/* ====================== Utilities réutilisables ====================== */
+
+/* Sections plein écran “aware” du header (utilise seulement les tokens) */
+section[data-fullscreen], .vh-section{
+  min-block-size: calc(100svh - var(--header-h) - var(--safe-top));
+}
+@media (max-width:740px){
+  section[data-fullscreen], .vh-section{
+    min-block-size: calc(100svh - var(--header-h) - var(--safe-top) - 4vh);
+  }
+}
+
+/* FX halos */
+.fx--page{
+  position: fixed; inset: -12% -10% -18% -10%;
+  pointer-events:none; z-index:0;
+  background:
+    radial-gradient(60vmax 60vmax at 18% -10%, rgba(255,106,0,.14), transparent 55%),
+    radial-gradient(70vmax 70vmax at 82% 110%, rgba(29,127,255,.16), transparent 50%),
+    linear-gradient(180deg, rgba(255,106,0,.06), rgba(29,127,255,.06));
+  filter: saturate(110%) blur(10px); opacity:.95;
+}
+.fx--section{
+  position:absolute; inset:-14%; pointer-events:none; z-index:0;
+  background:
+    radial-gradient(48vmax 30vmax at 14% 0%, rgba(255,106,0,.18), transparent 60%),
+    radial-gradient(56vmax 32vmax at 86% 100%, rgba(29,127,255,.20), transparent 55%);
+  filter:saturate(110%) blur(10px); opacity:.9;
+}
+@media (prefers-color-scheme: light){
+  .fx--page{
+    background:
+      radial-gradient(60vmax 60vmax at 18% -10%, rgba(255,106,0,.10), transparent 55%),
+      radial-gradient(70vmax 70vmax at 82% 110%, rgba(29,127,255,.12), transparent 50%),
+      linear-gradient(180deg, rgba(255,106,0,.05), rgba(29,127,255,.05));
+    opacity:.9;
+  }
+  .fx--section{
+    background:
+      radial-gradient(48vmax 30vmax at 14% 0%, rgba(255,106,0,.12), transparent 60%),
+      radial-gradient(56vmax 32vmax at 86% 100%, rgba(29,127,255,.14), transparent 55%);
+  }
+}
+
+/* Focus visible */
+:focus-visible{ outline:none; box-shadow:0 0 0 3px rgba(29,127,255,.35); border-radius:10px; }
+
+/* Helpers */
+.hidden{ display:none !important; }
+.text-muted{ color: var(--muted) !important; }
+.container.tight{ max-width: 1024px; }
+
+/* Motion/data */
+@media (prefers-reduced-motion: reduce){
+  *{ animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; scroll-behavior:auto!important; }
+}
+@media (prefers-reduced-data: reduce){
+  .fx--page, .fx--section{ display:none !important; }
+}
+
+/* @supports fallback */
+/* (plus de règle .site-header ici pour éviter les collisions) */

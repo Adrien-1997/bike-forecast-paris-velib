@@ -1,85 +1,21 @@
 // ui/pages/index.tsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import Head from "next/head";
+import GlobalHeader from "@/components/layout/GlobalHeader";
+import GlobalFooter from "@/components/layout/GlobalFooter";
 
 export default function LandingPage() {
-  // Mobile menu state
-  const [menuOpen, setMenuOpen] = useState(false);
+  // Refs
+  const demoIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const demoSkeletonRef = useRef<HTMLDivElement | null>(null);
 
-  // Refs for behavior
-  const headerRef = useRef<HTMLElement | null>(null);
-  const navRef = useRef<HTMLDivElement | null>(null);
-  const navListRef = useRef<HTMLUListElement | null>(null);
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const skeletonRef = useRef<HTMLDivElement | null>(null);
   const year = useMemo(() => new Date().getFullYear(), []);
-
-  // Sections & scroll active link
-  useEffect(() => {
-    const header = headerRef.current!;
-    const onScroll = () => {
-      if (!header) return;
-      header.classList.toggle("scrolled", window.scrollY > 20);
-    };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
-
-  // Mobile menu backdrop + Esc close
-  useEffect(() => {
-    if (!menuOpen) {
-      // remove backdrop if present
-      document.querySelector(".nav-backdrop")?.remove();
-      return;
-    }
-    // add backdrop
-    const b = document.createElement("div");
-    b.className = "nav-backdrop";
-    b.addEventListener("click", () => setMenuOpen(false), { passive: true });
-    document.body.appendChild(b);
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenuOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.querySelector(".nav-backdrop")?.remove();
-    };
-  }, [menuOpen]);
-
-  // Active nav link on scroll
-  useEffect(() => {
-    const linkNodes = Array.from(
-      (navListRef.current?.querySelectorAll("a") ?? []) as NodeListOf<HTMLAnchorElement>
-    );
-
-    const targets = linkNodes
-      .map((a) => document.querySelector<HTMLElement>(a.getAttribute("href") || ""))
-      .filter(Boolean) as HTMLElement[];
-
-    const setActive = () => {
-      const y = window.scrollY + 120;
-      let active: HTMLAnchorElement | null = linkNodes[0] ?? null;
-      targets.forEach((sec, i) => {
-        if (sec.offsetTop <= y) active = linkNodes[i] ?? active;
-      });
-      linkNodes.forEach((a) => a.classList.remove("active"));
-      active?.classList.add("active");
-    };
-
-    document.addEventListener("scroll", setActive, { passive: true });
-    setActive();
-    return () => document.removeEventListener("scroll", setActive);
-  }, []);
 
   // KPI counters (respect reduced motion)
   useEffect(() => {
     const prefersReduced =
       typeof window !== "undefined" &&
-      window.matchMedia &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
     const ease = (t: number) => 1 - Math.pow(1 - t, 4);
     const animateCount = (el: HTMLElement, to: number, suffix = "") => {
@@ -112,19 +48,18 @@ export default function LandingPage() {
     });
   }, []);
 
-  // Iframe: remove skeleton on load
+  // Iframe: remove DEMO skeleton on load
   useEffect(() => {
-    const frame = iframeRef.current;
-    const skel = skeletonRef.current;
+    const frame = demoIframeRef.current;
+    const onLoad = () => demoSkeletonRef.current?.remove();
     if (!frame) return;
-    const onLoad = () => skel?.remove();
     frame.addEventListener("load", onLoad);
     return () => frame.removeEventListener("load", onLoad);
   }, []);
 
-  // Handlers
+  // Actions
   const handleReload = () => {
-    const frame = iframeRef.current;
+    const frame = demoIframeRef.current;
     if (!frame) return;
     const url = frame.src;
     frame.src = "";
@@ -136,7 +71,7 @@ export default function LandingPage() {
   const handleFullscreen = async () => {
     try {
       if (!document.fullscreenElement) {
-        await iframeRef.current?.requestFullscreen?.();
+        await demoIframeRef.current?.requestFullscreen?.();
       } else {
         await document.exitFullscreen?.();
       }
@@ -144,6 +79,34 @@ export default function LandingPage() {
       /* noop */
     }
   };
+
+  // Header (ancres internes)
+  const headerItems = [
+    { label: "Démo", href: "#demo" },
+    { label: "Fonctions", href: "#features" },
+    { label: "Monitoring", href: "#monitoring" },
+    { label: "Architecture", href: "#how" },
+    { label: "FAQ", href: "#faq" },
+  ];
+
+  // Auto-hide header (ajoute .autohide et toggle .is-hidden selon scroll)
+  useEffect(() => {
+    const header = document.querySelector<HTMLElement>(".site-header");
+    if (!header) return;
+
+    header.classList.add("autohide"); // active la mécanique CSS
+    let prev = window.scrollY;
+
+    const onScroll = () => {
+      const y = window.scrollY;
+      const goingDown = y > prev && y > 10;
+      header.classList.toggle("is-hidden", goingDown);
+      prev = y;
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   return (
     <>
@@ -158,40 +121,50 @@ export default function LandingPage() {
         />
         <meta name="theme-color" content="#0b1220" />
         <meta name="color-scheme" content="dark light" />
-        <link
-          rel="icon"
-          href={
-            "data:image/svg+xml," +
-            encodeURIComponent(
-              '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="0.9em" font-size="90">🚲</text></svg>'
-            )
-          }
-        />
 
         {/* ===== Canonical / robots ===== */}
         <link rel="canonical" href="https://example.com/velib-forecast/" />
         <meta name="robots" content="index,follow,max-image-preview:large" />
 
         {/* ===== OpenGraph / Twitter ===== */}
-        <meta property="og:title" content="Vélib’ Forecast Paris — Carte en direct & Prévisions +15 min" />
+        <meta
+          property="og:title"
+          content="Vélib’ Forecast Paris — Carte en direct & Prévisions +15 min"
+        />
         <meta
           property="og:description"
           content="Anticipez la disponibilité des stations Vélib’ à +15 min. Carte en direct, comparaisons et monitoring qualité."
         />
         <meta property="og:type" content="website" />
         <meta property="og:url" content="https://example.com/velib-forecast/" />
-        <meta property="og:image" content="https://example.com/velib-forecast/cover.jpg" />
+        <meta
+          property="og:image"
+          content="https://example.com/velib-forecast/cover.jpg"
+        />
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="Vélib’ Forecast Paris — Prévisions +15 min" />
-        <meta name="twitter:description" content="Carte temps réel & prévisions à +15 minutes." />
-        <meta name="twitter:image" content="https://example.com/velib-forecast/cover.jpg" />
+        <meta
+          name="twitter:title"
+          content="Vélib’ Forecast Paris — Prévisions +15 min"
+        />
+        <meta
+          name="twitter:description"
+          content="Carte temps réel & prévisions à +15 minutes."
+        />
+        <meta
+          name="twitter:image"
+          content="https://example.com/velib-forecast/cover.jpg"
+        />
 
         {/* ===== Perf ===== */}
-        <link rel="preconnect" href="https://velib-ui-160046094975.europe-west1.run.app" crossOrigin="" />
-        <link rel="dns-prefetch" href="https://velib-ui-160046094975.europe-west1.run.app" />
-
-        {/* ===== Styles (scoped landing) ===== */}
-        <link rel="stylesheet" href="/css/landing.css" />
+        <link
+          rel="preconnect"
+          href="https://velib-ui-160046094975.europe-west1.run.app"
+          crossOrigin=""
+        />
+        <link
+          rel="dns-prefetch"
+          href="https://velib-ui-160046094975.europe-west1.run.app"
+        />
 
         {/* ===== JSON-LD ===== */}
         <script
@@ -222,56 +195,12 @@ export default function LandingPage() {
         Aller au contenu principal
       </a>
 
-      {/* ====================== NAV ====================== */}
-      <header ref={headerRef}>
-        <div
-          ref={navRef}
-          className={`container nav${menuOpen ? " is-open" : ""}`}
-          role="navigation"
-          aria-label="Navigation principale"
-        >
-          <a className="brand" href="#top" aria-label="Accueil Vélib’ Forecast">
-            <span className="logo" aria-hidden="true">
-              🚲
-            </span>
-            <span>Vélib’ Forecast</span>
-          </a>
+      {/* Header global */}
+      <GlobalHeader items={headerItems} brandHref="/" />
 
-          <nav aria-label="Sections">
-            <button
-              className="nav__burger"
-              aria-label={menuOpen ? "Fermer le menu" : "Ouvrir le menu"}
-              aria-expanded={menuOpen}
-              aria-controls="navList"
-              onClick={() => setMenuOpen((v) => !v)}
-            >
-              <span className="bar" aria-hidden="true" />
-            </button>
-            <ul id="navList" ref={navListRef}>
-              <li>
-                <a href="#demo" className="active">
-                  Démo
-                </a>
-              </li>
-              <li>
-                <a href="#features">Fonctions</a>
-              </li>
-              <li>
-                <a href="#monitoring">Monitoring</a>
-              </li>
-              <li>
-                <a href="#how">Architecture</a>
-              </li>
-              <li>
-                <a href="#faq">FAQ</a>
-              </li>
-            </ul>
-          </nav>
-        </div>
-      </header>
-
-      {/* ====================== HERO ====================== */}
+      {/* ====================== CONTENT ====================== */}
       <main id="top">
+        {/* ====================== HERO ====================== */}
         <section className="hero" aria-labelledby="hero-title">
           <div className="container hero-grid">
             <div>
@@ -279,6 +208,9 @@ export default function LandingPage() {
                 <span className="ping" aria-hidden="true" />
                 <span className="chip" aria-label="Horizon de prévision">
                   Prévisions +15 min • Paris
+                </span>
+                <span className="chip" aria-label="Actualisation">
+                  Données live 5 min
                 </span>
               </div>
 
@@ -288,7 +220,8 @@ export default function LandingPage() {
                 avec une{" "}
                 <span
                   style={{
-                    background: "linear-gradient(90deg,var(--primary),var(--primary-2))",
+                    background:
+                      "linear-gradient(90deg,var(--primary),var(--primary-2))",
                     WebkitBackgroundClip: "text",
                     backgroundClip: "text",
                     color: "transparent",
@@ -300,11 +233,19 @@ export default function LandingPage() {
               </h1>
 
               <p className="lead">
-                Carte temps réel, prédictions à +15 minutes par station, et monitoring qualité pour une
-                fraîcheur de données constante. Pensé pour la fiabilité au quotidien.
+                Carte temps réel, prédictions à +15 min par station, comparaison aux
+                comportements historiques, et monitoring natif. Conçu pour fiabilité,
+                vitesse et clarté — même aux heures de pointe.
               </p>
 
+              <ul className="text-muted" style={{ margin: "10px 0 0", paddingLeft: 18 }}>
+                <li>Filtres quartier, recherche suggérée, focus proximité.</li>
+                <li>Mises à jour live, transitions fluides, lisibilité renforcée.</li>
+                <li>Prévisions calibrées, médiane historique et profils horaires.</li>
+              </ul>
+
               <div className="cta">
+                {/* Principal : reste en couleur */}
                 <a className="btn" href="#demo" aria-label="Ouvrir la démo en direct">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path d="M7 7h10v10H7z" stroke="white" strokeWidth="1.8" />
@@ -312,9 +253,9 @@ export default function LandingPage() {
                   </svg>
                   Ouvrir la démo
                 </a>
-                <a className="btn outline" href="#how">
-                  Architecture
-                </a>
+                {/* Secondaires : harmonisés en outline */}
+                <a className="btn outline" href="#how">Architecture</a>
+                <a className="btn outline" href="#monitoring">Monitoring</a>
               </div>
 
               <div className="tech-chips">
@@ -330,33 +271,30 @@ export default function LandingPage() {
               <h3>En chiffres — 7 derniers jours</h3>
               <div className="kpis" role="list">
                 <div className="kpi" role="listitem">
-                  <div className="value" data-count="98%">
-                    0%
-                  </div>
+                  <div className="value" data-count="98%">0%</div>
                   <div className="label">Observations couvertes</div>
                 </div>
                 <div className="kpi" role="listitem">
-                  <div className="value" data-count="5">
-                    0
-                  </div>
+                  <div className="value" data-count="5">0</div>
                   <div className="label">Fraîcheur (min)</div>
                 </div>
                 <div className="kpi" role="listitem">
-                  <div className="value" data-count="1400">
-                    0
-                  </div>
+                  <div className="value" data-count="1400">0</div>
                   <div className="label">Stations suivies</div>
                 </div>
               </div>
 
+              {/* ✅ Aperçu statique sans double écriture (plus de skeleton ici) */}
               <div className="embed">
-                <div className="skeleton" aria-hidden="true">
-                  Mini-aperçu
-                </div>
                 <div className="ratio">
                   <small>Prévisualisation statique — lancez la démo ci-dessous</small>
                 </div>
               </div>
+
+              <ul className="text-muted" style={{ margin: "12px 0 0", paddingLeft: 18 }}>
+                <li>MAE baseline vs modèle, par station et par segments.</li>
+                <li>Défaut tolérant : trous comblés, horodatage strict, NaN sûrs.</li>
+              </ul>
             </aside>
           </div>
         </section>
@@ -368,28 +306,35 @@ export default function LandingPage() {
               <div>
                 <h2 id="demo-title">Démo en direct</h2>
                 <p>
-                  Application React embarquée : carte en direct, recherche de stations, et prévisions à +15 minutes. Le
-                  premier accès peut prendre quelques secondes (cold start Cloud Run).
+                  Application React embarquée : carte en direct, recherche de stations, et
+                  prévisions à +15 minutes. Le premier accès peut prendre quelques secondes
+                  (cold start Cloud Run).
                 </p>
               </div>
               <div>
-                <span className="kbd">Alt</span> + <span className="kbd">Clique</span> pour plein écran
+                <span className="kbd" aria-hidden="true">Alt</span> + <span className="kbd" aria-hidden="true">Clique</span>{" "}
+                <span className="sr-only">Astuce :</span> pour plein écran
               </div>
             </div>
 
             <div className="embed" aria-live="polite">
-              <div className="skeleton" id="skeleton" ref={skeletonRef}>
+              <div className="skeleton" id="skeleton" ref={demoSkeletonRef}>
                 Initialisation de la démo…
               </div>
               <iframe
-                ref={iframeRef}
+                ref={demoIframeRef}
                 title="Vélib’ Forecast — Application"
                 src="https://velib-ui-160046094975.europe-west1.run.app/"
                 loading="lazy"
                 allow="fullscreen; clipboard-read; clipboard-write"
                 referrerPolicy="no-referrer-when-downgrade"
               />
-              <button className="btn btn-fs" type="button" onClick={handleFullscreen} aria-label="Plein écran">
+              <button
+                className="btn btn-fs"
+                type="button"
+                onClick={handleFullscreen}
+                aria-label="Plein écran"
+              >
                 Plein écran
               </button>
             </div>
@@ -406,6 +351,16 @@ export default function LandingPage() {
               <button className="btn outline" type="button" onClick={handleReload}>
                 Recharger la démo
               </button>
+              <a className="btn outline" href="#features">Découvrir les fonctions</a>
+            </div>
+
+            <div className="glass prose mt-2">
+              <h3>Pourquoi c’est fluide ?</h3>
+              <ul className="text-muted" style={{ paddingLeft: 18 }}>
+                <li>Préchargement DNS et connexions persistantes.</li>
+                <li>Découpage UI, caches navigateur et CDN.</li>
+                <li>Metrics RUM pour piloter l’expérience réelle.</li>
+              </ul>
             </div>
           </div>
         </section>
@@ -417,8 +372,8 @@ export default function LandingPage() {
               <div>
                 <h2 id="features-title">Plein usage, du matin au soir</h2>
                 <p>
-                  Repérez les stations utiles, visualisez l’évolution à +15 min, comparez à la médiane, puis basculez en
-                  mode monitoring si besoin.
+                  Repérez les stations utiles, visualisez l’évolution à +15 min, comparez à
+                  la médiane, puis basculez en mode monitoring si besoin.
                 </p>
               </div>
               <a className="btn outline" href="#demo">
@@ -434,7 +389,10 @@ export default function LandingPage() {
                   </svg>
                 </div>
                 <h3>Carte lisible & rapide</h3>
-                <p>Couleurs travaillées, légende compacte, recherche instantanée, focus quartier.</p>
+                <p>
+                  Couleurs travaillées, légende compacte, recherche instantanée, focus quartier.
+                  Affichage pensé pour 1–2 infos clés par station (vélos/capacité + tendance).
+                </p>
               </article>
 
               <article className="feature">
@@ -445,7 +403,10 @@ export default function LandingPage() {
                   </svg>
                 </div>
                 <h3>Prévisions à +15 min</h3>
-                <p>Modèle entraîné sur l’historique et enrichi météo pour anticiper disponibilité et saturation.</p>
+                <p>
+                  Modèle entraîné sur l’historique et enrichi météo (vents, pluie, saisonnalités).
+                  Calibrage par segments horaires et stations pour limiter les biais.
+                </p>
               </article>
 
               <article className="feature">
@@ -456,7 +417,10 @@ export default function LandingPage() {
                   </svg>
                 </div>
                 <h3>Comparaisons utiles</h3>
-                <p>“Aujourd’hui vs médiane” et profils horaires par station pour comprendre les dynamiques.</p>
+                <p>
+                  “Aujourd’hui vs médiane” et profils horaires par station pour comprendre
+                  les dynamiques locales (heures de pointe, zones de reports, anomalies).
+                </p>
               </article>
 
               <article className="feature">
@@ -467,7 +431,10 @@ export default function LandingPage() {
                   </svg>
                 </div>
                 <h3>Monitoring intégré</h3>
-                <p>KPIs fraîcheur, complétude, anomalies & résilience du pipeline pour une qualité constante.</p>
+                <p>
+                  KPIs fraîcheur/complétude, alertes simples (saturation/pénurie), suivi
+                  de stabilité des features — pour des décisions fiables.
+                </p>
               </article>
 
               <article className="feature">
@@ -477,9 +444,10 @@ export default function LandingPage() {
                     <path d="M3 3v6M3 3h6M21 21v-6M21 21h-6" stroke="currentColor" strokeWidth="2" />
                   </svg>
                 </div>
-                <h3>Responsive & accessible</h3>
+                <h3>Accessible partout</h3>
                 <p>
-                  Design mobile-first, contrastes conformes, navigation clavier, respect des préférences système.
+                  Un simple <code>&lt;iframe&gt;</code> suffit (Cloud Run, proxy, sous-domaine),
+                  avec thème auto (clair/sombre) et navigation clavier.
                 </p>
               </article>
 
@@ -489,11 +457,21 @@ export default function LandingPage() {
                     <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" strokeWidth="2" />
                   </svg>
                 </div>
-                <h3>Intégrable partout</h3>
+                <h3>Pensé pour évoluer</h3>
                 <p>
-                  Un simple <code>&lt;iframe&gt;</code> suffit (Cloud Run, proxy, sous-domaine, etc.).
+                  Code modulaire : nouveaux horizons (T+60), nouvelles villes, nouvelles
+                  sources — sans refonte complète.
                 </p>
               </article>
+            </div>
+
+            <div className="glass prose mt-2">
+              <h3>Cas d’usage rapides</h3>
+              <ul className="text-muted" style={{ paddingLeft: 18 }}>
+                <li>Communication et info voyageurs : carte intégrée à un site de quartier/entreprise.</li>
+                <li>Immobilier/événementiel : repérer les zones sous- ou sur-servies à l’instant T.</li>
+                <li>Mobilité individuelle : planifier un trajet avec station d’arrivée fiable.</li>
+              </ul>
             </div>
           </div>
         </section>
@@ -501,12 +479,13 @@ export default function LandingPage() {
         {/* ====================== MONITORING ====================== */}
         <section id="monitoring" aria-labelledby="monitoring-title">
           <div className="container">
+            {/* ────── En-tête de section ────── */}
             <div className="sec-head">
               <div>
                 <h2 id="monitoring-title">Monitoring & Qualité des données</h2>
                 <p>
                   Surveille en continu la fraîcheur, la couverture et les anomalies pour préserver la fiabilité des
-                  prévisions.
+                  prévisions. Export des KPIs en JSON pour alimenter d’autres vues.
                 </p>
               </div>
               <a className="btn outline" href="#faq">
@@ -514,7 +493,9 @@ export default function LandingPage() {
               </a>
             </div>
 
+            {/* ────── Showcase : carte principale + sous-cartes ────── */}
             <div className="showcase">
+              {/* Carte principale */}
               <figure className="card">
                 <figcaption className="cap">
                   <strong>Data Health Dashboard</strong>
@@ -525,7 +506,8 @@ export default function LandingPage() {
                 </div>
               </figure>
 
-              <div className="cols-2">
+              {/* Deux sous-cartes côte à côte */}
+              <div className="kpi-row">
                 <figure className="card">
                   <figcaption className="cap">
                     <strong>Fraîcheur</strong>
@@ -542,6 +524,17 @@ export default function LandingPage() {
                 </figure>
               </div>
             </div>
+
+            {/* ────── Détails suivis ────── */}
+            <div className="glass prose mt-2">
+              <h3>Ce que l’on suit</h3>
+              <ul className="text-muted" style={{ paddingLeft: 18 }}>
+                <li><strong>Freshness</strong> : p50/p95, hors-plage, trous de capture.</li>
+                <li><strong>Coverage</strong> : % lignes valides, champs critiques, NaN sûrs.</li>
+                <li><strong>Stability</strong> : dérive simple (KS/PSI) sur features clés.</li>
+                <li><strong>Alerts</strong> : pénurie/saturation anormales, outliers horaires.</li>
+              </ul>
+            </div>
           </div>
         </section>
 
@@ -551,7 +544,10 @@ export default function LandingPage() {
             <div className="sec-head">
               <div>
                 <h2 id="how-title">Sous le capot</h2>
-                <p>Un pipeline robuste de l’ingestion à la mise en prod, avec des composants simples à maintenir.</p>
+                <p>
+                  Un pipeline robuste de l’ingestion à la mise en prod, avec des composants simples à maintenir et des
+                  points de contrôle clairs.
+                </p>
               </div>
             </div>
 
@@ -559,27 +555,48 @@ export default function LandingPage() {
               <div className="step" role="listitem">
                 <span className="chip">1 · Ingestion</span>
                 <strong>GBFS → DuckDB</strong>
-                <p>Snapshots toutes les 5 minutes, consolidation, indexation spatio-temporelle.</p>
+                <p>Snapshots toutes les 5 minutes, consolidation journalière, schéma strict.</p>
+                <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
+                  <li>Parquet shardé (daily/weekly) pour IO efficaces.</li>
+                  <li>Clés station_id + tbin_utc, zones horaires UTC/locale.</li>
+                </ul>
               </div>
               <div className="step" role="listitem">
                 <span className="chip">2 · Enrichissement</span>
                 <strong>Features calendrier & météo</strong>
-                <p>Jour de semaine, heure, vacances, pluviométrie, vents, etc.</p>
+                <p>Jour/semaine, vacances, sin/cos horaires, pluie/vent.</p>
+                <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
+                  <li>Rollings (lags, fenêtres 1–4 h) et indicateurs de tendance.</li>
+                  <li>Sanitization JSON (NaN→null) pour APIs propres.</li>
+                </ul>
               </div>
               <div className="step" role="listitem">
                 <span className="chip">3 · Modélisation</span>
                 <strong>LightGBM (T+15)</strong>
-                <p>
-                  Prévisions station-par-station à +15 min, évaluation MAE/WAPE et baseline persistance.
-                </p>
+                <p>Évaluation MAE/WAPE vs baseline persistance par segments.</p>
+                <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
+                  <li>Calibration légère, contrôle des sur-/sous-estimations.</li>
+                  <li>Artifacts versionnés (joblib) et manifest JSON.</li>
+                </ul>
               </div>
               <div className="step" role="listitem">
                 <span className="chip">4 · App & Docs</span>
-                <strong>Next.js + MkDocs</strong>
-                <p>
-                  Carte interactive, pages “Réseau/Modèle/Monitoring/Data” et export automatique des KPIs.
-                </p>
+                <strong>Next.js + APIs</strong>
+                <p>Carte interactive, pages Réseau/Modèle/Monitoring/Data.</p>
+                <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
+                  <li>Déploiement Cloud Run, CORS maîtrisé, headers sûrs.</li>
+                  <li>Static props + lazy pour une UX perçue plus rapide.</li>
+                </ul>
               </div>
+            </div>
+
+            <div className="glass prose mt-2">
+              <h3>Pourquoi c’est fiable ?</h3>
+              <ul className="text-muted" style={{ paddingLeft: 18 }}>
+                <li>Tests unitaires sur parsing/horodatage et contrats de schéma.</li>
+                <li>Nettoyage systématique des valeurs infinies/NaN avant export.</li>
+                <li>Monitoring indépendant et exports JSON réutilisables.</li>
+              </ul>
             </div>
           </div>
         </section>
@@ -595,24 +612,34 @@ export default function LandingPage() {
               <details>
                 <summary>La démo met quelques secondes à démarrer, normal ?</summary>
                 <p>
-                  Oui, c’est le cold start de Cloud Run. Les accès suivants sont instantanés. Vous pouvez augmenter
-                  l’instance minimum pour éviter ce délai.
+                  Oui, c’est le cold start de Cloud Run. Les accès suivants sont instantanés.
+                  Vous pouvez configurer une instance minimum pour éviter ce délai.
                 </p>
               </details>
 
               <details>
                 <summary>Puis-je intégrer l’app dans mon site ?</summary>
                 <p>
-                  Oui, via un simple <code>&lt;iframe&gt;</code>. La page gère déjà le responsive, le thème et le focus
-                  clavier.
+                  Oui, via un simple <code>&lt;iframe&gt;</code>. La page gère le responsive,
+                  le thème clair/sombre et la navigation clavier.
                 </p>
               </details>
 
               <details>
                 <summary>Comment sont calculées les prévisions ?</summary>
                 <p>
-                  Le modèle apprend les dynamiques horaires par station et incorpore des signaux calendrier/météo. Une
-                  baseline de persistance sert de repère pour mesurer l’amélioration.
+                  Entraînement station-par-station avec signaux calendrier/météo. Une baseline
+                  de persistance permet de mesurer l’amélioration réelle et d’éviter
+                  les gains artificiels.
+                </p>
+              </details>
+
+              <details>
+                <summary>Et la qualité des données ?</summary>
+                <p>
+                  Contrôles de fraîcheur (p50/p95), complétude des champs critiques, dérive
+                  simple des features, et alertes sur pénurie/saturation. Exports JSON
+                  pour vos propres tableaux de bord.
                 </p>
               </details>
             </div>
@@ -627,31 +654,20 @@ export default function LandingPage() {
   allow="fullscreen"></iframe>`}</code>
               </pre>
               <p className="text-muted" style={{ fontSize: ".95rem" }}>
-                Vous pouvez aussi placer l’app derrière un sous-domaine (ex. <em>app.votredomaine.fr</em>).
+                Vous pouvez aussi placer l’app derrière un sous-domaine (ex. <em>app.votredomaine.fr</em>),
+                avec un enregistrement CNAME et des headers de sécurité adaptés.
               </p>
+              <ul className="text-muted" style={{ paddingLeft: 18 }}>
+                <li>CORS restreint, CSP stricte, cookies “None; Secure”.</li>
+                <li>Build reproductible, image minimale, endpoint de santé /ready.</li>
+              </ul>
             </aside>
           </div>
         </section>
       </main>
 
-      <footer role="contentinfo">
-        <div className="container actions-row" style={{ justifyContent: "space-between" }}>
-          <div>
-            © <span>{year}</span> Vélib’ Forecast — Fait avec ♥ à Paris
-          </div>
-          <div className="actions-row" style={{ marginTop: 0 }}>
-            <a className="chip" href="#demo">
-              Démo
-            </a>
-            <a className="chip" href="#monitoring">
-              Monitoring
-            </a>
-            <a className="chip" href="#how">
-              Architecture
-            </a>
-          </div>
-        </div>
-      </footer>
+      {/* Footer global (remplace l’ancien footer inline) */}
+      <GlobalFooter />
     </>
   );
 }

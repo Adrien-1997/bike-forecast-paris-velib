@@ -5,6 +5,8 @@ import dynamic from "next/dynamic";
 import type { ScatterData } from "plotly.js";
 import type * as Plotly from "plotly.js";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
+import GlobalHeader from "@/components/layout/GlobalHeader";
+import GlobalFooter from "@/components/layout/GlobalFooter";
 
 /* ───────────────────────── Plotly (client only) ───────────────────────── */
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
@@ -189,19 +191,17 @@ export default function ModelExplainabilityPage() {
       <Head>
         <title>Monitoring — Model / Explainability</title>
         <meta name="description" content="Résidus, QQ, ACF, hétéroscédasticité, calibration et incertitude." />
-        <link rel="stylesheet" href="/css/monitoring.css" />
       </Head>
 
-      <main className="page">
+      {/* Header global sticky */}
+      <GlobalHeader />
+
+      {/* Contenu principal */}
+      <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
           title="Model — Explainability"
           subtitle="Résidus, QQ, ACF, hétéroscédasticité, calibration & incertitude"
           generatedAt={generatedAt}
-          crumbs={[
-            { label: "Accueil", href: "/" },
-            { label: "Monitoring", href: "/monitoring" },
-            { label: "App", href: "/app" },
-          ]}
           extraActions={[
             { label: "Performance", href: "/monitoring/model/performance" },
           ]}
@@ -473,6 +473,9 @@ export default function ModelExplainabilityPage() {
 
         <div className="mt-6" />
       </main>
+
+      {/* Footer global */}
+      <GlobalFooter />
     </div>
   );
 }

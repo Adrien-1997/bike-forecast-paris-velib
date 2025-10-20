@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type * as Plotly from "plotly.js";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
+import GlobalHeader from "@/components/layout/GlobalHeader";
+import GlobalFooter from "@/components/layout/GlobalFooter";
 
 /* ───────────────── HTTP helper ───────────────── */
 async function getJSON<T = unknown>(path: string): Promise<T> {
@@ -117,7 +119,7 @@ const MapView = dynamic(async () => {
     return idx >= 0 ? palette[idx % palette.length] : "#4c78a8";
   }
 
-  // ✅ version corrigée sans window.L
+  // version sans window.L
   function FitBounds({ rows }: { rows: ClusterRow[] }) {
     const map = useMap();
     useEffect(() => {
@@ -165,11 +167,11 @@ const MapView = dynamic(async () => {
     }, []);
 
     return (
-        <div
-          className="map-wrap"
-          style={{ position: "relative", width: "100%", height: 520 }}
-        >
-          <MapContainer
+      <div
+        className="map-wrap"
+        style={{ position: "relative", width: "100%", height: 520 }}
+      >
+        <MapContainer
           center={[latMed, lonMed]}
           zoom={12}
           className="leaflet-container"
@@ -218,7 +220,7 @@ const MapView = dynamic(async () => {
             position: "absolute",
             right: 8,
             bottom: 8,
-            zIndex: 1000,               // au-dessus de la carte
+            zIndex: 1000,
             background: "rgba(255,255,255,0.92)",
             color: "#111",
             borderRadius: 10,
@@ -423,7 +425,6 @@ export default function NetworkStationsPage() {
       <Head>
         <title>Monitoring — Network / Stations</title>
         <meta name="description" content="Clusters map + 24h profiles (centroids) and recent distributions." />
-        <link rel="stylesheet" href="/css/monitoring.css" />
         {/* Leaflet CSS + small global fixes */}
         <link
           rel="stylesheet"
@@ -442,16 +443,13 @@ export default function NetworkStationsPage() {
         />
       </Head>
 
-      <main className="page">
+      <GlobalHeader />
+
+      <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
           title="Network — Stations"
           subtitle="Clusters, map and distributions"
           generatedAt={generatedAt}
-          crumbs={[
-            { label: "Accueil", href: "/" },
-            { label: "Monitoring", href: "/monitoring" },
-            { label: "App", href: "/app" },
-          ]}
           extraActions={[
             { label: "Stations", href: "/monitoring/network/stations" },
             { label: "Performance", href: "/monitoring/model/performance" },
@@ -634,7 +632,7 @@ export default function NetworkStationsPage() {
 
             <div className="card plot-card">
               <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>% saturation (7 days)</h3>
-            {saturationPct.length ? (
+              {saturationPct.length ? (
                 <Plot
                   data={[hist(saturationPct, "% saturation", 24)] as Plotly.Data[]}
                   layout={{
@@ -662,6 +660,8 @@ export default function NetworkStationsPage() {
           )}
         </section>
       </main>
+
+      <GlobalFooter />
     </div>
   );
 }

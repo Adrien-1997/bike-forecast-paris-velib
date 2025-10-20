@@ -1,0 +1,229 @@
+/* =========================================================
+   MAPVIEW — Carte Leaflet (mode clair / sombre)
+   Harmonisé avec l’app Vélib’ Forecast (sans placeholder)
+   ========================================================= */
+
+:root {
+  --map-bg: #0b1220;
+  --map-panel: #0f172a;
+  --map-panel-2: #0c1324;
+  --map-text: #e6eaf2;
+  --map-muted: #9ca3af;
+  --map-primary: #ff6a00;
+  --map-secondary: #1d7fff;
+  --map-border: rgba(255, 255, 255, 0.08);
+  --map-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+  --map-blur: blur(10px);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --map-bg: #f9fafb;
+    --map-panel: #ffffff;
+    --map-panel-2: #f3f4f6;
+    --map-text: #111827;
+    --map-muted: #6b7280;
+    --map-border: rgba(0, 0, 0, 0.08);
+    --map-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+  }
+}
+
+/* ---------- Carte principale ---------- */
+.map-fill,
+.leaflet-container {
+  background: var(--map-panel) !important;
+  border-radius: 18px;
+  border: 1px solid var(--map-border);
+  box-shadow: var(--map-shadow);
+  position: relative;
+  overflow: hidden;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ✅ suppression du placeholder visuel */
+.map-fill::before {
+  content: none !important;
+}
+
+/* ---------- Contrôles Leaflet (zoom +/-) ---------- */
+.leaflet-control-zoom {
+  border: none !important;
+  box-shadow: none !important;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.leaflet-control-zoom a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 36px;
+  margin: 0;
+  background: var(--map-panel-2);
+  border: 1px solid var(--map-border);
+  border-bottom: none;
+  color: var(--map-text);
+  font-weight: 700;
+  font-size: 18px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  transition: background 0.25s, transform 0.15s;
+}
+
+.leaflet-control-zoom a:first-child {
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+}
+.leaflet-control-zoom a:last-child {
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
+  border-bottom: 1px solid var(--map-border);
+}
+
+.leaflet-control-zoom a:hover {
+  background: var(--map-panel);
+  color: var(--map-text);
+  transform: translateY(-1px);
+}
+
+.leaflet-control-zoom a:active {
+  transform: translateY(0);
+  filter: brightness(0.92);
+}
+
+/* ---------- Bouton "📍 Ma position" ---------- */
+.map-fab {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 1000;
+  border: 1px solid var(--map-border);
+  border-radius: 6px;
+  background: var(--map-panel-2);
+  color: var(--map-text);
+  font-weight: 700;
+  font-size: 0.95rem;
+  padding: 9px 16px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  transition: transform 0.15s ease, filter 0.2s ease, background 0.2s ease;
+}
+
+.map-fab:hover {
+  transform: translateY(-1px);
+  background: var(--map-panel);
+  filter: brightness(1.1);
+}
+
+/* ---------- Popup Leaflet ---------- */
+.leaflet-popup-content-wrapper {
+  background: var(--map-panel-2);
+  border-radius: 10px;
+  border: 1px solid var(--map-border);
+  color: var(--map-text);
+  box-shadow: var(--map-shadow);
+  backdrop-filter: var(--map-blur);
+}
+.leaflet-popup-tip {
+  background: var(--map-panel-2);
+  border: 1px solid var(--map-border);
+}
+
+.popup-content {
+  font-family: Inter, system-ui, sans-serif;
+  color: var(--map-text);
+}
+.popup-title {
+  font-weight: 700;
+  margin-bottom: 0.15rem;
+}
+.popup-sub {
+  color: var(--map-muted);
+  margin-bottom: 0.35rem;
+}
+.popup-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.35rem;
+}
+
+.badge {
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid var(--map-border);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.badge.up {
+  background: #dcfce7;
+  color: #166534;
+}
+.badge.down {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.badge.neutral {
+  background: #e5e7eb;
+  color: #111827;
+}
+.badge.current {
+  background: #f3f4f6;
+  color: var(--map-text);
+}
+.badge.pred {
+  background: #eef2ff;
+  color: var(--map-text);
+}
+
+.popup-delta.up {
+  color: #16a34a;
+}
+.popup-delta.down {
+  color: #dc2626;
+}
+
+/* ---------- Clusters ---------- */
+.cluster-icon {
+  background: linear-gradient(135deg, var(--map-primary), var(--map-secondary));
+  color: #fff;
+  font-weight: 700;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+}
+
+/* ---------- Marqueur utilisateur ---------- */
+.user-marker {
+  position: relative;
+}
+.user-marker .dot {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--map-secondary);
+  border: 2px solid #fff;
+}
+.user-marker .pulse {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  background: rgba(29, 127, 255, 0.25);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.7;
+  }
+  70% {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(0.9);
+    opacity: 0;
+  }
+}

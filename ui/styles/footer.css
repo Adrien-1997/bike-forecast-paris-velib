@@ -1,0 +1,110 @@
+/* ===================================================================
+   public/css/footer.css
+   GlobalFooter — tokens globaux, social round button, disclaimer
+   =================================================================== */
+
+/* Liens jamais soulignés par défaut */
+.site-footer a,
+.site-footer a:hover,
+.site-footer a:focus-visible {
+  text-decoration: none !important;
+}
+
+/* =================== Footer =================== */
+.site-footer{
+  padding: 32px 20px calc(40px + env(safe-area-inset-bottom, 0px));
+  color: var(--muted, #9ca3af);
+  text-align: center;
+  border-top: 1px solid var(--ring, rgba(255,255,255,.14));
+  background: transparent;
+}
+
+.site-footer .footer-grid{
+  max-width: var(--content-max, 1200px);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+/* =================== Social =================== */
+.site-footer .social{ margin-top: 12px; }
+.site-footer .social-item{
+  position: relative;
+  box-sizing: border-box;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: 1px solid var(--ring, rgba(255,255,255,.14));
+  line-height: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text, #e6eaf2);
+  transition:
+    transform .25s ease,
+    box-shadow .25s ease,
+    background .25s ease,
+    border-color .25s ease;
+  will-change: transform;
+  margin: 0 6px;
+}
+.site-footer .social-item:hover{
+  border-color: transparent;
+  background: linear-gradient(90deg, var(--primary, #ff6a00), var(--primary-2, #1d7fff));
+  color: #fff;
+  box-shadow:
+    0 0 20px rgba(255,106,0,.35),
+    0 0 25px rgba(29,127,255,.25);
+  transform: scale(1.05);
+}
+.site-footer .social-item svg{
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
+.site-footer .social-label{
+  margin-top: 10px;
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--text, #e6eaf2);
+}
+
+/* =================== Disclaimer =================== */
+.site-footer .disclaimer{
+  font-size: .9rem;
+  max-width: 1024px;
+  margin: 16px auto 0;
+  opacity: .9;
+  text-align: center;
+  color: var(--muted, #9ca3af);
+}
+
+/* =================== Light mode =================== */
+@media (prefers-color-scheme: light){
+  .site-footer{
+    border-top-color: var(--ring, rgba(0,0,0,.10));
+  }
+  .site-footer .social-item{
+    color: var(--text, #111827);
+    border-color: var(--ring, rgba(0,0,0,.10));
+    background: rgba(0,0,0,.02);
+  }
+  .site-footer .social-item:hover{
+    background: linear-gradient(90deg, var(--primary, #ff6a00), var(--primary-2, #1d7fff));
+    color: #fff;
+    box-shadow:
+      0 8px 20px rgba(0,0,0,.12),
+      0 2px 8px rgba(0,0,0,.06);
+  }
+}
+
+/* =================== Responsive =================== */
+@media (max-width: 720px){
+  .site-footer{ padding: 28px 16px calc(36px + env(safe-area-inset-bottom, 0px)); }
+  .site-footer .footer-grid{ gap: 14px; }
+  .site-footer .social-item{ width: 54px; height: 54px; }
+  .site-footer .social-item svg{ width: 26px; height: 26px; }
+}

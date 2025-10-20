@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Page non trouvée — vélo-paris.fr</title>
+  <meta name="description" content="Oups, la page que vous cherchez n’existe pas ou a été déplacée." />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+
+  <!-- Titres en Urbanist (comme l'accueil) -->
+  <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+
+  <style>
+    /* --- Correctifs scroll & structure spécifiques à la 404 --- */
+    html, body { height: 100%; overflow-x: hidden; overscroll-behavior: auto; touch-action: auto; }
+    .wrap { min-height: 100svh; display: flex; flex-direction: column; }
+
+    /* Header garde ton style global via style.css */
+
+    main {
+      flex: 1;                       /* occupe l'espace restant entre header et footer */
+      display: grid;
+      place-items: center;
+      padding: 40px 20px;
+      position: relative;
+      overflow: hidden;              /* ✅ empêche tout débordement du halo */
+    }
+
+    /* Halo contenu, plus petit pour éviter tout scroll latent */
+    .halo {
+      position: absolute;
+      inset: -12%;
+      background:
+        radial-gradient(60vmax 60vmax at 15% 10%, rgba(255,106,0,.15), transparent 60%),
+        radial-gradient(70vmax 70vmax at 85% 90%, rgba(29,127,255,.15), transparent 55%);
+      filter: saturate(110%) blur(10px);
+      pointer-events: none;
+    }
+
+    .error-box {
+      max-width: 540px;
+      width: min(540px, 92vw);
+      background: linear-gradient(180deg, rgba(17,24,39,.75), rgba(17,24,39,.55));
+      border: 1px solid var(--ring);
+      border-radius: 22px;
+      box-shadow: 0 10px 40px rgba(0,0,0,.35);
+      padding: 48px 28px;
+      position: relative;
+      z-index: 1;
+      text-align: center;
+    }
+
+    h1 {
+      font-family: "Urbanist", sans-serif;
+      font-weight: 800;
+      font-size: clamp(40px, 6vw, 60px);
+      line-height: 1.1;
+      margin: 0;
+      background: linear-gradient(90deg, var(--primary), var(--primary-2));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    p { margin: 20px 0 32px; font-size: 1.05rem; color: var(--muted); }
+
+    a.btn-home {
+      display: inline-block;
+      padding: 0.8rem 1.7rem;
+      border-radius: 999px;
+      font-family: "Urbanist", sans-serif;
+      font-weight: 600;
+      color: #fff;
+      text-decoration: none;
+      background: linear-gradient(90deg, var(--primary), var(--primary-2));
+      box-shadow: 0 0 20px rgba(255,106,0,.25), 0 0 25px rgba(29,127,255,.15);
+      transition: transform .25s ease, box-shadow .25s ease;
+    }
+    a.btn-home:hover { transform: scale(1.05); box-shadow: 0 0 25px rgba(255,106,0,.35), 0 0 35px rgba(29,127,255,.25); }
+
+    footer { text-align: center; padding: 20px; color: var(--muted); }
+
+    @media (prefers-color-scheme: light) {
+      .error-box {
+        background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(255,255,255,.88));
+        box-shadow: 0 6px 24px rgba(0,0,0,.06);
+        border: 1px solid rgba(0,0,0,.06);
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <header>
+      <div class="container">
+        <a href="/" class="brand" aria-label="Accueil">
+          <img src="favicon.svg" alt="Logo vélo-paris.fr" class="mark" />
+          <div class="brandtext">
+            <span class="brand-velo">vélo</span>
+            <span class="brand-sep">·</span>
+            <span class="brand-paris">paris</span>
+          </div>
+        </a>
+        <div class="badge"><span class="dot"></span> observatoire</div>
+      </div>
+    </header>
+
+    <main>
+      <div class="halo" aria-hidden="true"></div>
+      <div class="error-box">
+        <h1>404</h1>
+        <p>Oups ! La page que vous cherchez n’existe pas ou a été déplacée.</p>
+        <a href="/" class="btn-home">Retour à l’accueil</a>
+      </div>
+    </main>
+
+    <footer>© 2025 vélo-paris.fr</footer>
+  </div>
+</body>
+</html>

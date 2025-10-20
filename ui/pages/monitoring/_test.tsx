@@ -285,7 +285,6 @@ export default function ModelPerformancePage() {
       <Head>
         <title>Monitoring — Model / Performance</title>
         <meta name="description" content="Comparatif modèle vs baseline, lift, histogrammes, découpes et stations." />
-        <link rel="stylesheet" href="/css/monitoring.css" />
         {/* Ajout minime: barre de progression réutilisable */}
         <style
           dangerouslySetInnerHTML={{
@@ -303,11 +302,6 @@ export default function ModelPerformancePage() {
           title="Model — Performance"
           subtitle={`MAE/RMSE vs baseline, lift, histogrammes & découpes (h=${h} min)`}
           generatedAt={generatedAt ?? undefined}
-          crumbs={[
-            { label: "Accueil", href: "/" },
-            { label: "Monitoring", href: "/monitoring" },
-            { label: "App", href: "/app" },
-          ]}
           extraActions={[
             { label: "Explainability", href: "/monitoring/model/explainability" },
           ]}
