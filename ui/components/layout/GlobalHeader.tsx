@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
+import { createPortal } from "react-dom";
 
 export type HeaderItem = { label: string; href: string };
 
@@ -20,6 +21,9 @@ export default function GlobalHeader({
   const [activeHash, setActiveHash] = useState<string>("");
   const [open, setOpen] = useState(false);
   const headerRef = useRef<HTMLElement | null>(null);
+  const [hasDOM, setHasDOM] = useState(false); // évite le mismatch SSR des portals
+
+  useEffect(() => setHasDOM(true), []);
 
   const list =
     items && items.length
@@ -31,10 +35,7 @@ export default function GlobalHeader({
         ];
 
   const hashTargets = useMemo(
-    () =>
-      list
-        .filter((i) => i.href.startsWith("#"))
-        .map((i) => i.href.replace("#", "")),
+    () => list.filter((i) => i.href.startsWith("#")).map((i) => i.href.replace("#", "")),
     [list]
   );
 
@@ -43,7 +44,7 @@ export default function GlobalHeader({
 
   const closeMenu = () => setOpen(false);
 
-  // Track hash sections for active state
+  // Suivi des sections hash pour l'état actif
   useEffect(() => {
     if (hashTargets.length === 0 || typeof window === "undefined") return;
     const onHashChange = () => setActiveHash(window.location.hash || "");
@@ -56,8 +57,7 @@ export default function GlobalHeader({
           .filter((e) => e.isIntersecting)
           .sort(
             (a, b) =>
-              (a.target as HTMLElement).offsetTop -
-              (b.target as HTMLElement).offsetTop
+              (a.target as HTMLElement).offsetTop - (b.target as HTMLElement).offsetTop
           )[0];
         if (visible) setActiveHash(`#${(visible.target as HTMLElement).id}`);
       },
@@ -75,7 +75,7 @@ export default function GlobalHeader({
     };
   }, [hashTargets]);
 
-  // Close menu on resize to desktop
+  // Fermer le menu si on repasse desktop
   useEffect(() => {
     const onResize = () => {
       if (window.innerWidth >= 980) setOpen(false);
@@ -84,18 +84,20 @@ export default function GlobalHeader({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // Lock body scroll when menu is open
+  // Lock scroll + classe utilitaire quand menu ouvert
   useEffect(() => {
     if (typeof document === "undefined") return;
     const body = document.body;
     const prev = body.style.overflow;
     body.style.overflow = open ? "hidden" : prev || "";
+    body.classList.toggle("menu-open", open);
     return () => {
       body.style.overflow = prev || "";
+      body.classList.remove("menu-open");
     };
   }, [open]);
 
-  // Auto-hide header on scroll
+  // Auto-hide du header au scroll
   useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
@@ -116,7 +118,7 @@ export default function GlobalHeader({
     };
   }, [open]);
 
-  // Close on Escape
+  // Échap pour fermer
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -126,101 +128,129 @@ export default function GlobalHeader({
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
+  // Fermer au clic extérieur (en plus du backdrop)
+  useEffect(() => {
+    if (!open) return;
+
+    const onPointerDown = (e: PointerEvent) => {
+      const headerEl =
+        headerRef.current ?? document.querySelector<HTMLElement>(".site-header");
+      if (!headerEl) return;
+      const drawer = headerEl.querySelector(".mobile-drawer");
+      const burger = headerEl.querySelector(".burger");
+      if (
+        (drawer && (drawer === e.target || drawer.contains(e.target as Node))) ||
+        (burger && (burger === e.target || burger.contains(e.target as Node)))
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [open]);
+
   return (
-    <header ref={headerRef} className="site-header">
-      <div className="container nav">
-        {/* Branding */}
-        <Link href={brandHref} className="brand" aria-label="Accueil" onClick={closeMenu}>
-          <img
-            src="/favicon.svg"
-            alt=""
-            className="mark"
-            width={40}
-            height={40}
-            decoding="async"
-            loading="eager"
-            draggable={false}
-          />
-          <span className="brandtext" aria-label="Vélo Paris">
-            <span className="brand-velo">vélo</span>
-            <span className="brand-sep">/</span>
-            <span className="brand-paris">paris</span>
-          </span>
-        </Link>
+    <>
+      <header ref={headerRef} className="site-header">
+        <div className="container nav">
+          {/* Branding */}
+          <Link href={brandHref} className="brand" aria-label="Accueil" onClick={closeMenu}>
+            <img
+              src="/favicon.svg"
+              alt=""
+              className="mark"
+              width={40}
+              height={40}
+              decoding="async"
+              loading="eager"
+              draggable={false}
+            />
+            <span className="brandtext" aria-label="Vélo Paris">
+              <span className="brand-velo">vélo</span>
+              <span className="brand-sep">/</span>
+              <span className="brand-paris">paris</span>
+            </span>
+          </Link>
 
-        {/* Desktop nav */}
-        <nav className="nav-desktop" aria-label="Navigation principale">
-          <ul>
-            {list.map((it) => (
-              <li key={it.href}>
-                <Link
-                  href={it.href}
-                  className={isActive(it.href) ? "nav-trigger active" : "nav-trigger"}
-                  aria-current={isActive(it.href) ? "page" : undefined}
-                >
-                  {it.label}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </nav>
+          {/* Nav desktop */}
+          <nav className="nav-desktop" aria-label="Navigation principale">
+            <ul>
+              {list.map((it) => (
+                <li key={it.href}>
+                  <Link
+                    href={it.href}
+                    className={isActive(it.href) ? "nav-trigger active" : "nav-trigger"}
+                    aria-current={isActive(it.href) ? "page" : undefined}
+                  >
+                    {it.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </nav>
 
-        {/* ✅ Burger corrigé */}
-        <button
-          className={open ? "burger close" : "burger"}
-          aria-label={open ? "Fermer le menu" : "Ouvrir le menu"}
-          aria-controls="mobile-menu"
-          aria-expanded={open ? "true" : "false"}
-          onClick={() => setOpen((v) => !v)}
+          {/* Burger (2 traits parallèles) */}
+          <button
+            className={open ? "burger close" : "burger"}
+            aria-label={open ? "Fermer le menu" : "Ouvrir le menu"}
+            aria-controls="mobile-menu"
+            aria-expanded={open ? "true" : "false"}
+            onClick={() => setOpen((v) => !v)}
+          >
+            <span className="icon" aria-hidden="true">
+              <svg width="28" height="28" viewBox="0 0 24 24">
+                <g className="lines">
+                  <rect x="3" y="7" width="18" height="2" rx="1" />
+                  <rect x="3" y="17" width="18" height="2" rx="1" />
+                </g>
+                <g className="cross">
+                  <rect x="4" y="11" width="16" height="2" rx="1" transform="rotate(45 12 12)" />
+                  <rect x="4" y="11" width="16" height="2" rx="1" transform="rotate(-45 12 12)" />
+                </g>
+              </svg>
+            </span>
+          </button>
+        </div>
+
+        {/* Mobile drawer */}
+        <div
+          id="mobile-menu"
+          className={open ? "mobile-drawer open" : "mobile-drawer"}
+          role="dialog"
+          aria-modal="true"
         >
-          <span className="icon" aria-hidden="true">
-            <svg width="28" height="28" viewBox="0 0 24 24">
-              <g className="lines">
-                <rect x="3" y="6" width="18" height="2" rx="1" />
-                <rect x="3" y="11" width="18" height="2" rx="1" />
-                <rect x="3" y="16" width="18" height="2" rx="1" />
-              </g>
-              <g className="cross">
-                <rect x="4" y="11" width="16" height="2" rx="1" transform="rotate(45 12 12)" />
-                <rect x="4" y="11" width="16" height="2" rx="1" transform="rotate(-45 12 12)" />
-              </g>
-            </svg>
-          </span>
-        </button>
-      </div>
+          <nav className="mobile-nav">
+            <ul>
+              {list.map((it) => (
+                <li key={it.href}>
+                  <Link
+                    href={it.href}
+                    className={isActive(it.href) ? "nav-trigger active" : "nav-trigger"}
+                    aria-current={isActive(it.href) ? "page" : undefined}
+                    onClick={closeMenu}
+                  >
+                    {it.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        </div>
+      </header>
 
-      {/* Mobile drawer */}
-      <div
-        id="mobile-menu"
-        className={open ? "mobile-drawer open" : "mobile-drawer"}
-        role="dialog"
-        aria-modal="true"
-      >
-        <nav className="mobile-nav">
-          <ul>
-            {list.map((it) => (
-              <li key={it.href}>
-                <Link
-                  href={it.href}
-                  className={isActive(it.href) ? "nav-trigger active" : "nav-trigger"}
-                  aria-current={isActive(it.href) ? "page" : undefined}
-                  onClick={closeMenu}
-                >
-                  {it.label}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </nav>
-      </div>
-
-      {/* Backdrop */}
-      <button
-        className={open ? "backdrop visible" : "backdrop"}
-        aria-hidden={!open}
-        tabIndex={-1}
-        onClick={closeMenu}
-      />
-    </header>
+      {/* Backdrop global porté au <body> (floute toute la page, pas le menu) */}
+      {hasDOM &&
+        createPortal(
+          <button
+            className={open ? "backdrop visible" : "backdrop"}
+            aria-hidden={!open}
+            tabIndex={-1}
+            onClick={closeMenu}
+          />,
+          document.body
+        )}
+    </>
   );
 }

@@ -1,14 +1,43 @@
 // ui/pages/monitoring/index.tsx
 import Head from "next/head";
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
-
-// ✅ Header / Footer globaux (stylés par /styles/header.css et /styles/footer.css)
-import GlobalHeader from "@/components/layout/GlobalHeader";
-import GlobalFooter from "@/components/layout/GlobalFooter";
+import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
+import KpiBar from "@/components/monitoring/KpiBar";
 
 export default function MonitoringIntroPage() {
   const generatedAt: string | null = null;
+
+  // ── LoadingBar logic (uniforme) ───────────────────────────────────────────
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        // (Futur) Appels API globaux si besoin
+        // await Promise.allSettled([ getSomething(), ... ])
+      } catch (e: any) {
+        if (alive) setError(String(e?.message ?? e));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // ── KPIs (remplace la grille par KpiBar) ──────────────────────────────────
+  const kpiItems = useMemo(() => ([
+    { label: "Network status", value: "OK" },
+    { label: "Data freshness", value: "≤ 5 min" },
+    { label: "Model version", value: "v1.8.2" },
+    { label: "Coverage (7d)", value: "99.2%" },
+  ]), []);
 
   return (
     <div className="monitoring">
@@ -20,21 +49,18 @@ export default function MonitoringIntroPage() {
         />
       </Head>
 
-      {/* Header global sticky */}
-      <GlobalHeader />
-
-      {/* Contenu principal monitoring */}
+      {/* Contenu principal monitoring (header/footer injectés par _app.tsx) */}
       <main
         className="page"
-        // évite que le header sticky recouvre le contenu
         style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}
       >
-        <MonitoringNav
-          title="Monitoring"
-          generatedAt={generatedAt}
-        />
+        <MonitoringNav title="Monitoring" generatedAt={generatedAt ?? undefined} />
 
-        {/* Hero status */}
+        {/* Loading / Error → LoadingBar uniforme */}
+        <LoadingBar status={barStatus} />
+        {error && <div className="banner banner--error mt-2">{error}</div>}
+
+        {/* Hero + KpiBar */}
         <section className="panel hero">
           <div className="hero__title">
             <h2>Welcome to Monitoring</h2>
@@ -43,28 +69,11 @@ export default function MonitoringIntroPage() {
             </p>
           </div>
 
-          <div className="kpi-grid">
-            <div className="kpi">
-              <div className="kpi__label">Network status</div>
-              <div className="kpi__value">OK</div>
-              <div className="kpi__hint">No incident reported</div>
-            </div>
-            <div className="kpi">
-              <div className="kpi__label">Data freshness</div>
-              <div className="kpi__value">≤ 5 min</div>
-              <div className="kpi__hint">Last pipeline tick</div>
-            </div>
-            <div className="kpi">
-              <div className="kpi__label">Model version</div>
-              <div className="kpi__value">v1.8.2</div>
-              <div className="kpi__hint">Active in production</div>
-            </div>
-            <div className="kpi">
-              <div className="kpi__label">Coverage (7d)</div>
-              <div className="kpi__value">99.2%</div>
-              <div className="kpi__hint">Valid station updates</div>
-            </div>
-          </div>
+          {/* ✅ KpiBar compacte, scroll desktop auto, mobile max 3 par ligne via CSS globale */}
+          <KpiBar items={kpiItems} dense />
+
+          {/* (meta optionnelle sous la barre) */}
+          <div className="kpi-bar-meta">Demo environment · values illustrative</div>
         </section>
 
         {/* Quick sections */}
@@ -169,9 +178,6 @@ export default function MonitoringIntroPage() {
           </div>
         </section>
       </main>
-
-      {/* Footer global */}
-      <GlobalFooter />
     </div>
   );
 }

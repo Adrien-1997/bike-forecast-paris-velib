@@ -60,10 +60,11 @@ def _json_safe_df(df: pd.DataFrame) -> list[dict]:
 def _serving_forecast_prefix() -> str:
     """
     Source de vérité pour le bundle latest_forecast.json.
-    1) ENV GCS_SERVING_PREFIX (si présent)
-    2) settings.SERVING_FORECAST_PREFIX (legacy)
+    Priorité :
+      1) ENV SERVING_FORECAST_PREFIX
+      2) settings.SERVING_FORECAST_PREFIX
     """
-    env_val = (os.environ.get("GCS_SERVING_PREFIX") or "").strip()
+    env_val = (os.environ.get("SERVING_FORECAST_PREFIX") or "").strip()
     if env_val:
         return env_val.rstrip("/")
     return (getattr(settings, "SERVING_FORECAST_PREFIX", "") or "").rstrip("/")
@@ -124,7 +125,7 @@ def list_stations():
 
     Priorité:
       1) snapshot live (GBFS) → plus frais
-      2) fallback bundle forecast JSON → minimal (id + capacité) si live indisponible
+      2) fallback bundle latest_forecast.json → minimal (id + capacité) si live indisponible
     """
     # 1) Source principale : live
     try:

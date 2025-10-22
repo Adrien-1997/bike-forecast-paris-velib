@@ -1,6 +1,6 @@
 // ui/pages/_app.tsx
 import type { AppProps } from "next/app";
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
 import "@/styles/globals.css";
@@ -23,6 +23,10 @@ import { Buffer } from "buffer";
 if (typeof window !== "undefined" && !(window as any).Buffer) {
   (window as any).Buffer = Buffer;
 }
+
+// ✅ Header & Footer communs (hors landing)
+import GlobalHeader from "@/components/layout/GlobalHeader";
+import GlobalFooter from "@/components/layout/GlobalFooter";
 
 export default function MyApp({ Component, pageProps }: AppProps) {
   const router = useRouter();
@@ -74,13 +78,40 @@ export default function MyApp({ Component, pageProps }: AppProps) {
     link.dataset.dynamicStyle = "true";
     document.head.appendChild(link);
 
-    // Ajout spécifique : mapview.css si contexte "app"
+    // ➕ MonitoringNav + KpiBar + LoadingBar CSS (uniquement en contexte monitoring)
+    if (ctx === "monitoring") {
+      const mnLink = document.createElement("link");
+      mnLink.rel = "stylesheet";
+      mnLink.href = `/css/monitoringnav.css`;
+      mnLink.dataset.dynamicStyle = "true";
+      document.head.appendChild(mnLink);
+
+      const kpiBarLink = document.createElement("link");
+      kpiBarLink.rel = "stylesheet";
+      kpiBarLink.href = `/css/kpibar.css`;
+      kpiBarLink.dataset.dynamicStyle = "true";
+      document.head.appendChild(kpiBarLink);
+
+      const lbLink = document.createElement("link");
+      lbLink.rel = "stylesheet";
+      lbLink.href = `/css/loadingbar.css`;
+      lbLink.dataset.dynamicStyle = "true";
+      document.head.appendChild(lbLink);
+    }
+
+    // ➕ Map view + LoadingBar CSS si contexte "app"
     if (ctx === "app") {
       const mapLink = document.createElement("link");
       mapLink.rel = "stylesheet";
       mapLink.href = `/css/mapview.css`;
       mapLink.dataset.dynamicStyle = "true";
       document.head.appendChild(mapLink);
+
+      const lbLink = document.createElement("link");
+      lbLink.rel = "stylesheet";
+      lbLink.href = `/css/loadingbar.css`;
+      lbLink.dataset.dynamicStyle = "true";
+      document.head.appendChild(lbLink);
     }
 
     return () => {
@@ -89,6 +120,16 @@ export default function MyApp({ Component, pageProps }: AppProps) {
         .forEach((el) => el.remove());
     };
   }, [ctx]);
+
+  // ✅ items du header commun (toutes pages ≠ landing)
+  const sharedHeaderItems = useMemo(
+    () => [
+      { label: "Accueil", href: "/" },
+      { label: "Carte", href: "/app" },
+      { label: "Monitoring", href: "/monitoring" },
+    ],
+    []
+  );
 
   return (
     <>
@@ -110,7 +151,15 @@ export default function MyApp({ Component, pageProps }: AppProps) {
       <div className={ctx}>
         {/* halo décoratif global */}
         <div className="fx--page" aria-hidden="true" />
+
+        {/* Header commun à toutes les pages sauf la landing */}
+        {ctx !== "landing" && <GlobalHeader items={sharedHeaderItems} />}
+
+        {/* Contenu principal */}
         <Component {...pageProps} />
+
+        {/* Footer commun à toutes les pages sauf la landing */}
+        {ctx !== "landing" && <GlobalFooter />}
       </div>
     </>
   );

@@ -5,81 +5,52 @@ import dynamic from "next/dynamic";
 import type { ScatterData } from "plotly.js";
 import type * as Plotly from "plotly.js";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
-import GlobalHeader from "@/components/layout/GlobalHeader";
-import GlobalFooter from "@/components/layout/GlobalFooter";
+import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
+import KpiBar from "@/components/monitoring/KpiBar"; // ✅ NEW
 
-/* ───────────────────────── Plotly (client only) ───────────────────────── */
+import {
+  getExplainOverview,
+  getExplainResiduals,
+  getExplainCalibration,
+  getExplainUncertainty,
+  type Overview,
+  type ResidualsDoc,
+  type CalibrationDoc,
+  type UncertaintyDoc,
+} from "@/lib/services/monitoring/model_explainability";
+
+/* client-only Plotly */
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ssr: false,
   loading: () => <div className="empty">Chargement du graphique…</div>,
 });
 
-/* ───────────────────────── Helpers ───────────────────────── */
-async function getJSON<T = unknown>(path: string): Promise<T> {
-  const base =
-    (typeof window !== "undefined" ? (window as any).NEXT_PUBLIC_API_BASE : undefined) ||
-    process.env.NEXT_PUBLIC_API_BASE ||
-    "";
-  const url = base ? new URL(path, base).toString() : path;
-
-  const res = await fetch(url, { headers: { accept: "application/json" }, cache: "no-store" });
-  const ct = res.headers.get("content-type") || "";
-  if (!res.ok) {
-    const hint = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status} on ${url} — ${hint.slice(0, 200)}`);
-  }
-  if (!ct.includes("application/json")) {
-    const peek = await res.text().catch(() => "");
-    throw new Error(`Non-JSON response from ${url}: ${peek.slice(0, 160)}`);
-  }
-  return (await res.json()) as T;
+/* Helpers */
+function ok<T>(r: PromiseSettledResult<T>): T | null {
+  return r.status === "fulfilled" ? r.value : null;
 }
-function ok<T>(r: PromiseSettledResult<T>): T | null { return r.status === "fulfilled" ? r.value : null; }
 const fmtNum = (x?: number | null, d = 2) => (Number.isFinite(Number(x)) ? Number(x).toFixed(d) : "—");
 const fmtInt = (x?: number | null) => (Number.isFinite(Number(x)) ? Number(x).toLocaleString("fr-FR") : "—");
-const fmtPct = (x?: number | null, d = 1) => (Number.isFinite(Number(x)) ? `${(Number(x) * 100).toFixed(d)}%` : "—");
+const fmtYesNo = (b?: any) => (b ? "Oui" : "Non");
+const fmtDate = (s?: string | null) => (s ? s : "—");
 /** Avoids call stack blow-ups from Math.min/max(...bigArray) */
 function safeMinMax(arrs: number[][]): { min: number; max: number } {
-  let min = Number.POSITIVE_INFINITY, max = Number.NEGATIVE_INFINITY;
-  for (const arr of arrs) for (let i = 0; i < arr.length; i++) {
-    const v = arr[i]; if (Number.isFinite(v)) { if (v < min) min = v; if (v > max) max = v; }
-  }
+  let min = Number.POSITIVE_INFINITY,
+    max = Number.NEGATIVE_INFINITY;
+  for (const arr of arrs)
+    for (let i = 0; i < arr.length; i++) {
+      const v = arr[i];
+      if (Number.isFinite(v)) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
   if (!Number.isFinite(min)) min = 0;
   if (!Number.isFinite(max)) max = 0;
   return { min, max };
 }
 
-/* ───────────────────────── Types (API Explainability) ───────────────────────── */
-type Overview = {
-  schema_version: string; generated_at: string; tz: string;
-  anchor_day_perf: string | null; perf_rows: number; perf_stations: number;
-  ts_min_perf: string | null; ts_max_perf: string | null;
-  has_y_pred: boolean; has_uncertainty: boolean;
-};
-type ResidHistBin = { bin_left: number; bin_right: number; count: number };
-type ResidualsDoc = {
-  schema_version: string; generated_at: string;
-  hist: ResidHistBin[];
-  qq: { th: number[]; emp: number[] };
-  acf: number[];
-  hetero: Array<{ quantile: string; mae: number; n: number }>;
-  episodes: Array<{ station_id: string; max_run: number; n: number }>;
-};
-type CalibrationDoc = {
-  schema_version: string; generated_at: string;
-  fit: { alpha: number | null; beta: number | null; n: number };
-  binned: Array<{ quantile: string; y_pred_mean: number; y_true_mean: number; n: number }>;
-  by_hour: Array<{ hour: number; alpha: number | null; beta: number | null; n: number }>;
-  rel_error_levels: Array<{ level: string; mape_like: number; n: number }>;
-  bias_by_station: Array<{ station_id: string; name: string | null; bias: number | null; lat: number | null; lon: number | null; n: number }>;
-};
-type UncertaintyDoc = {
-  schema_version: string; generated_at: string;
-  coverage: { empirical: number; n: number } | null;
-  method?: string; nominal?: number;
-};
-
-/* ───────────────────────── Page ───────────────────────── */
+/* Page */
 export default function ModelExplainabilityPage() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [residuals, setResiduals] = useState<ResidualsDoc | null>(null);
@@ -95,10 +66,10 @@ export default function ModelExplainabilityPage() {
       try {
         setLoading(true);
         const res = await Promise.allSettled([
-          getJSON<Overview>("/monitoring/model/explainability/overview"),
-          getJSON<ResidualsDoc>("/monitoring/model/explainability/residuals"),
-          getJSON<CalibrationDoc>("/monitoring/model/explainability/calibration"),
-          getJSON<UncertaintyDoc>("/monitoring/model/explainability/uncertainty"),
+          getExplainOverview(),
+          getExplainResiduals(),
+          getExplainCalibration(),
+          getExplainUncertainty(),
         ]);
         if (!alive) return;
         setOverview(ok(res[0]));
@@ -112,13 +83,38 @@ export default function ModelExplainabilityPage() {
         if (alive) setLoading(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const generatedAt =
     overview?.generated_at || residuals?.generated_at || calib?.generated_at || unc?.generated_at || undefined;
 
-  /* ───────────────────────── Charts ───────────────────────── */
+  // ✅ barre de chargement uniforme
+  const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
+
+  /* ---------------- KPI BAR (dense + scroll) ---------------- */
+  const kpiItems = useMemo(
+    () => [
+      { label: "Stations (perf)", value: fmtInt(overview?.perf_stations) },
+      { label: "Lignes (n)", value: fmtInt(overview?.perf_rows) },
+      { label: "Prédictions", value: fmtYesNo(overview?.has_y_pred) },
+      { label: "Incertitude", value: fmtYesNo(overview?.has_uncertainty) },
+      { label: "β global", value: calib?.fit?.beta ?? null, fmt: (v: any) => (Number.isFinite(Number(v)) ? Number(v).toFixed(3) : "—") },
+      { label: "α global", value: calib?.fit?.alpha ?? null, fmt: (v: any) => (Number.isFinite(Number(v)) ? Number(v).toFixed(3) : "—") },
+    ],
+    [overview, calib]
+  );
+
+  const metaParts: string[] = [];
+  if (overview?.schema_version != null) metaParts.push(`Schema v${overview.schema_version}`);
+  if (overview?.ts_min_perf || overview?.ts_max_perf)
+    metaParts.push(`Intervalle: ${fmtDate(overview?.ts_min_perf)} → ${fmtDate(overview?.ts_max_perf)} (UTC)`);
+  if (generatedAt) metaParts.push(`generated ${generatedAt}`);
+  const metaLine = metaParts.join(" · ");
+
+  /* ---------------- Charts ---------------- */
   const histData: Partial<Plotly.PlotData>[] = useMemo(() => {
     const bins = residuals?.hist ?? [];
     if (!bins.length) return [];
@@ -147,7 +143,7 @@ export default function ModelExplainabilityPage() {
   const heteroData: Partial<Plotly.PlotData>[] = useMemo(() => {
     const rows = residuals?.hetero ?? [];
     if (!rows.length) return [];
-    return [{ x: rows.map(r => r.quantile), y: rows.map(r => r.mae), type: "bar" as const, name: "MAE" }];
+    return [{ x: rows.map((r) => r.quantile), y: rows.map((r) => r.mae), type: "bar" as const, name: "MAE" }];
   }, [residuals]);
 
   const calibBinning = useMemo<Partial<ScatterData>[]>(() => {
@@ -164,17 +160,21 @@ export default function ModelExplainabilityPage() {
   const betaByHour = useMemo<Partial<ScatterData>[]>(() => {
     const rows = calib?.by_hour ?? [];
     if (!rows.length) return [];
-    return [{
-      x: rows.map(r => r.hour),
-      y: rows.map(r => (Number.isFinite(Number(r.beta)) ? Number(r.beta) : null)),
-      type: "scatter", mode: "lines+markers", name: "β (pente) vs heure",
-    }];
+    return [
+      {
+        x: rows.map((r) => r.hour),
+        y: rows.map((r) => (Number.isFinite(Number(r.beta)) ? Number(r.beta) : null)),
+        type: "scatter",
+        mode: "lines+markers",
+        name: "β (pente) vs heure",
+      },
+    ];
   }, [calib]);
 
   const relErrBars: Partial<Plotly.PlotData>[] = useMemo(() => {
     const rows = calib?.rel_error_levels ?? [];
     if (!rows.length) return [];
-    return [{ x: rows.map(r => r.level), y: rows.map(r => r.mape_like * 100), type: "bar" as const, name: "MAPE-like (%)" }];
+    return [{ x: rows.map((r) => r.level), y: rows.map((r) => r.mape_like * 100), type: "bar" as const, name: "MAPE-like (%)" }];
   }, [calib]);
 
   const stationBias = useMemo(() => {
@@ -185,7 +185,7 @@ export default function ModelExplainabilityPage() {
     return { tops: sorted.slice(0, 20), bots: sorted.slice(-20).reverse() };
   }, [calib]);
 
-  /* ───────────────────────── Render ───────────────────────── */
+  /* Render */
   return (
     <div className="monitoring">
       <Head>
@@ -193,46 +193,25 @@ export default function ModelExplainabilityPage() {
         <meta name="description" content="Résidus, QQ, ACF, hétéroscédasticité, calibration et incertitude." />
       </Head>
 
-      {/* Header global sticky */}
-      <GlobalHeader />
-
-      {/* Contenu principal */}
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
           title="Model — Explainability"
           subtitle="Résidus, QQ, ACF, hétéroscédasticité, calibration & incertitude"
           generatedAt={generatedAt}
-          extraActions={[
-            { label: "Performance", href: "/monitoring/model/performance" },
-          ]}
+          extraActions={[{ label: "Performance", href: "/monitoring/model/performance" }]}
         />
 
-        {/* Status */}
-        {loading && <div className="banner">Chargement…</div>}
-        {error && <div className="banner banner--error">{error}</div>}
+        <LoadingBar status={barStatus} />
 
-        {/* KPIs */}
+        {/* ✅ KpiBar (dense + scroll) + meta sous la barre */}
         <section className="mt-4">
-          <h2>Résumé</h2>
-          <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(6, minmax(0, 1fr))" as any }}>
-            <Kpi label="Stations" value={overview?.perf_stations} fmt={fmtInt as any} />
-            <Kpi label="Lignes (n)" value={overview?.perf_rows} fmt={fmtInt as any} />
-            <Kpi label="Prédictions" value={overview?.has_y_pred ? 1 : 0} fmt={(v) => (v ? "oui" : "non")} />
-            <Kpi label="Incertitude" value={overview?.has_uncertainty ? 1 : 0} fmt={(v) => (v ? "oui" : "non")} />
-            <Kpi label="UTC min" value={overview?.ts_min_perf ? 1 : 0} fmt={() => overview?.ts_min_perf ?? "—"} />
-            <Kpi label="UTC max" value={overview?.ts_max_perf ? 1 : 0} fmt={() => overview?.ts_max_perf ?? "—"} />
-          </div>
-          {overview && (
-            <div className="small mt-2">
-              Schema v{overview.schema_version} · Intervalle: {overview.ts_min_perf ?? "—"} → {overview.ts_max_perf ?? "—"} (UTC)
-            </div>
-          )}
+          <KpiBar items={kpiItems} dense />
+          {metaLine && <div className="kpi-bar-meta">{metaLine}</div>}
         </section>
 
         {/* Résidus */}
         <section className="mt-6">
           <h2>Résidus</h2>
-
           <div className="grid-2">
             <div className="card">
               <h3>Histogramme</h3>
@@ -240,16 +219,20 @@ export default function ModelExplainabilityPage() {
                 <Plot
                   data={histData as Plotly.Data[]}
                   layout={{
-                    autosize: true, height: 320,
+                    autosize: true,
+                    height: 320,
                     margin: { l: 54, r: 10, t: 10, b: 40 },
                     xaxis: { title: { text: "Erreur (y_true - y_pred)" } },
                     yaxis: { title: { text: "Comptes" } },
-                    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+                    paper_bgcolor: "rgba(0,0,0,0)",
+                    plot_bgcolor: "rgba(0,0,0,0)",
                   }}
                   config={{ displayModeBar: false, responsive: true }}
                   className="plot plot--sm"
                 />
-              ) : <div className="empty">—</div>}
+              ) : (
+                <div className="empty">—</div>
+              )}
             </div>
 
             <div className="card">
@@ -258,17 +241,21 @@ export default function ModelExplainabilityPage() {
                 <Plot
                   data={qqData as Plotly.Data[]}
                   layout={{
-                    autosize: true, height: 320,
+                    autosize: true,
+                    height: 320,
                     margin: { l: 54, r: 10, t: 10, b: 40 },
                     xaxis: { title: { text: "Théorique" } },
                     yaxis: { title: { text: "Empirique" } },
                     hovermode: "closest",
-                    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+                    paper_bgcolor: "rgba(0,0,0,0)",
+                    plot_bgcolor: "rgba(0,0,0,0)",
                   }}
                   config={{ displayModeBar: false, responsive: true }}
                   className="plot plot--sm"
                 />
-              ) : <div className="empty">—</div>}
+              ) : (
+                <div className="empty">—</div>
+              )}
             </div>
           </div>
 
@@ -279,16 +266,20 @@ export default function ModelExplainabilityPage() {
                 <Plot
                   data={acfData as Plotly.Data[]}
                   layout={{
-                    autosize: true, height: 320,
+                    autosize: true,
+                    height: 320,
                     margin: { l: 54, r: 10, t: 10, b: 40 },
                     xaxis: { title: { text: "Lag (5 min)" } },
                     yaxis: { title: { text: "Corrélation" } },
-                    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+                    paper_bgcolor: "rgba(0,0,0,0)",
+                    plot_bgcolor: "rgba(0,0,0,0)",
                   }}
                   config={{ displayModeBar: false, responsive: true }}
                   className="plot plot--sm"
                 />
-              ) : <div className="empty">—</div>}
+              ) : (
+                <div className="empty">—</div>
+              )}
             </div>
 
             <div className="card">
@@ -297,16 +288,20 @@ export default function ModelExplainabilityPage() {
                 <Plot
                   data={heteroData as Plotly.Data[]}
                   layout={{
-                    autosize: true, height: 320,
+                    autosize: true,
+                    height: 320,
                     margin: { l: 54, r: 10, t: 10, b: 80 },
                     xaxis: { title: { text: "Quantiles(y_true)" }, tickangle: -30 },
                     yaxis: { title: { text: "MAE" } },
-                    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+                    paper_bgcolor: "rgba(0,0,0,0)",
+                    plot_bgcolor: "rgba(0,0,0,0)",
                   }}
                   config={{ displayModeBar: false, responsive: true }}
                   className="plot plot--sm"
                 />
-              ) : <div className="empty">—</div>}
+              ) : (
+                <div className="empty">—</div>
+              )}
             </div>
           </div>
 
@@ -320,14 +315,12 @@ export default function ModelExplainabilityPage() {
                       <div style={{ whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden" }}>
                         <b>{r.station_id}</b> <span className="muted">· n={fmtInt(r.n)}</span>
                       </div>
-                      <div className="small muted">max run:&nbsp;<b>{fmtInt(r.max_run)}</b></div>
+                      <div className="small muted">
+                        max run:&nbsp;<b>{fmtInt(r.max_run)}</b>
+                      </div>
                       <div style={{ flex: 1 }}>
                         <div className="bar">
-                          <div
-                            className="bar__fill"
-                            style={{ width: `${Math.min(100, Number(r.max_run) * 4)}%` }}
-                            aria-hidden
-                          />
+                          <div className="bar__fill" style={{ width: `${Math.min(100, Number(r.max_run) * 4)}%` }} aria-hidden />
                         </div>
                       </div>
                     </div>
@@ -351,16 +344,20 @@ export default function ModelExplainabilityPage() {
                 <Plot
                   data={calibBinning as Plotly.Data[]}
                   layout={{
-                    autosize: true, height: 320,
+                    autosize: true,
+                    height: 320,
                     margin: { l: 54, r: 10, t: 10, b: 40 },
                     xaxis: { title: { text: "E[y_pred]" } },
                     yaxis: { title: { text: "E[y_true]" } },
-                    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+                    paper_bgcolor: "rgba(0,0,0,0)",
+                    plot_bgcolor: "rgba(0,0,0,0)",
                   }}
                   config={{ displayModeBar: false, responsive: true }}
                   className="plot plot--sm"
                 />
-              ) : <div className="empty">—</div>}
+              ) : (
+                <div className="empty">—</div>
+              )}
               {calib?.fit && (
                 <div className="small mt-2">
                   Fit global: y ≈ α + β·ŷ — α={fmtNum(calib.fit.alpha, 3)}, β={fmtNum(calib.fit.beta, 3)} · n={fmtInt(calib.fit.n)}
@@ -374,17 +371,21 @@ export default function ModelExplainabilityPage() {
                 <Plot
                   data={betaByHour as Plotly.Data[]}
                   layout={{
-                    autosize: true, height: 320,
+                    autosize: true,
+                    height: 320,
                     margin: { l: 54, r: 10, t: 10, b: 36 },
                     xaxis: { title: { text: "Heure" } },
                     yaxis: { title: { text: "β" } },
                     hovermode: "x unified",
-                    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+                    paper_bgcolor: "rgba(0,0,0,0)",
+                    plot_bgcolor: "rgba(0,0,0,0)",
                   }}
                   config={{ displayModeBar: false, responsive: true }}
                   className="plot plot--sm"
                 />
-              ) : <div className="empty">—</div>}
+              ) : (
+                <div className="empty">—</div>
+              )}
             </div>
           </div>
 
@@ -395,16 +396,20 @@ export default function ModelExplainabilityPage() {
                 <Plot
                   data={relErrBars as Plotly.Data[]}
                   layout={{
-                    autosize: true, height: 320,
+                    autosize: true,
+                    height: 320,
                     margin: { l: 54, r: 10, t: 10, b: 36 },
                     xaxis: { title: { text: "Niveau (quantiles y_true)" } },
                     yaxis: { title: { text: "MAPE-like (%)" } },
-                    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+                    paper_bgcolor: "rgba(0,0,0,0)",
+                    plot_bgcolor: "rgba(0,0,0,0)",
                   }}
                   config={{ displayModeBar: false, responsive: true }}
                   className="plot plot--sm"
                 />
-              ) : <div className="empty">—</div>}
+              ) : (
+                <div className="empty">—</div>
+              )}
             </div>
 
             <div className="card">
@@ -444,7 +449,6 @@ export default function ModelExplainabilityPage() {
               )}
               <div className="small mt-2">Tri sur |biais|, filtre n ≥ 30 pour réduire le bruit.</div>
             </div>
-
           </div>
         </section>
 
@@ -454,11 +458,18 @@ export default function ModelExplainabilityPage() {
           <div className="card">
             {unc?.coverage ? (
               <div className="row">
-                <Kpi label="Coverage empirique" value={unc.coverage.empirical} fmt={(v)=>fmtPct(v,1)} />
-                <Kpi label="Échantillon" value={unc.coverage.n} fmt={fmtInt as any} />
+                {/* petits KPI inline — on garde ce pattern local */}
+                <div className="kpi">
+                  <div className="kpi__label">Coverage empirique</div>
+                  <div className="kpi__value">{Number.isFinite(Number(unc.coverage.empirical)) ? `${(Number(unc.coverage.empirical) * 100).toFixed(1)}%` : "—"}</div>
+                </div>
+                <div className="kpi">
+                  <div className="kpi__label">Échantillon</div>
+                  <div className="kpi__value">{fmtInt(unc.coverage.n)}</div>
+                </div>
                 {(unc.method || Number.isFinite(Number(unc.nominal))) && (
                   <div className="small muted">
-                    {unc.method ? `Méthode: ${unc.method}` : ""}{Number.isFinite(Number(unc.nominal)) ? ` · nominal=${fmtPct(Number(unc.nominal), 0)}` : ""}
+                    {unc.method ? `Méthode: ${unc.method}` : ""}{Number.isFinite(Number(unc.nominal)) ? ` · nominal=${(Number(unc.nominal) * 100).toFixed(0)}%` : ""}
                   </div>
                 )}
                 <div className="small muted">
@@ -473,22 +484,6 @@ export default function ModelExplainabilityPage() {
 
         <div className="mt-6" />
       </main>
-
-      {/* Footer global */}
-      <GlobalFooter />
-    </div>
-  );
-}
-
-/* ───────────────────────── UI atoms (compat monitoring.css) ───────────────────────── */
-function Kpi({
-  label, value, fmt,
-}: { label: string; value: number | null | undefined; fmt?: (v: number | null | undefined) => string }) {
-  const text = fmt ? fmt(value) : Number.isFinite(Number(value)) ? String(value) : "—";
-  return (
-    <div className="kpi">
-      <div className="kpi__label">{label}</div>
-      <div className="kpi__value">{text}</div>
     </div>
   );
 }

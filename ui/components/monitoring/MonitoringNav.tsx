@@ -1,7 +1,6 @@
-// ui/components/monitoring/MonitoringNav.tsx
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useState } from "react";
+import { useMemo } from "react";
 
 type Action = { label: string; href: string };
 type Group = { label: string; items: Action[] };
@@ -50,61 +49,54 @@ export default function MonitoringNav({
   extraActions?: Action[];
 }) {
   const { pathname } = useRouter();
-  const [openGroup, setOpenGroup] = useState<string | null>(null);
 
-  const handleEnter = (label: string) => setOpenGroup(label);
-  const handleLeave = () => setOpenGroup(null);
+  const genInfo = useMemo(() => {
+    if (!generatedAt) return null;
+    const ts = new Date(generatedAt).getTime();
+    if (Number.isNaN(ts)) return null;
+    const ageMs = Date.now() - ts;
+    const fresh = ageMs <= 24 * 60 * 60 * 1000;
+    const label = new Date(ts).toLocaleString("fr-FR");
+    return { label, fresh };
+  }, [generatedAt]);
 
   return (
     <header className="mn-header">
-      {/* ───────────── Title & generated time ───────────── */}
+      {/* ───────────── Title bar ───────────── */}
       <div className="mn-titlebar">
         <div className="title">
           <h1>{title}</h1>
           {subtitle && <span className="meta">{subtitle}</span>}
-        </div>
-        {generatedAt && (
-          <div className="mn-meta">
-            <span className="generated-at">
-              <span className="dot" aria-hidden="true"></span>
-              Généré : {new Date(generatedAt).toLocaleString("fr-FR")}
+          {genInfo && (
+            <span className="mn-meta inline">
+              <span
+                className={`dot ${genInfo.fresh ? "dot--ok" : "dot--stale"}`}
+                aria-hidden="true"
+              />
+              Généré : {genInfo.label}
             </span>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* ───────────── Toolbar ───────────── */}
-      <div
-        className="toolbar-wrap"
-        role="menubar"
-        aria-label="Monitoring sections"
-      >
+      <div className="toolbar-wrap" role="menubar" aria-label="Monitoring sections">
         <div className="groups">
           {GROUPS.map((group) => {
             const groupActive = isGroupActive(pathname, group);
-            const isOpen = openGroup === group.label;
-
             return (
               <div
                 key={group.label}
-                className={`nav-group ${groupActive ? "active" : ""} ${
-                  isOpen ? "open" : ""
-                }`}
-                role="menuitem"
-                tabIndex={0}
-                aria-haspopup="true"
-                aria-expanded={isOpen || groupActive ? true : undefined}
-                onMouseEnter={() => handleEnter(group.label)}
-                onMouseLeave={handleLeave}
+                className={`nav-group ${groupActive ? "active" : ""}`}
+                role="none"
               >
                 <button
                   type="button"
-                  className={
-                    groupActive
-                      ? "btn btn--primary nav-trigger"
-                      : "btn btn--ghost nav-trigger"
-                  }
+                  className={groupActive ? "btn btn--primary nav-trigger" : "btn btn--ghost nav-trigger"}
                   aria-controls={`dropdown-${group.label}`}
+                  aria-haspopup="true"
+                  aria-expanded={undefined} // ouverture gérée par CSS (pas de persistance)
+                  onMouseDown={(e) => e.preventDefault()} // ❗ empêche le focus “collant” au clic
                 >
                   {group.label}
                 </button>
@@ -121,13 +113,8 @@ export default function MonitoringNav({
                       <Link
                         key={item.href}
                         href={item.href}
-                        className={
-                          active
-                            ? "dropdown-item active"
-                            : "dropdown-item"
-                        }
+                        className={active ? "dropdown-item active" : "dropdown-item"}
                         aria-current={active ? "page" : undefined}
-                        onClick={() => setOpenGroup(null)}
                       >
                         {item.label}
                       </Link>
@@ -139,7 +126,7 @@ export default function MonitoringNav({
           })}
         </div>
 
-        {/* ───────────── Extra actions (restaurées) ───────────── */}
+        {/* Extra actions (sans persistance au clic) */}
         {extraActions.length > 0 && (
           <div className="extras">
             {extraActions.map((a) => {
@@ -148,11 +135,9 @@ export default function MonitoringNav({
                 <Link
                   key={a.href}
                   href={a.href}
-                  className={
-                    active ? "btn btn--primary" : "btn btn--ghost"
-                  }
+                  className={active ? "btn btn--primary" : "btn btn--ghost"}
                   aria-current={active ? "page" : undefined}
-                  style={{ textDecoration: "none", fontWeight: 600 }}
+                  onMouseDown={(e) => e.preventDefault()} // idem : pas de focus sticky
                 >
                   {a.label}
                 </Link>

@@ -3,12 +3,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Head from "next/head";
 import dynamic from "next/dynamic";
 
-// Layout
-import GlobalHeader from "@/components/layout/GlobalHeader";
-import GlobalFooter from "@/components/layout/GlobalFooter";
-
 // UI
 import BadgesBar from "@/components/app/Badges";
+import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
 
 // Data
 import { computeBadges } from "@/lib/services/badges";
@@ -40,7 +37,7 @@ const keyFor = (obj: any): string | null => {
   return null;
 };
 
-// accepte soit un array direct, soit le bundle {generated_at, horizons, data: {"15":[...]} }
+// accepte soit un array direct, soit le bundle {generated_at, horizons, data: {"15":[...]}}
 function normalizeForecastRows(payload: any, horizon = 15): any[] {
   if (Array.isArray(payload)) return payload;
   if (payload && payload.data) {
@@ -76,7 +73,7 @@ const ageMinutes = (iso?: string | null): number | null => {
 // util: renvoie la valeur “la plus récente” d’un champ parmi les rows
 const latestIso = (rows: any[], keyA: string, keyB?: string): string | null => {
   const vals = rows
-    .map(r => (r?.[keyA] ?? (keyB ? r?.[keyB] : null)) as string | null)
+    .map((r) => (r?.[keyA] ?? (keyB ? r?.[keyB] : null)) as string | null)
     .filter(Boolean) as string[];
   if (!vals.length) return null;
   vals.sort(
@@ -100,10 +97,18 @@ export default function AppHomePage() {
   const mapRef = useRef<LeafletMap | null>(null);
   const H = 15;
 
+  // Loading / Error pour la LoadingBar
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
+
   useEffect(() => {
     let alive = true;
     const loadOnce = async () => {
       try {
+        setLoading(true);
+        setError(null);
+
         const weather = await getWeather();
         if (!alive) return;
 
@@ -112,7 +117,7 @@ export default function AppHomePage() {
         setStations(st ?? []);
 
         const keys = Array.from(
-          new Set((st ?? []).map(s => keyFor(s as any)).filter(Boolean) as string[])
+          new Set((st ?? []).map((s) => keyFor(s as any)).filter(Boolean) as string[])
         );
         const raw = keys.length ? await getForecastBatch(keys, H) : [];
         if (!alive) return;
@@ -139,8 +144,11 @@ export default function AppHomePage() {
             freshness_min: ageMin ?? null,
           },
         });
-      } catch (err) {
+      } catch (err: any) {
         console.error("[loadOnce]", err);
+        if (alive) setError(String(err?.message ?? err));
+      } finally {
+        if (alive) setLoading(false);
       }
     };
 
@@ -152,11 +160,11 @@ export default function AppHomePage() {
     };
   }, []);
 
-  // geoloc + recadrage 1x
+  // geoloc + recentrage 1x
   useEffect(() => {
     if (typeof navigator !== "undefined" && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        pos => {
+        (pos) => {
           const p: [number, number] = [pos.coords.latitude, pos.coords.longitude];
           setUserPos(p);
           if (!userCenteredOnce.current) {
@@ -165,7 +173,7 @@ export default function AppHomePage() {
             mapRef.current?.setView?.(p, 14);
           }
         },
-        err => console.warn("[geoloc]", err),
+        (err) => console.warn("[geoloc]", err),
         { enableHighAccuracy: true, timeout: 8000, maximumAge: 15000 }
       );
     }
@@ -174,7 +182,7 @@ export default function AppHomePage() {
   const stationsWithGeo = useMemo(
     () =>
       stations.filter(
-        s =>
+        (s) =>
           typeof (s as any).lat === "number" &&
           Number.isFinite((s as any).lat) &&
           typeof (s as any).lon === "number" &&
@@ -185,7 +193,7 @@ export default function AppHomePage() {
 
   const forecastByKey = useMemo(() => {
     const m = new Map<string, any>();
-    (forecast as any[]).forEach(f => {
+    (forecast as any[]).forEach((f) => {
       const id = f?.station_id;
       if (id != null && String(id).trim() !== "") m.set(String(id), f);
     });
@@ -234,17 +242,10 @@ export default function AppHomePage() {
         const d = haversine(Number(s.lat), Number(s.lon), user[0], user[1]);
         return { ...s, pred, distance: d };
       })
-      .filter(s => s.pred >= 2)
+      .filter((s) => s.pred >= 2)
       .sort((a, b) => a.distance - b.distance)
       .slice(0, 10);
   }, [stationsWithGeo, forecast, forecastByKey, userPos, center]);
-
-  // items du header (adaptés à l'app)
-  const headerItems = [
-    { label: "Carte", href: "/app" },
-    { label: "Monitoring", href: "/monitoring" },
-    { label: "Accueil", href: "/" },
-  ];
 
   return (
     <>
@@ -253,81 +254,75 @@ export default function AppHomePage() {
         <meta name="description" content="Disponibilités temps réel et prévisions courtes." />
       </Head>
 
-      {/* Header global */}
-      <GlobalHeader items={headerItems} brandHref="/" />
+      {/* Contenu principal (le header/footer sont injectés par _app.tsx) */}
+      <main className="main app-main" style={{ display: "flex", gap: "16px", padding: "16px" }}>
+        {/* ✅ Carte directement, SANS conteneur intermédiaire */}
+        <MapView
+          stations={stationsWithGeo as Station[]}
+          forecast={forecast as Forecast[]}
+          mode="t15"
+          center={center}
+          userPos={userPos}
+          setMapInstance={(m: LeafletMap) => {
+            mapRef.current = m;
+          }}
+        />
 
-      {/* Contenu */}
-      <div className="container" style={{ paddingTop: "16px" }}>
+        {/* Panneau latéral */}
+        <aside className="panel side-panel">
+          <div className="badges" style={{ marginBottom: 8 }}>
+            {badges ? <BadgesBar data={badges} /> : <LoadingBar status={barStatus} />}
+            {error && (
+              <div className="small" style={{ color: "#ef4444", marginTop: 6 }}>
+                {error}
+              </div>
+            )}
+          </div>
 
-        <main className="main">
-          <div className="panel map-card">
-            <div className="map-fill">
-              <MapView
-                stations={stationsWithGeo as Station[]}
-                forecast={forecast as Forecast[]}
-                mode="t15"
-                center={center}
-                userPos={userPos}
-                setMapInstance={(m: LeafletMap) => {
-                  mapRef.current = m;
-                }}
-              />
+          <div className="kpi">
+            <div className="card">
+              <div className="small">Stations</div>
+              <div className="val">{kpis.total.toLocaleString()}</div>
+            </div>
+            <div className="card">
+              <div className="small">Vélos actuels</div>
+              <div className="val">{kpis.bikes.toLocaleString()}</div>
+            </div>
+            <div className="card">
+              <div className="small">Vélos prévus</div>
+              <div className="val">{kpis.predBikes.toLocaleString()}</div>
             </div>
           </div>
 
-          <aside className="panel side-panel">
-            <div className="badges" style={{ marginBottom: 8 }}>
-              {badges ? <BadgesBar data={badges} /> : <div className="small">Chargement…</div>}
-            </div>
+          <h3 style={{ margin: "20px 0 10px", fontSize: "1rem" }}>
+            Stations proches · prévision {forecastHourParis}
+          </h3>
 
-            <div className="kpi">
-              <div className="card">
-                <div className="small">Stations</div>
-                <div className="val">{kpis.total.toLocaleString()}</div>
-              </div>
-              <div className="card">
-                <div className="small">Vélos actuels</div>
-                <div className="val">{kpis.bikes.toLocaleString()}</div>
-              </div>
-              <div className="card">
-                <div className="small">Vélos prévus</div>
-                <div className="val">{kpis.predBikes.toLocaleString()}</div>
-              </div>
-            </div>
-
-            <h3 style={{ margin: "20px 0 10px", fontSize: "1rem" }}>
-              Stations proches · prévision {forecastHourParis}
-            </h3>
-
-            <div className="list">
-              {nearby.map((s: any) => (
-                <div
-                  key={String(s.station_id)}
-                  className="row"
-                  style={{ background: "rgba(255,255,255,0.03)", marginBottom: 6, padding: 8 }}
-                >
-                  <div>
-                    <div style={{ fontWeight: 700 }}>{s.name ?? s.station_id}</div>
-                    <div className="small">#{String(s.station_id)}</div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div className="small">{forecastHourParis}</div>
-                    <div style={{ fontWeight: 700, fontSize: "1.1rem" }}>
-                      {getPred(forecastByKey.get(String(s.station_id)))}
-                    </div>
+          <div className="list">
+            {nearby.map((s: any) => (
+              <div
+                key={String(s.station_id)}
+                className="row"
+                style={{ background: "rgba(255,255,255,0.03)", marginBottom: 6, padding: 8 }}
+              >
+                <div>
+                  <div style={{ fontWeight: 700 }}>{s.name ?? s.station_id}</div>
+                  <div className="small">#{String(s.station_id)}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div className="small">{forecastHourParis}</div>
+                  <div style={{ fontWeight: 700, fontSize: "1.1rem" }}>
+                    {getPred(forecastByKey.get(String(s.station_id)))}
                   </div>
                 </div>
-              ))}
-              {!nearby.length && (
-                <div className="small">Aucune station proche avec ≥2 vélos prévus</div>
-              )}
-            </div>
-          </aside>
-        </main>
-      </div>
-
-      {/* Footer global */}
-      <GlobalFooter />
+              </div>
+            ))}
+            {!nearby.length && (
+              <div className="small">Aucune station proche avec ≥2 vélos prévus</div>
+            )}
+          </div>
+        </aside>
+      </main>
     </>
   );
 }

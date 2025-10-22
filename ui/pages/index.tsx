@@ -11,6 +11,20 @@ export default function LandingPage() {
 
   const year = useMemo(() => new Date().getFullYear(), []);
 
+  // 🔐 Liens de paiement (remplace par tes URLs Stripe/Ko-fi/Sponsors)
+  const SUPPORT_ONE_TIME =
+    process.env.NEXT_PUBLIC_SUPPORT_ONE_TIME ??
+    "https://buy.stripe.com/test_123"; // Don unique (Stripe Payment Link)
+  const SUPPORT_MONTHLY =
+    process.env.NEXT_PUBLIC_SUPPORT_MONTHLY ??
+    "https://buy.stripe.com/test_monthly_123"; // Abonnement mensuel
+  const SUPPORT_SPONSORS =
+    process.env.NEXT_PUBLIC_SUPPORT_SPONSORS ??
+    "https://github.com/sponsors/adrien"; // GitHub Sponsors (optionnel)
+  const SUPPORT_KOFI =
+    process.env.NEXT_PUBLIC_SUPPORT_KOFI ??
+    "https://ko-fi.com/adrien"; // Ko-fi (optionnel)
+
   // KPI counters (respect reduced motion)
   useEffect(() => {
     const prefersReduced =
@@ -87,6 +101,7 @@ export default function LandingPage() {
     { label: "Monitoring", href: "#monitoring" },
     { label: "Architecture", href: "#how" },
     { label: "FAQ", href: "#faq" },
+    { label: "Soutenir", href: "#support" }, // 🆕
   ];
 
   // Auto-hide header (ajoute .autohide et toggle .is-hidden selon scroll)
@@ -94,7 +109,7 @@ export default function LandingPage() {
     const header = document.querySelector<HTMLElement>(".site-header");
     if (!header) return;
 
-    header.classList.add("autohide"); // active la mécanique CSS
+    header.classList.add("autohide");
     let prev = window.scrollY;
 
     const onScroll = () => {
@@ -245,7 +260,6 @@ export default function LandingPage() {
               </ul>
 
               <div className="cta">
-                {/* Principal : reste en couleur */}
                 <a className="btn" href="#demo" aria-label="Ouvrir la démo en direct">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path d="M7 7h10v10H7z" stroke="white" strokeWidth="1.8" />
@@ -253,7 +267,6 @@ export default function LandingPage() {
                   </svg>
                   Ouvrir la démo
                 </a>
-                {/* Secondaires : harmonisés en outline */}
                 <a className="btn outline" href="#how">Architecture</a>
                 <a className="btn outline" href="#monitoring">Monitoring</a>
               </div>
@@ -284,7 +297,6 @@ export default function LandingPage() {
                 </div>
               </div>
 
-              {/* ✅ Aperçu statique sans double écriture (plus de skeleton ici) */}
               <div className="embed">
                 <div className="ratio">
                   <small>Prévisualisation statique — lancez la démo ci-dessous</small>
@@ -382,6 +394,7 @@ export default function LandingPage() {
             </div>
 
             <div className="features">
+              {/* ... (les six features inchangées) ... */}
               <article className="feature">
                 <div className="icon" aria-hidden="true">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -479,7 +492,6 @@ export default function LandingPage() {
         {/* ====================== MONITORING ====================== */}
         <section id="monitoring" aria-labelledby="monitoring-title">
           <div className="container">
-            {/* ────── En-tête de section ────── */}
             <div className="sec-head">
               <div>
                 <h2 id="monitoring-title">Monitoring & Qualité des données</h2>
@@ -493,9 +505,7 @@ export default function LandingPage() {
               </a>
             </div>
 
-            {/* ────── Showcase : carte principale + sous-cartes ────── */}
             <div className="showcase">
-              {/* Carte principale */}
               <figure className="card">
                 <figcaption className="cap">
                   <strong>Data Health Dashboard</strong>
@@ -506,7 +516,6 @@ export default function LandingPage() {
                 </div>
               </figure>
 
-              {/* Deux sous-cartes côte à côte */}
               <div className="kpi-row">
                 <figure className="card">
                   <figcaption className="cap">
@@ -525,7 +534,6 @@ export default function LandingPage() {
               </div>
             </div>
 
-            {/* ────── Détails suivis ────── */}
             <div className="glass prose mt-2">
               <h3>Ce que l’on suit</h3>
               <ul className="text-muted" style={{ paddingLeft: 18 }}>
@@ -664,9 +672,95 @@ export default function LandingPage() {
             </aside>
           </div>
         </section>
+
+        {/* ====================== SUPPORT ====================== */}
+        <section id="support" aria-labelledby="support-title">
+          <div className="container">
+            <div className="sec-head">
+              <div>
+                <h2 id="support-title">Soutenir le projet</h2>
+                <p>
+                  Ce projet est développé et maintenu indépendamment pour proposer une expérience fluide de la
+                  mobilité à Paris. Votre soutien permet de couvrir l’hébergement, la supervision et le temps de R&D.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid-2">
+              {/* Bio courte */}
+              <article className="glass prose">
+                <h3>À propos</h3>
+                <p className="text-muted">
+                  Je m’appelle <strong>Adrien</strong>, ingénieur en mathématiques appliquées spécialisé en
+                  analyse, modélisation statistique et machine learning. J’aime transformer des données réelles
+                  en outils utiles, fiables et élégants – ici, pour anticiper la disponibilité des vélos en ville.
+                </p>
+                <ul className="text-muted" style={{ paddingLeft: 18 }}>
+                  <li>Pipeline temps réel (GBFS + météo) et modèles LightGBM.</li>
+                  <li>App Next.js avec carte interactive et monitoring dédié.</li>
+                  <li>Hébergement sur Cloud Run, coûts optimisés.</li>
+                </ul>
+                <p className="text-muted" style={{ fontSize: ".95rem" }}>
+                  Vous pouvez contribuer une fois, vous abonner mensuellement, ou devenir sponsor. Merci 🙏
+                </p>
+              </article>
+
+              {/* Cartes de paiement */}
+              <div className="support-cards">
+                <figure className="card">
+                  <figcaption className="cap">
+                    <strong>Don unique</strong>
+                    <span>Rapide et sans compte</span>
+                  </figcaption>
+                  <div className="ratio" />
+                  <div className="actions-row">
+                    <a className="btn" href={SUPPORT_ONE_TIME} target="_blank" rel="noopener">
+                      Contribuer une fois
+                    </a>
+                    <a className="btn outline" href={SUPPORT_KOFI} target="_blank" rel="noopener">
+                      Ko-fi
+                    </a>
+                  </div>
+                  <small className="text-muted" style={{ display: "block", marginTop: 8 }}>
+                    Géré par Stripe/Ko-fi. Les frais de plateforme s’appliquent.
+                  </small>
+                </figure>
+
+                <figure className="card">
+                  <figcaption className="cap">
+                    <strong>Mensuel</strong>
+                    <span>Annulable à tout moment</span>
+                  </figcaption>
+                  <div className="ratio" />
+                  <div className="actions-row">
+                    <a className="btn" href={SUPPORT_MONTHLY} target="_blank" rel="noopener">
+                      Soutien mensuel
+                    </a>
+                    <a className="btn outline" href={SUPPORT_SPONSORS} target="_blank" rel="noopener">
+                      GitHub Sponsors
+                    </a>
+                  </div>
+                  <small className="text-muted" style={{ display: "block", marginTop: 8 }}>
+                    Abonnements sécurisés. Reçus automatiques par e-mail.
+                  </small>
+                </figure>
+              </div>
+            </div>
+
+            {/* Encadré fiscalité / contact */}
+            <div className="glass prose mt-2">
+              <h3>Transparence & contact</h3>
+              <ul className="text-muted" style={{ paddingLeft: 18 }}>
+                <li>Les contributions financent l’hébergement, la supervision et l’amélioration continue.</li>
+                <li>Pas de contreparties fiscales particulières (don non-déductible), sauf mention contraire.</li>
+                <li>Besoin d’un reçu, d’une facture ou d’un partenariat ? Écrivez-moi : <em>contact@votredomaine.fr</em>.</li>
+              </ul>
+            </div>
+          </div>
+        </section>
       </main>
 
-      {/* Footer global (remplace l’ancien footer inline) */}
+      {/* Footer global */}
       <GlobalFooter />
     </>
   );

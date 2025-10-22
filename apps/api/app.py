@@ -2,15 +2,16 @@
 from __future__ import annotations
 import sys, importlib, os
 from pathlib import Path
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
-# ─────────── Charger le .env automatiquement ───────────
+# ─────────── .env ───────────
 try:
-    from dotenv import load_dotenv, find_dotenv  # pip install python-dotenv
-    # 1) cherche .env dans le cwd ou ses parents
+    from dotenv import load_dotenv, find_dotenv
     found = find_dotenv(filename=".env", usecwd=True)
     if found:
         load_dotenv(found, override=False)
-    # 2) fallback : racine du dépôt (2 niveaux au-dessus de ce fichier)
     repo_root = Path(__file__).resolve().parents[2]
     env_file = repo_root / ".env"
     if env_file.exists():
@@ -19,55 +20,113 @@ try:
 except Exception as e:
     print(f"[app] .env non chargé ({e})")
 
-# ───────────────────────── Alias module 'core' → 'api.core' ─────────────────────────
-sys.modules.setdefault("core", importlib.import_module("api.core"))
+# ─────────── Alias 'core' ───────────
+for mod in ("apps.api.core", "api.core", "core"):
+    try:
+        sys.modules.setdefault("core", importlib.import_module(mod))
+        break
+    except ModuleNotFoundError:
+        continue
 
-# ───────────────────────── FastAPI & middlewares ─────────────────────────
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.gzip import GZipMiddleware
-
-# ───────────────────────── Settings (optionnel) ─────────────────────────
+# ─────────── Settings ───────────
 try:
-    from .core.settings import settings
+    from apps.api.core.settings import settings
 except Exception:
-    settings = None  # on continue en mode défaut
+    try:
+        from .core.settings import settings
+    except Exception:
+        try:
+            from core.settings import settings
+        except Exception:
+            settings = None
 
-# ───────────────────────── Routes legacy ─────────────────────────
-from .routes import health, stations, forecast, history, badges, snapshot, weather  # type: ignore
+# ─────────── Routes ───────────
+try:
+    from apps.api.routes import health, stations, forecast, history, badges, snapshot, weather
+except Exception:
+    try:
+        from .routes import health, stations, forecast, history, badges, snapshot, weather
+    except Exception:
+        from routes import health, stations, forecast, history, badges, snapshot, weather
 
-# ───────────────────────── Routes monitoring ─────────────────────────
-from .routes.monitoring import (
-    network_overview,
-    network_dynamics,
-    network_stations,
-    model_performance,
-    model_explainability,
-    data_health,
-    data_drift,
-)  # type: ignore
+try:
+    from apps.api.routes.monitoring import (
+        network_overview,
+        network_dynamics,
+        network_stations,
+        model_performance,
+        model_explainability,
+        data_health,
+        data_drift,
+    )
+except Exception:
+    try:
+        from .routes.monitoring import (
+            network_overview,
+            network_dynamics,
+            network_stations,
+            model_performance,
+            model_explainability,
+            data_health,
+            data_drift,
+        )
+    except Exception:
+        from routes.monitoring import (
+            network_overview,
+            network_dynamics,
+            network_stations,
+            model_performance,
+            model_explainability,
+            data_health,
+            data_drift,
+        )
 
-# ───────────────────────── App ─────────────────────────
+# ─────────── App ───────────
 app = FastAPI(title="velib-api", version="0.2.0")
 
-# CORS
+# ─────────── Token global (middleware) ───────────
+GLOBAL_TOKEN = os.getenv("API_GLOBAL_TOKEN", "").strip()
+
+@app.middleware("http")
+async def enforce_global_token(request: Request, call_next):
+    # Laisser passer les preflights CORS
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    # Pas de token configuré → API ouverte (utile dev)
+    if not GLOBAL_TOKEN:
+        return await call_next(request)
+
+    # (optionnel) routes publiques
+    if request.url.path in ("/", "/healthz"):
+        return await call_next(request)
+
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    if auth.removeprefix("Bearer ").strip() != GLOBAL_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid token")
+
+    return await call_next(request)
+
+# ─────────── GZip ───────────
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+# ─────────── CORS (à AJOUTER EN DERNIER) ───────────
 allow_origins = (
     settings.cors_list
     if (settings and getattr(settings, "cors_list", None))
-    else ["*"]
+    else ["*"]  # possible puisque token global protège déjà
 )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"],  # inclut Authorization
 )
 
-# Compression des réponses (JSON volumineux)
-app.add_middleware(GZipMiddleware, minimum_size=1024)
-
-# ───────────────────────── Montage des routers ─────────────────────────
+# ─────────── Montage des routers ───────────
 # Legacy
 app.include_router(health.router)
 app.include_router(stations.router)
@@ -76,17 +135,16 @@ app.include_router(history.router)
 app.include_router(badges.router)
 app.include_router(snapshot.router)
 app.include_router(weather.router)
-
 # Monitoring
-app.include_router(network_overview.router)       # /monitoring/network/overview/*
-app.include_router(network_dynamics.router)       # /monitoring/network/dynamics/*
-app.include_router(network_stations.router)       # /monitoring/network/stations/*
-app.include_router(model_performance.router)      # /monitoring/model/*
-app.include_router(model_explainability.router)   # /monitoring/model/*
-app.include_router(data_health.router)            # /monitoring/data/*
-app.include_router(data_drift.router)             # /monitoring/data/*
+app.include_router(network_overview.router)
+app.include_router(network_dynamics.router)
+app.include_router(network_stations.router)
+app.include_router(model_performance.router)
+app.include_router(model_explainability.router)
+app.include_router(data_health.router)
+app.include_router(data_drift.router)
 
-# ───────────────────────── Debug : listing des routes au démarrage ─────────────────────────
+# ─────────── Debug ───────────
 @app.on_event("startup")
 async def _print_routes() -> None:
     print("=== ROUTES MONTÉES ===")
@@ -97,3 +155,4 @@ async def _print_routes() -> None:
         except Exception:
             pass
     print("=======================")
+ 

@@ -20,4 +20,4 @@ COPY . /app
 ENV PORT=8080
 EXPOSE 8080
 
-CMD exec uvicorn app:app --host 0.0.0.0 --port ${PORT} --workers 1
+CMD ["sh","-c","python -m uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080}"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Optional, List
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,50 +56,87 @@ def _strip_latest(p: str) -> str:
 # ---------- Settings ----------
 class Settings(BaseSettings):
     # ---------- CORS ----------
-    cors_origins: Optional[str] = None
+    cors_origins: Optional[str] = Field(default=None, env="CORS_ORIGINS")
 
     # ---------- Legacy compat (kept so old env vars won't break) ----------
     # NOTE: We serve JSON now. These fields remain for backward compatibility only.
-    models_prefix: Optional[str] = None          # ex: gs://.../models/lgb_*.joblib (or a single .joblib)
-    gcs_serving_prefix: Optional[str] = None     # ex: gs://.../serving/[...]/latest.parquet (legacy)
+    models_prefix: Optional[str] = Field(default=None, env="MODELS_PREFIX")         # ex: gs://.../models/*.joblib OR a single .joblib
+    gcs_serving_prefix: Optional[str] = Field(default=None, env="GCS_SERVING_PREFIX")  # ex: gs://.../serving/[...]/latest.parquet (legacy)
 
     # ---------- GCS / Forecast (JSON-first) ----------
     # Default model URI (still used by server-side inference if any)
-    GCS_MODEL_URI: str = "gs://velib-forecast-472820_cloudbuild/velib/models/lgb_nbvelos_T+15min.joblib"
+    GCS_MODEL_URI: str = Field(
+        default="gs://velib-forecast-472820_cloudbuild/velib/models/lgb_nbvelos_T+15min.joblib",
+        env="GCS_MODEL_URI",
+    )
 
     # Parent "serving" folder (generic). We keep this for structure, but JSON is under SERVING_FORECAST_PREFIX.
-    GCS_SERVING_PREFIX: str = "gs://velib-forecast-472820_cloudbuild/velib/serving"
+    GCS_SERVING_PREFIX: str = Field(
+        default="gs://velib-forecast-472820_cloudbuild/velib/serving",
+        env="GCS_SERVING_PREFIX",
+    )
 
     # JSON forecast bundle location (writer drops latest_h{h}.json and latest_forecast.json here)
-    SERVING_FORECAST_PREFIX: str = "gs://velib-forecast-472820_cloudbuild/velib/serving/forecast"
+    SERVING_FORECAST_PREFIX: str = Field(
+        default="gs://velib-forecast-472820_cloudbuild/velib/serving/forecast",
+        env="SERVING_FORECAST_PREFIX",
+    )
 
     # Horizons exposed by the API (CSV)
-    FORECAST_SUPPORTED: str = "15"  # set to "15,60" when ready
+    FORECAST_SUPPORTED: str = Field(default="15", env="FORECAST_SUPPORTED")  # set to "15,60" when ready
 
     # In-memory cache TTL for reading latest_* bundles (seconds)
-    FORECAST_CACHE_TTL_SECONDS: int = 120
+    FORECAST_CACHE_TTL_SECONDS: int = Field(default=120, env="FORECAST_CACHE_TTL_SECONDS")
 
     # ---------- Monitoring JSON root (NEW) ----------
     # Root used by monitoring endpoints (manifest, perf, network, drift, docs)
-    GCS_MONITORING_PREFIX: str = "gs://velib-forecast-472820_cloudbuild/velib/monitoring"
+    GCS_MONITORING_PREFIX: str = Field(
+        default="gs://velib-forecast-472820_cloudbuild/velib/monitoring",
+        env="GCS_MONITORING_PREFIX",
+    )
 
     # ---------- Weather (live) ----------
-    OPENMETEO_URL: str = "https://api.open-meteo.com/v1/forecast"
-    OPENMETEO_LAT: float = 48.8566
-    OPENMETEO_LON: float = 2.3522
-    OPENMETEO_TIMEOUT: float = 5.0
-    METEO_DISABLE: bool = False
+    OPENMETEO_URL: str = Field(default="https://api.open-meteo.com/v1/forecast", env="OPENMETEO_URL")
+    OPENMETEO_LAT: float = Field(default=48.8566, env="OPENMETEO_LAT")
+    OPENMETEO_LON: float = Field(default=2.3522, env="OPENMETEO_LON")
+    OPENMETEO_TIMEOUT: float = Field(default=5.0, env="OPENMETEO_TIMEOUT")
+    METEO_DISABLE: bool = Field(default=False, env="METEO_DISABLE")  # accepts 1/true/True
 
     # ---------- Misc ----------
-    IMAGE_TAG: str = ""
-    tz_app: str = "Europe/Paris"
-    tmp_dir: str = "/tmp"
+    IMAGE_TAG: str = Field(default="", env="IMAGE_TAG")
+    tz_app: str = Field(default="Europe/Paris", env="TZ_APP")
+    tmp_dir: str = Field(default="/tmp", env="TMP_DIR")
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=True,  # explicit for deterministic ENV mapping
+    )
 
+    # ---------- Derived / helpers ----------
     @property
     def cors_list(self) -> List[str]:
         return _parse_cors_any(self.cors_origins)
+
+    # ---------- Validators ----------
+    @field_validator("GCS_MODEL_URI", "GCS_SERVING_PREFIX", "SERVING_FORECAST_PREFIX", "GCS_MONITORING_PREFIX")
+    @classmethod
+    def _must_be_gs_uri(cls, v: str) -> str:
+        # Allow empty only for optional fields (these are required defaults, so non-empty expected)
+        if not v:
+            return v
+        if not v.startswith("gs://"):
+            raise ValueError("GCS/SERVING prefixes must start with 'gs://'")
+        return v.rstrip("/")
+
+    @field_validator("METEO_DISABLE", mode="before")
+    @classmethod
+    def _bool_compat(cls, v):
+        # Accept "1", "true", "True", "yes"
+        if isinstance(v, str):
+            return v.strip().lower() in ("1", "true", "yes")
+        return v
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -106,18 +144,18 @@ class Settings(BaseSettings):
         # 1) Map legacy fields if provided (do not break old envs)
         # If models_prefix points to a single .joblib, treat it as GCS_MODEL_URI
         if self.models_prefix and self.models_prefix.startswith("gs://") and self.models_prefix.endswith(".joblib"):
-            self.GCS_MODEL_URI = self.models_prefix
+            object.__setattr__(self, "GCS_MODEL_URI", self.models_prefix)
 
         # If gcs_serving_prefix was given (possibly pointing to a legacy latest.parquet),
         # normalize to .../serving base so JSON code paths still work.
         if self.gcs_serving_prefix and self.gcs_serving_prefix.startswith("gs://"):
-            self.GCS_SERVING_PREFIX = _strip_serving_prefix(self.gcs_serving_prefix)
+            object.__setattr__(self, "GCS_SERVING_PREFIX", _strip_serving_prefix(self.gcs_serving_prefix))
 
         # 2) Normalize GCS_SERVING_PREFIX in case someone passes a full path
-        self.GCS_SERVING_PREFIX = _strip_serving_prefix(self.GCS_SERVING_PREFIX)
+        object.__setattr__(self, "GCS_SERVING_PREFIX", _strip_serving_prefix(self.GCS_SERVING_PREFIX))
 
         # 3) Clean SERVING_FORECAST_PREFIX from accidental trailing files
-        self.SERVING_FORECAST_PREFIX = _strip_latest(self.SERVING_FORECAST_PREFIX)
+        object.__setattr__(self, "SERVING_FORECAST_PREFIX", _strip_latest(self.SERVING_FORECAST_PREFIX))
 
         # 4) Create legacy aliases so old code paths won't crash
         if not getattr(self, "gcs_serving_prefix", None):

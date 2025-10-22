@@ -1,0 +1,270 @@
+/* ==========================================================================
+   monitoringnav.css — verre dépoli aligné sur kpibar (dark & light)
+   ========================================================================== */
+/* ⚙️ S’appuie sur les variables de monitoring.css (couleurs, gaps, etc.) */
+
+/* ── Moins d’espace au-dessus du titre */
+.monitoring .mn-header {
+  padding-top: 0;
+  margin-top: -24px;
+  margin-bottom: 12px;
+}
+
+/* ================= TITLEBAR ================= */
+.monitoring .mn-titlebar {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: var(--gap-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--gap-4);
+}
+
+.monitoring .mn-titlebar .title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+}
+.monitoring .mn-titlebar .title h1 {
+  font-size: 1.75rem;
+  line-height: 1.2;
+  margin: 0;
+}
+.monitoring .mn-titlebar .title .meta {
+  color: var(--text-dim);
+  font-size: 0.95rem;
+}
+
+/* Info génération alignée et poussée à droite */
+.monitoring .mn-meta.inline {
+  color: var(--text-dim);
+  font-size: 0.95rem;
+  line-height: 1.4;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+/* Pastille fraicheur */
+.monitoring .mn-meta.inline .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.10), 0 0 6px rgba(0,0,0,.25);
+}
+.monitoring .mn-meta.inline .dot--ok { background: var(--ok); }
+.monitoring .mn-meta.inline .dot--stale { background: var(--err); }
+
+/* ================= TOOLBAR ================= */
+.monitoring .toolbar-wrap {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--gap-3);
+  flex-wrap: wrap;
+  position: relative;
+  z-index: 10;
+}
+
+.monitoring .groups,
+.monitoring .extras {
+  display: flex;
+  gap: var(--gap-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.monitoring .groups { position: relative; z-index: 20; }
+.monitoring .extras { position: relative; z-index: 5; }
+
+/* ================= DROPDOWNS ================= */
+.monitoring .nav-group { position: relative; }
+
+/* Anti-gap entre bouton et dropdown */
+.monitoring .nav-group::after {
+  content: "";
+  position: absolute;
+  left: -8px;
+  right: -8px;
+  top: 100%;
+  height: 14px;
+}
+
+/* Menu déroulant — EXACTEMENT le même “dépolissage” que les KPI (dark) */
+.monitoring .dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 200px;
+  max-width: calc(100vw - 32px);
+  padding: 6px;
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 4px;
+
+  /* verre dépoli (dark) */
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04)),
+    var(--panel-2);
+  border: 1px solid rgba(255,255,255,.12);
+  box-shadow: none !important;
+  backdrop-filter: saturate(150%) blur(14px);
+  -webkit-backdrop-filter: saturate(150%) blur(14px);
+
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  z-index: 50;
+  transition: opacity .12s ease, transform .12s ease;
+}
+
+/* Affichage actif */
+.monitoring .nav-group.open .dropdown,
+.monitoring .nav-group:hover .dropdown,
+.monitoring .nav-group:focus-within .dropdown {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+/* Liens dropdown */
+.monitoring .dropdown-item {
+  padding: 8px 10px;
+  border-radius: 10px;
+  text-decoration: none;
+  white-space: nowrap;
+  font-size: 0.95rem;
+  color: var(--text);
+  opacity: .95;
+  transition: background .15s ease, transform .12s ease;
+  will-change: transform;
+  transform: translateZ(0);
+}
+.monitoring .dropdown-item:hover {
+  background: rgba(255,255,255,.06);
+  opacity: 1;
+  transform: translateY(-1px);
+}
+.monitoring .dropdown-item:active { transform: translateY(0); }
+.monitoring .dropdown-item.active {
+  background: var(--accentA);
+  outline: 1px solid var(--primary-2);
+  opacity: 1;
+}
+
+/* ================= BUTTONS — même “verre” que KPI.delta ================= */
+.monitoring .nav-trigger { cursor: pointer; }
+.monitoring .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: .95rem; line-height: 1;
+  cursor: pointer;
+  text-decoration: none;
+
+  /* verre dépoli (dark) */
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04)),
+    var(--panel-2);
+  color: var(--text);
+  border: 1px solid rgba(255,255,255,.12);
+  box-shadow: none !important;
+  backdrop-filter: saturate(140%) blur(12px);
+  -webkit-backdrop-filter: saturate(140%) blur(12px);
+
+  transition: background .15s, border-color .15s, color .15s, transform .12s;
+  will-change: transform;
+  transform: translateZ(0);
+}
+.monitoring .btn:hover {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.05)),
+    var(--panel-2);
+  transform: translateY(-1px);
+}
+.monitoring .btn:active { transform: translateY(0); }
+
+.monitoring .btn.btn--primary{
+  /* même logique que kpi-delta colorée */
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.06)),
+    var(--panel-2);
+  border: 1px solid rgba(255,255,255,.14);
+  box-shadow: none !important;
+  font-weight: 600;
+}
+.monitoring .btn.btn--ghost{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03)),
+    var(--panel-2);
+  border: 1px solid rgba(255,255,255,.12);
+}
+
+/* ================= RESPONSIVE ================= */
+@media (max-width: 860px) {
+  .monitoring .nav-group { position: relative; }
+  .monitoring .dropdown {
+    position: absolute;
+    left: 0; right: auto;
+    top: calc(100% + 6px);
+    min-width: 200px;
+    transform: translateY(0);
+  }
+  .monitoring .mn-meta.inline {
+    width: 100%;
+    margin-left: 0;
+    margin-top: 4px;
+    justify-content: flex-start;
+  }
+}
+
+/* ================= LIGHT THEME — même intensité de blur ================= */
+@media (prefers-color-scheme: light){
+  .monitoring .dropdown{
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.78)),
+      var(--panel-2, #f7f9fd);
+    border: 1px solid rgba(0,0,0,.10);
+    box-shadow: none !important;
+    backdrop-filter: saturate(160%) blur(14px);
+    -webkit-backdrop-filter: saturate(160%) blur(14px);
+  }
+  .monitoring .dropdown-item:hover{ background: rgba(0,0,0,.05); }
+
+  .monitoring .btn{
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.95), rgba(255,255,255,.82)),
+      var(--panel-2, #f7f9fd);
+    border: 1px solid rgba(0,0,0,.10);
+    box-shadow: none !important;
+    backdrop-filter: saturate(150%) blur(12px);
+    -webkit-backdrop-filter: saturate(150%) blur(12px);
+    color:#111827;
+  }
+  .monitoring .btn:hover{
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.98), rgba(255,255,255,.86)),
+      var(--panel-2, #f7f9fd);
+  }
+
+  .monitoring .btn.btn--primary{
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.98), rgba(255,255,255,.86)),
+      var(--panel-2, #f7f9fd);
+    border: 1px solid rgba(0,0,0,.12);
+    color:#111827;
+  }
+  .monitoring .btn.btn--ghost{
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.90), rgba(255,255,255,.70)),
+      var(--panel-2, #f7f9fd);
+    border: 1px solid rgba(0,0,0,.10);
+    color:#111827;
+  }
+}

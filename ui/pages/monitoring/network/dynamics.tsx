@@ -6,8 +6,21 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import type * as Plotly from "plotly.js";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
-import GlobalHeader from "@/components/layout/GlobalHeader";
-import GlobalFooter from "@/components/layout/GlobalFooter";
+import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
+import KpiBar from "@/components/monitoring/KpiBar";
+
+import {
+  getDynamicsHeatmapsProfiles,
+  getDynamicsHourlyPenSat,
+  getDynamicsEpisodes,
+  getDynamicsTensionByStation,
+  fetchStationsIndex,
+  type HeatmapsProfilesDoc,
+  type HourlyDoc,
+  type EpisodesDoc,
+  type TensionByStationDoc,
+  type StationMeta,
+} from "@/lib/services/monitoring/network_dynamics";
 
 /* ───────────────── Plotly (client only) ───────────────── */
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
@@ -19,26 +32,7 @@ const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ),
 });
 
-/* ───────────────── HTTP & utils ───────────────── */
-async function getJSON<T = unknown>(path: string): Promise<T> {
-  const base =
-    (typeof window !== "undefined" ? (window as any).NEXT_PUBLIC_API_BASE : undefined) ||
-    process.env.NEXT_PUBLIC_API_BASE ||
-    "";
-  const url = base ? new URL(path, base).toString() : path;
-
-  const res = await fetch(url, { headers: { accept: "application/json" }, cache: "no-store" });
-  const ct = res.headers.get("content-type") || "";
-  if (!res.ok) {
-    const hint = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status} on ${url} — ${hint.slice(0, 200)}`);
-  }
-  if (!ct.includes("application/json")) {
-    const peek = await res.text().catch(() => "");
-    throw new Error(`Non-JSON response from ${url}: ${peek.slice(0, 160)}`);
-  }
-  return (await res.json()) as T;
-}
+/* ───────────────── Utils ───────────────── */
 function ok<T>(r: PromiseSettledResult<T>): T | null {
   return r.status === "fulfilled" ? r.value : null;
 }
@@ -58,76 +52,6 @@ function clamp01(x: number | null | undefined): number | null {
 }
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
-}
-
-/* ───────────────── Types (API Dynamics) ───────────────── */
-type HeatmapsProfilesDoc = {
-  schema_version: string;
-  generated_at: string;
-  heatmap: {
-    occ_mean: (number | null)[][];
-    penury_rate: (number | null)[][];
-    saturation_rate: (number | null)[][];
-  };
-  profiles_occ_by_dow: Record<string, (number | null)[]>;
-};
-type HourlyDoc = {
-  schema_version: string;
-  generated_at: string;
-  rows: Array<{ hour: number; penury_rate: number | null; saturation_rate: number | null }>;
-};
-type EpisodesDoc = {
-  schema_version: string;
-  generated_at: string;
-  last_days: number;
-  rows: Array<{
-    station_id: string;
-    type: "penury" | "saturation";
-    start_utc: string;
-    end_utc: string;
-    steps: number;
-    duration_min: number | null;
-  }>;
-};
-type TensionByStationDoc = {
-  schema_version: string;
-  generated_at: string;
-  last_days: number;
-  rows: Array<{
-    station_id: string;
-    name?: string | null;
-    lat?: number | null;
-    lon?: number | null;
-    penury_rate: number | null;
-    saturation_rate: number | null;
-    occ_mean: number | null;
-    tension_index: number | null; // 0..2
-    n_obs: number;
-  }>;
-};
-
-function unwrapHeatmapsProfiles(p: any): HeatmapsProfilesDoc | null { return (p?.heatmaps_profiles ?? p) || null; }
-function unwrapHourly(p: any): HourlyDoc | null { return (p?.hourly ?? p) || null; }
-function unwrapEpisodes(p: any): EpisodesDoc | null { return (p?.episodes ?? p) || null; }
-function unwrapTension(p: any): TensionByStationDoc | null { return (p?.tension_by_station ?? p) || null; }
-
-/* ───────────────── Stations index (noms + coords) ───────────────── */
-type StationMeta = { station_id: string; name?: string | null; lat?: number | null; lon?: number | null };
-async function fetchStationsIndex(): Promise<Record<string, StationMeta>> {
-  const arr = await getJSON<any[]>("/stations").catch(() => []);
-  const idx: Record<string, StationMeta> = {};
-  for (const s of arr) {
-    const sid = String((s as any).station_id);
-    const lat = Number((s as any).lat ?? NaN);
-    const lon = Number((s as any).lon ?? NaN);
-    idx[sid] = {
-      station_id: sid,
-      name: (s as any).name ?? null,
-      lat: Number.isFinite(lat) ? lat : null,
-      lon: Number.isFinite(lon) ? lon : null,
-    };
-  }
-  return idx;
 }
 
 /* ───────────────── Episodes Map (identique Stations) ───────────────── */
@@ -248,6 +172,9 @@ export default function NetworkDynamicsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // ✅ barre de chargement uniforme (comme overview.tsx)
+  const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
+
   useEffect(() => { setStationId(qStation); }, [qStation]);
 
   useEffect(() => {
@@ -256,17 +183,17 @@ export default function NetworkDynamicsPage() {
       try {
         setLoading(true);
         const res = await Promise.allSettled([
-          getJSON<any>("/monitoring/network/dynamics/heatmaps_profiles"),
-          getJSON<any>("/monitoring/network/dynamics/hourly_pen_sat"),
-          getJSON<any>("/monitoring/network/dynamics/episodes"),
-          getJSON<any>("/monitoring/network/dynamics/tension_by_station"),
+          getDynamicsHeatmapsProfiles(),
+          getDynamicsHourlyPenSat(),
+          getDynamicsEpisodes(),
+          getDynamicsTensionByStation(),
         ]);
         if (!alive) return;
 
-        setHeat(unwrapHeatmapsProfiles(ok(res[0])));
-        setHourly(unwrapHourly(ok(res[1])));
-        setEpisodes(unwrapEpisodes(ok(res[2])));
-        setTension(unwrapTension(ok(res[3])));
+        setHeat(ok(res[0]));
+        setHourly(ok(res[1]));
+        setEpisodes(ok(res[2]));
+        setTension(ok(res[3]));
 
         fetchStationsIndex().then((idx) => alive && setStationsIdx(idx)).catch(()=>{});
         setError(null);
@@ -281,6 +208,51 @@ export default function NetworkDynamicsPage() {
 
   const generatedAt =
     heat?.generated_at ?? hourly?.generated_at ?? episodes?.generated_at ?? tension?.generated_at;
+
+  // ── KPIs pour KpiBar (même logique que Stations)
+  const stationsCount = useMemo(() => {
+    const n = tension?.rows?.length;
+    return Number.isFinite(Number(n)) ? Number(n) : NaN;
+  }, [tension]);
+
+  const episodesCount = useMemo(() => {
+    const n = episodes?.rows?.length;
+    return Number.isFinite(Number(n)) ? Number(n) : NaN;
+  }, [episodes]);
+
+  const peakPenury = useMemo(() => {
+    const rows = hourly?.rows ?? [];
+    let m = 0;
+    for (const r of rows) {
+      const v = clamp01(r?.penury_rate);
+      if (v != null) m = Math.max(m, v * 100);
+    }
+    return m || NaN;
+  }, [hourly]);
+
+  const peakSaturation = useMemo(() => {
+    const rows = hourly?.rows ?? [];
+    let m = 0;
+    for (const r of rows) {
+      const v = clamp01(r?.saturation_rate);
+      if (v != null) m = Math.max(m, v * 100);
+    }
+    return m || NaN;
+  }, [hourly]);
+
+  const windowDays =
+    episodes?.last_days ??
+    tension?.last_days ??
+    (heat as any)?.last_days ??
+    (heat as any)?.window_days ??
+    undefined;
+
+  const schemaVersion =
+    episodes?.schema_version ??
+    tension?.schema_version ??
+    (hourly as any)?.schema_version ??
+    (heat as any)?.schema_version ??
+    undefined;
 
   /* ───────────────── Heatmaps 7×24 — empilées ───────────────── */
   const heatmap = (title: string, matrix: (number | null)[][], isPct01 = false): JSX.Element => {
@@ -403,28 +375,9 @@ export default function NetworkDynamicsPage() {
       <Head>
         <title>Monitoring — Network / Dynamics</title>
         <meta name="description" content="Dynamiques réseau: heatmaps, profils, épisodes, tension par station." />
-        {/* Leaflet CSS + small global fixes */}
-        <link
-          rel="stylesheet"
-          href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-          crossOrigin=""
-        />
-        <style
-          dangerouslySetInnerHTML={{
-            __html: `
-              .leaflet-container { background: #fff !important; }
-              html, body, #__next { height: auto !important; }
-              html, body { overflow-y: auto !important; }
-            `,
-          }}
-        />
       </Head>
 
-      {/* Header global sticky */}
-      <GlobalHeader />
-
-      {/* Contenu principal */}
+      {/* Contenu principal (header/footer injectés par _app.tsx) */}
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
           title="Network — Dynamics"
@@ -436,8 +389,25 @@ export default function NetworkDynamicsPage() {
           ]}
         />
 
-        {loading && <div className="banner">Loading…</div>}
-        {error && <div className="banner banner--error">{error}</div>}
+        {/* ✅ LoadingBar uniforme, juste sous le MonitoringNav */}
+        <LoadingBar status={barStatus} />
+
+        {/* ───────────────── KPIs (KpiBar) ───────────────── */}
+        <section className="mt-4">
+          <h2>Network summary</h2>
+          <KpiBar
+            dense
+            items={[
+              { label: "Stations couvertes", value: fmtInt(stationsCount) },
+              { label: "Épisodes récents", value: fmtInt(episodesCount) },
+              { label: "Pic pénurie (heure)", value: fmtPct(peakPenury, 1) },
+              { label: "Pic saturation (heure)", value: fmtPct(peakSaturation, 1) },
+            ]}
+          />
+          <div className="kpi-bar-meta">
+            Window: {windowDays ?? "—"} days · Schema v{schemaVersion ?? "—"} · Generated {generatedAt ?? "—"}
+          </div>
+        </section>
 
         {/* Heatmaps — EMPILÉES */}
         <section className="mt-6">
@@ -455,7 +425,7 @@ export default function NetworkDynamicsPage() {
             {[1,2,3,4,5,6,0].map((d) => {
               const lbl = ["Dim","Lun","Mar","Mer","Jeu","Ven","Sam"][d];
               const val = d === 0 ? 0 : d;
-              const active = val === dowSel;
+              const active = val === (dowSel ?? 1);
               return (
                 <button key={d} onClick={() => setDowSel(val)} className={`btn ${active ? "btn-primary" : ""}`}>
                   {lbl}
@@ -537,7 +507,6 @@ export default function NetworkDynamicsPage() {
             {episodes && <span className="small" style={{ opacity: .7 }}>Fenêtre: {episodes.last_days} j</span>}
           </div>
 
-          {/* ⚠️ pas de .card ici — on fait comme Stations: map-block direct */}
           <div className="map-block">
             <div className="map-wrap" style={{ width: "100%", height: 520 }}>
               {episodePoints.length ? <EpisodesMap rows={episodePoints} /> : <div className="empty">Aucun point à afficher.</div>}
@@ -629,9 +598,6 @@ export default function NetworkDynamicsPage() {
           </div>
         </section>
       </main>
-
-      {/* Footer global */}
-      <GlobalFooter />
     </div>
   );
 }
