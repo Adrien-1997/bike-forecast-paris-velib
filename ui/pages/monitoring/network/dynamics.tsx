@@ -2,12 +2,13 @@
 import Head from "next/head";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useRouter } from "next/router";
 import type * as Plotly from "plotly.js";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
 import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
-import KpiBar from "@/components/monitoring/KpiBar";
+import KpiBar, { fmtPct, fmtInt } from "@/components/monitoring/KpiBar";
+import { chartConfig, chartLayout } from "@/lib/plotlyTheme";
 
 import {
   getDynamicsHeatmapsProfiles,
@@ -36,16 +37,6 @@ const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
 function ok<T>(r: PromiseSettledResult<T>): T | null {
   return r.status === "fulfilled" ? r.value : null;
 }
-function fmtPct(x?: number | null, digits = 1) {
-  const v = Number(x);
-  if (!Number.isFinite(v)) return "—";
-  return `${v.toFixed(digits)}%`;
-}
-function fmtInt(x?: number | null) {
-  const v = Number(x);
-  if (!Number.isFinite(v)) return "—";
-  return v.toLocaleString("fr-FR");
-}
 function clamp01(x: number | null | undefined): number | null {
   if (!Number.isFinite(Number(x))) return null;
   return Math.max(0, Math.min(1, Number(x)));
@@ -54,7 +45,7 @@ function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-/* ───────────────── Episodes Map (identique Stations) ───────────────── */
+/* ───────────────── Episodes Map (patterns alignés) ───────────────── */
 type EpisodePoint = {
   station_id: string;
   name: string;
@@ -90,11 +81,16 @@ const EpisodesMap = dynamic(async () => {
   }
 
   function MapInner({ rows }: { rows: EpisodePoint[] }) {
-    const valid = useMemo(() => rows.filter(r => Number.isFinite(r.lat) && Number.isFinite(r.lon)), [rows]);
-    const latMed = valid.length ? [...valid].map(r=>r.lat).sort((a,b)=>a-b)[Math.floor(valid.length/2)] : 48.8566;
-    const lonMed = valid.length ? [...valid].map(r=>r.lon).sort((a,b)=>a-b)[Math.floor(valid.length/2)] : 2.3522;
+    const valid = useMemo(
+      () => rows.filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon)),
+      [rows]
+    );
+    const latMed = valid.length ? [...valid].map(r => r.lat).sort((a,b)=>a-b)[Math.floor(valid.length/2)] : 48.8566;
+    const lonMed = valid.length ? [...valid].map(r => r.lon).sort((a,b)=>a-b)[Math.floor(valid.length/2)] : 2.3522;
 
-    const [tileUrl, setTileUrl] = useState("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png");
+    const [tileUrl, setTileUrl] = useState(
+      "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
+    );
     useEffect(() => {
       const img = new Image();
       img.onerror = () => setTileUrl("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png");
@@ -102,7 +98,8 @@ const EpisodesMap = dynamic(async () => {
     }, []);
 
     return (
-      <div className="map-wrap" style={{ width: "100%", height: 520 }}>
+      <div style={{ position: "relative", width: "100%", height: "100%" }}>
+        {/* IMPORTANT: classe leaflet-container → fond & height 100% via monitoring.css */}
         <MapContainer center={[latMed, lonMed]} zoom={12} className="leaflet-container">
           <TileLayer
             url={tileUrl}
@@ -119,14 +116,22 @@ const EpisodesMap = dynamic(async () => {
                 radius={5}
                 pathOptions={{ color: col, weight: 0.8, fillColor: col, fillOpacity: 0.85 }}
               >
-                <Tooltip>
-                  <div style={{display:"grid", gap:4}}>
-                    <div><b>{r.name}</b> <span style={{opacity:.6}}>({r.station_id})</span></div>
-                    <div>Type : <b style={{ color: col }}>{r.type}</b></div>
+                <Tooltip className="tooltip-dark">
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <div>
+                      <b>{r.name}</b>{" "}
+                      <span style={{ opacity: 0.6 }}>({r.station_id})</span>
+                    </div>
+                    <div>
+                      Type : <b style={{ color: col }}>{r.type}</b>
+                    </div>
                     <div>Début : {new Date(r.start_utc).toLocaleString("fr-FR")}</div>
                     <div>Fin : {new Date(r.end_utc).toLocaleString("fr-FR")}</div>
                     <div>Durée : {fmtInt(r.duration_min)}</div>
-                    <a href={`/monitoring/network/dynamics?station_id=${encodeURIComponent(r.station_id)}`} style={{textDecoration:"underline"}}>
+                    <a
+                      href={`/monitoring/network/dynamics?station_id=${encodeURIComponent(r.station_id)}`}
+                      style={{ textDecoration: "underline" }}
+                    >
                       Voir épisodes →
                     </a>
                   </div>
@@ -136,7 +141,7 @@ const EpisodesMap = dynamic(async () => {
           })}
         </MapContainer>
 
-        {/* Légende identique Stations */}
+        {/* Légende (patterns unifiés) */}
         <div className="cluster-legend">
           <div className="cluster-legend__title">Épisodes</div>
           <div className="cluster-legend__row">
@@ -172,7 +177,6 @@ export default function NetworkDynamicsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // ✅ barre de chargement uniforme (comme overview.tsx)
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
   useEffect(() => { setStationId(qStation); }, [qStation]);
@@ -182,7 +186,8 @@ export default function NetworkDynamicsPage() {
     (async () => {
       try {
         setLoading(true);
-        const res = await Promise.allSettled([
+
+        const [rHeat, rHourly, rEpisodes, rTension] = await Promise.allSettled([
           getDynamicsHeatmapsProfiles(),
           getDynamicsHourlyPenSat(),
           getDynamicsEpisodes(),
@@ -190,13 +195,28 @@ export default function NetworkDynamicsPage() {
         ]);
         if (!alive) return;
 
-        setHeat(ok(res[0]));
-        setHourly(ok(res[1]));
-        setEpisodes(ok(res[2]));
-        setTension(ok(res[3]));
+        setHeat(ok(rHeat));
+        setHourly(ok(rHourly));
+        setEpisodes(ok(rEpisodes));
+        setTension(ok(rTension));
 
-        fetchStationsIndex().then((idx) => alive && setStationsIdx(idx)).catch(()=>{});
-        setError(null);
+        const results = [rHeat, rHourly, rEpisodes, rTension];
+        const failures = results.filter(
+          (r): r is PromiseRejectedResult => r.status === "rejected"
+        );
+        if (failures.length > 0) {
+          const msg =
+            failures
+              .map((f) => String((f.reason && (f.reason.message ?? f.reason)) || "request failed"))
+              .join(" | ") || "API error";
+          setError(msg);
+        } else {
+          setError(null);
+        }
+
+        fetchStationsIndex()
+          .then((idx) => { if (alive) setStationsIdx(idx); })
+          .catch(() => {});
       } catch (e: any) {
         if (alive) setError(String(e?.message ?? e));
       } finally {
@@ -209,7 +229,7 @@ export default function NetworkDynamicsPage() {
   const generatedAt =
     heat?.generated_at ?? hourly?.generated_at ?? episodes?.generated_at ?? tension?.generated_at;
 
-  // ── KPIs pour KpiBar (même logique que Stations)
+  // ── KPIs pour KpiBar
   const stationsCount = useMemo(() => {
     const n = tension?.rows?.length;
     return Number.isFinite(Number(n)) ? Number(n) : NaN;
@@ -256,24 +276,32 @@ export default function NetworkDynamicsPage() {
 
   /* ───────────────── Heatmaps 7×24 — empilées ───────────────── */
   const heatmap = (title: string, matrix: (number | null)[][], isPct01 = false): JSX.Element => {
-    const z = matrix?.map((row) => row?.map((v) => (Number.isFinite(Number(v)) ? (isPct01 ? Number(v) * 100 : Number(v)) : null))) ?? [];
-    const y = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"];
+    const z =
+      matrix?.map((row) =>
+        row?.map((v) => (Number.isFinite(Number(v)) ? (isPct01 ? Number(v) * 100 : Number(v)) : null))
+      ) ?? [];
+    const y = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
     const x = [...Array(24)].map((_, i) => `${String(i).padStart(2, "0")}:00`);
     return (
-      <Plot
-        data={[{ z, x, y, type: "heatmap", hoverongaps: false, colorbar: { title: isPct01 ? "%" : "Occ" } } as any]}
-        layout={{
-          autosize: true,
-          height: 300,
-          margin: { l: 60, r: 10, t: 30, b: 40 },
-          title: { text: title, x: 0, y: 0.98, xanchor: "left", yanchor: "top" },
-          xaxis: { side: "bottom" },
-          paper_bgcolor: "rgba(0,0,0,0)",
-          plot_bgcolor: "rgba(0,0,0,0)",
-        }}
-        config={{ displayModeBar: false, responsive: true }}
-        className="plot plot--lg"
-      />
+      <div className="plot-card">
+        <h3>{title}</h3>
+        <Plot
+          data={
+            ([{
+              z, x, y, type: "heatmap", hoverongaps: false,
+              colorbar: { title: isPct01 ? "%" : "Occ" },
+            }] as unknown) as Plotly.Data[]
+          }
+          layout={chartLayout({
+            height: 300,
+            margin: { l: 60, r: 12, t: 30, b: 40 },
+            xaxis: { title: { text: "Heure (locale)" } },
+            yaxis: { title: { text: "Jour" } },
+          })}
+          config={chartConfig}
+          className="plot plot--lg"
+        />
+      </div>
     );
   };
 
@@ -340,7 +368,11 @@ export default function NetworkDynamicsPage() {
     const rows = tension?.rows ?? [];
     const q = (search || "").toLowerCase();
     const filtered = q
-      ? rows.filter((r) => r.station_id.toLowerCase().includes(q) || (r.name ?? "").toLowerCase().includes(q))
+      ? rows.filter(
+          (r) =>
+            r.station_id.toLowerCase().includes(q) ||
+            (r.name ?? "").toLowerCase().includes(q)
+        )
       : rows;
     return filtered
       .map((r) => ({ ...r, _name: stationsIdx[r.station_id]?.name ?? r.name ?? r.station_id }))
@@ -377,7 +409,6 @@ export default function NetworkDynamicsPage() {
         <meta name="description" content="Dynamiques réseau: heatmaps, profils, épisodes, tension par station." />
       </Head>
 
-      {/* Contenu principal (header/footer injectés par _app.tsx) */}
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
           title="Network — Dynamics"
@@ -389,10 +420,9 @@ export default function NetworkDynamicsPage() {
           ]}
         />
 
-        {/* ✅ LoadingBar uniforme, juste sous le MonitoringNav */}
         <LoadingBar status={barStatus} />
 
-        {/* ───────────────── KPIs (KpiBar) ───────────────── */}
+        {/* ───────────────── KPIs ───────────────── */}
         <section className="mt-4">
           <h2>Network summary</h2>
           <KpiBar
@@ -409,195 +439,306 @@ export default function NetworkDynamicsPage() {
           </div>
         </section>
 
-        {/* Heatmaps — EMPILÉES */}
+        {/* ───────────────── Heatmaps ───────────────── */}
         <section className="mt-6">
           <h2>Heatmaps 7×24</h2>
-          <div className="card">{heat ? heatmap("Occupation moyenne (0..1)", heat.heatmap?.occ_mean ?? [], false) : <div className="empty">—</div>}</div>
-          <div className="card mt-4">{heat ? heatmap("Pénurie (%)", heat.heatmap?.penury_rate ?? [], true) : <div className="empty">—</div>}</div>
-          <div className="card mt-4">{heat ? heatmap("Saturation (%)", heat.heatmap?.saturation_rate ?? [], true) : <div className="empty">—</div>}</div>
+          {heat ? (
+            <>
+              {heatmap("Occupation moyenne (0..1)", heat.heatmap?.occ_mean ?? [], false)}
+              <div className="figure-note small">
+                Lecture : occupation moyenne par pas de 1 h, sur 7 jours (lignes) × 24 h (colonnes).
+              </div>
+
+              <div className="mt-4">
+                {heatmap("Pénurie (%)", heat.heatmap?.penury_rate ?? [], true)}
+              </div>
+              <div className="figure-note small">
+                Part horaire des stations en pénurie (≥ 0 % – 100 %).
+              </div>
+
+              <div className="mt-4">
+                {heatmap("Saturation (%)", heat.heatmap?.saturation_rate ?? [], true)}
+              </div>
+              <div className="figure-note small">
+                Part horaire des stations en saturation (≥ 0 % – 100 %).
+              </div>
+            </>
+          ) : (
+            <div className="card plot-card">
+              <div className="empty">—</div>
+            </div>
+          )}
         </section>
 
-        {/* Profils par jour */}
+        {/* ───────────────── Profils par jour ───────────────── */}
         <section className="mt-6">
           <h2>Profils d’occupation par jour</h2>
           <div className="filters" style={{ marginBottom: 8 }}>
-            <label className="small" style={{ opacity: .8 }}>Jour :</label>
-            {[1,2,3,4,5,6,0].map((d) => {
-              const lbl = ["Dim","Lun","Mar","Mer","Jeu","Ven","Sam"][d];
+            <label className="small" style={{ opacity: 0.8 }}>
+              Jour :
+            </label>
+            {[1, 2, 3, 4, 5, 6, 0].map((d) => {
+              const lbl = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"][d];
               const val = d === 0 ? 0 : d;
               const active = val === (dowSel ?? 1);
               return (
-                <button key={d} onClick={() => setDowSel(val)} className={`btn ${active ? "btn-primary" : ""}`}>
+                <button
+                  key={d}
+                  onClick={() => setDowSel(val)}
+                  className={`btn ${active ? "btn--primary" : ""}`}
+                >
                   {lbl}
                 </button>
               );
             })}
           </div>
-          <div className="card">
+
+          <div className="card plot-card">
             {selectedProfile.length ? (
               <Plot
-                data={[{
-                  x: [...Array(24)].map((_, i) => `${String(i).padStart(2, "0")}:00`),
-                  y: selectedProfile, type: "scatter", mode: "lines", name: "Occupation (%)"
-                } as any]}
-                layout={{
-                  autosize: true,
+                data={
+                  ([{
+                    x: [...Array(24)].map((_, i) => `${String(i).padStart(2, "0")}:00`),
+                    y: selectedProfile,
+                    type: "scatter",
+                    mode: "lines",
+                    name: "Occupation (%)",
+                    connectgaps: false,
+                    hovertemplate: "%{x} — %{y:.1f}%<extra></extra>",
+                  }] as unknown) as Plotly.Data[]
+                }
+                layout={chartLayout({
                   height: 340,
-                  margin: { l: 52, r: 10, t: 20, b: 40 },
-                  yaxis: { title: { text: "%" }, range: [0, profileYMax] },
                   xaxis: { title: { text: "Heure (locale — jour sélectionné)" } },
-                  paper_bgcolor: "rgba(0,0,0,0)",
-                  plot_bgcolor: "rgba(0,0,0,0)",
-                }}
-                config={{ displayModeBar: false, responsive: true }}
+                  yaxis: { title: { text: "%" }, range: [0, profileYMax], ticksuffix: "%" },
+                })}
+                config={chartConfig}
                 className="plot plot--lg"
               />
-            ) : <div className="empty">Profil indisponible.</div>}
+            ) : (
+              <div className="empty">Profil indisponible.</div>
+            )}
+          </div>
+          <div className="figure-note small">
+            Série horaire agrégée (médiane) par jour de semaine sélectionné.
           </div>
         </section>
 
-        {/* Barres horaires pen/sat */}
+        {/* ───────────────── Barres horaires pen/sat ───────────────── */}
         <section className="mt-6">
           <h2>Pénurie & Saturation par heure</h2>
-          <div className="card">
+          <div className="card plot-card">
             {hourlyBars?.length ? (
               <Plot
                 data={hourlyBars as Plotly.Data[]}
-                layout={{
-                  barmode: "group",
-                  autosize: true,
+                layout={chartLayout({
                   height: 320,
-                  margin: { l: 52, r: 10, t: 20, b: 40 },
+                  barmode: "group",
                   xaxis: { title: { text: "Heure (locale)" } },
-                  yaxis: { title: { text: "%" }, range: [0, hourlyYMax] },
+                  yaxis: { title: { text: "%" }, range: [0, hourlyYMax], ticksuffix: "%" },
                   legend: { orientation: "h" },
-                  paper_bgcolor: "rgba(0,0,0,0)",
-                  plot_bgcolor: "rgba(0,0,0,0)",
-                }}
-                config={{ displayModeBar: false, responsive: true }}
+                })}
+                config={chartConfig}
                 className="plot plot--sm"
               />
-            ) : <div className="empty">—</div>}
+            ) : (
+              <div className="empty">—</div>
+            )}
+          </div>
+          <div className="figure-note small">
+            Lecture : pour chaque heure locale, part des stations en état de pénurie ou de saturation.
           </div>
         </section>
 
-        {/* Épisodes — même intégration carte que Stations */}
+        {/* ───────────────── Épisodes (fenêtre récente) ───────────────── */}
         <section className="mt-6">
           <h2>Épisodes (fenêtre récente)</h2>
           <div className="filters">
-            <label className="small" style={{ opacity: .8 }}>Filtrer station_id :</label>
+            <label className="small" style={{ opacity: 0.8 }}>
+              Filtrer station_id :
+            </label>
             <input
               value={stationId}
-              onChange={(e)=>setStationId(e.target.value)}
+              onChange={(e) => setStationId(e.target.value)}
               placeholder="ex: 12123"
               className="input"
             />
             <button
               onClick={() =>
                 router.push(
-                  { pathname: "/monitoring/network/dynamics", query: stationId ? { station_id: stationId } : {} },
+                  {
+                    pathname: "/monitoring/network/dynamics",
+                    query: stationId ? { station_id: stationId } : {},
+                  },
                   undefined,
                   { shallow: true }
                 )
               }
-              className="btn btn-primary"
+              className="btn btn--primary"
             >
               Appliquer
             </button>
-            {episodes && <span className="small" style={{ opacity: .7 }}>Fenêtre: {episodes.last_days} j</span>}
+            {episodes && (
+              <span className="small" style={{ opacity: 0.7 }}>
+                Fenêtre: {episodes.last_days} j
+              </span>
+            )}
           </div>
 
+          {/* Carte — même fond/hauteur que les autres modules */}
           <div className="map-block">
-            <div className="map-wrap" style={{ width: "100%", height: 520 }}>
-              {episodePoints.length ? <EpisodesMap rows={episodePoints} /> : <div className="empty">Aucun point à afficher.</div>}
+            <div className="map-wrap h-360">
+              {episodePoints.length ? (
+                <EpisodesMap rows={episodePoints} />
+              ) : (
+                <div className="empty">Aucun point à afficher.</div>
+              )}
             </div>
           </div>
+          <div className="figure-note small">
+            Basemap : Carto Light (no labels). Rouge = pénurie ; Bleu = saturation. Un point par épisode détecté.
+          </div>
 
+          {/* Liste des épisodes — même apparence que les autres tableaux */}
           {episodesFiltered?.length ? (
             <div className="card mt-4">
+              <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>Liste des épisodes détectés</h3>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ textAlign: "left" }}>
-                      <th>Station</th>
-                      <th>Type</th>
-                      <th>Début (UTC)</th>
-                      <th>Fin (UTC)</th>
-                      <th>Durée (min)</th>
-                      <th>Pas (#)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {episodesFiltered.slice(0, 1000).map((r, i) => (
-                      <tr key={`${r.station_id}-${r.start_utc}-${i}`} style={{ borderTop: "1px solid #374151" }}>
-                        <td>
-                          <Link href={`/monitoring/network/stations?station_id=${encodeURIComponent(r.station_id)}`} style={{ textDecoration: "underline" }}>
-                            {stationsIdx[r.station_id]?.name ?? r.station_id}
-                          </Link>
-                        </td>
-                        <td style={{ color: r.type === "penury" ? "#ef4444" : "#3b82f6" }}>{r.type}</td>
-                        <td>{new Date(r.start_utc).toLocaleString("fr-FR")}</td>
-                        <td>{new Date(r.end_utc).toLocaleString("fr-FR")}</td>
-                        <td>{fmtInt(r.duration_min)}</td>
-                        <td>{fmtInt(r.steps)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(220px,1.1fr) 120px 1fr 1fr 120px 100px",
+                    gap: 8,
+                    minWidth: 860,
+                  }}
+                >
+                  <HeaderCell>Station</HeaderCell>
+                  <HeaderCell>Type</HeaderCell>
+                  <HeaderCell>Début (UTC)</HeaderCell>
+                  <HeaderCell>Fin (UTC)</HeaderCell>
+                  <HeaderCell className="table-head--right">Durée (min)</HeaderCell>
+                  <HeaderCell className="table-head--right">Pas (#)</HeaderCell>
+
+                  {episodesFiltered.slice(0, 1000).map((r, i) => (
+                    <Row key={`${r.station_id}-${r.start_utc}-${i}`}>
+                      <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        <Link
+                          href={`/monitoring/network/stations?station_id=${encodeURIComponent(r.station_id)}`}
+                          style={{ textDecoration: "underline" }}
+                        >
+                          {stationsIdx[r.station_id]?.name ?? r.station_id}
+                        </Link>{" "}
+                        <span style={{ opacity: 0.6 }}>({r.station_id})</span>
+                      </div>
+                      <div style={{ color: r.type === "penury" ? "#ef4444" : "#3b82f6" }}>{r.type}</div>
+                      <div>{new Date(r.start_utc).toLocaleString("fr-FR")}</div>
+                      <div>{new Date(r.end_utc).toLocaleString("fr-FR")}</div>
+                      <div style={{ fontVariantNumeric: "tabular-nums", textAlign: "right" }}>{fmtInt(r.duration_min)}</div>
+                      <div style={{ fontVariantNumeric: "tabular-nums", textAlign: "right" }}>{fmtInt(r.steps)}</div>
+                    </Row>
+                  ))}
+                </div>
               </div>
             </div>
-          ) : <div className="empty mt-4">Aucun épisode.</div>}
+          ) : (
+            <div className="empty mt-4">Aucun épisode.</div>
+          )}
         </section>
 
-        {/* Tension par station */}
+        {/* ───────────────── Tension par station ───────────────── */}
         <section className="mt-6">
           <h2>Tension par station</h2>
           <div className="card">
             <div className="filters">
               <input
                 value={search}
-                onChange={(e)=>setSearch(e.target.value)}
+                onChange={(e) => setSearch(e.target.value)}
                 placeholder="Recherche station_id ou nom…"
                 className="input"
                 style={{ minWidth: 280 }}
               />
-              {tension && <span className="small" style={{ opacity: 0.7 }}>Fenêtre: {tension.last_days} j</span>}
+              {tension && (
+                <span className="small" style={{ opacity: 0.7 }}>
+                  Fenêtre: {tension.last_days} j
+                </span>
+              )}
             </div>
+
             {tensionRows?.length ? (
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ textAlign: "left" }}>
-                      <th>Station</th>
-                      <th>Pénurie</th>
-                      <th>Saturation</th>
-                      <th>Occupation</th>
-                      <th>Tension idx</th>
-                      <th>Obs</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tensionRows.slice(0, 400).map((r, i) => (
-                      <tr key={`${r.station_id}-${i}`} style={{ borderTop: "1px solid #374151" }}>
-                        <td>
-                          <div style={{ whiteSpace: "nowrap", textOverflow: "ellipsis", overflow: "hidden", maxWidth: 240 }}>
-                            <b>{(r as any)._name}</b> <span style={{ opacity: 0.6 }}>({r.station_id})</span>
-                          </div>
-                        </td>
-                        <td>{fmtPct(Number(r.penury_rate ?? NaN) * 100, 1)}</td>
-                        <td>{fmtPct(Number(r.saturation_rate ?? NaN) * 100, 1)}</td>
-                        <td>{fmtPct(Number(r.occ_mean ?? NaN) * 100, 1)}</td>
-                        <td>{fmtPct(Number(r.tension_index ?? NaN) * 100, 1)}</td>
-                        <td>{fmtInt(r.n_obs)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(260px,1.2fr) 120px 120px 120px 140px 100px",
+                    gap: 8,
+                    minWidth: 920,
+                  }}
+                >
+                  <HeaderCell>Station</HeaderCell>
+                  <HeaderCell>Pénurie</HeaderCell>
+                  <HeaderCell>Saturation</HeaderCell>
+                  <HeaderCell>Occupation</HeaderCell>
+                  <HeaderCell>Tension idx</HeaderCell>
+                  <HeaderCell className="table-head--right">Obs</HeaderCell>
+
+                  {tensionRows.slice(0, 400).map((r, i) => (
+                    <Row key={`${r.station_id}-${i}`}>
+                      <div
+                        style={{
+                          whiteSpace: "nowrap",
+                          textOverflow: "ellipsis",
+                          overflow: "hidden",
+                          maxWidth: 340,
+                        }}
+                        title={(r as any)._name}
+                      >
+                        <b>{(r as any)._name}</b>{" "}
+                        <span style={{ opacity: 0.6 }}>({r.station_id})</span>
+                      </div>
+                      <div style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPct(Number(r.penury_rate ?? NaN) * 100, 1)}</div>
+                      <div style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPct(Number(r.saturation_rate ?? NaN) * 100, 1)}</div>
+                      <div style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPct(Number(r.occ_mean ?? NaN) * 100, 1)}</div>
+                      <div style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPct(Number(r.tension_index ?? NaN) * 100, 1)}</div>
+                      <div style={{ fontVariantNumeric: "tabular-nums", textAlign: "right" }}>{fmtInt(r.n_obs)}</div>
+                    </Row>
+                  ))}
+                </div>
               </div>
-            ) : <div className="empty">—</div>}
+            ) : (
+              <div className="empty">—</div>
+            )}
           </div>
         </section>
       </main>
     </div>
   );
+}
+
+/* ───────────────────────── UI atoms (alignés monitoring.css) ───────────────────────── */
+function Row({ children }: { children: ReactNode }) {
+  const items = Array.isArray(children) ? children : [children];
+  return (
+    <div style={{ display: "contents" }}>
+      {items.map((child, i) => {
+        // aligner à droite la/les dernières colonnes numériques
+        const alignRight = items.length >= 6 && (i === items.length - 1 || i === items.length - 2);
+        const ta: CSSProperties["textAlign"] = alignRight ? "right" : "left";
+        return (
+          <div
+            key={i}
+            style={{
+              padding: "8px 6px",
+              borderBottom: "1px dashed rgba(148,163,184,0.25)",
+              textAlign: ta,
+            }}
+          >
+            {child}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function HeaderCell({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={`table-head table-head--sticky ${className ?? ""}`.trim()}>{children}</div>;
 }

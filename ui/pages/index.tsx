@@ -1,10 +1,12 @@
 // ui/pages/index.tsx
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Head from "next/head";
 import GlobalHeader from "@/components/layout/GlobalHeader";
 import GlobalFooter from "@/components/layout/GlobalFooter";
+import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
 
 export default function LandingPage() {
+  // ────────────────────────────────────────────────────────────────────────────
   // Refs
   const demoIframeRef = useRef<HTMLIFrameElement | null>(null);
   const demoSkeletonRef = useRef<HTMLDivElement | null>(null);
@@ -13,18 +15,21 @@ export default function LandingPage() {
 
   // 🔐 Liens de paiement (remplace par tes URLs Stripe/Ko-fi/Sponsors)
   const SUPPORT_ONE_TIME =
-    process.env.NEXT_PUBLIC_SUPPORT_ONE_TIME ??
-    "https://buy.stripe.com/test_123"; // Don unique (Stripe Payment Link)
+    process.env.NEXT_PUBLIC_SUPPORT_ONE_TIME ?? "https://buy.stripe.com/test_123"; // Don unique (Stripe Payment Link)
   const SUPPORT_MONTHLY =
-    process.env.NEXT_PUBLIC_SUPPORT_MONTHLY ??
-    "https://buy.stripe.com/test_monthly_123"; // Abonnement mensuel
+    process.env.NEXT_PUBLIC_SUPPORT_MONTHLY ?? "https://buy.stripe.com/test_monthly_123"; // Abonnement mensuel
   const SUPPORT_SPONSORS =
-    process.env.NEXT_PUBLIC_SUPPORT_SPONSORS ??
-    "https://github.com/sponsors/adrien"; // GitHub Sponsors (optionnel)
+    process.env.NEXT_PUBLIC_SUPPORT_SPONSORS ?? "https://github.com/sponsors/adrien"; // GitHub Sponsors (optionnel)
   const SUPPORT_KOFI =
-    process.env.NEXT_PUBLIC_SUPPORT_KOFI ??
-    "https://ko-fi.com/adrien"; // Ko-fi (optionnel)
+    process.env.NEXT_PUBLIC_SUPPORT_KOFI ?? "https://ko-fi.com/adrien"; // Ko-fi (optionnel)
 
+  // ────────────────────────────────────────────────────────────────────────────
+  // LoadingBar (même logique que monitoring, simple succès)
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
+
+  // ────────────────────────────────────────────────────────────────────────────
   // KPI counters (respect reduced motion)
   useEffect(() => {
     const prefersReduced =
@@ -39,24 +44,22 @@ export default function LandingPage() {
       const step = (now: number) => {
         const p = Math.min(1, (now - start) / dur);
         const v = Math.round((from + (to - from) * ease(p)) * 10) / 10;
-        el.textContent = suffix
-          ? v + suffix
-          : el.dataset.count?.includes("%")
-          ? v + "%"
-          : String(v);
+        el.textContent = suffix ? v + suffix : String(v);
         if (p < 1) requestAnimationFrame(step);
       };
       requestAnimationFrame(step);
     };
 
-    document.querySelectorAll<HTMLElement>(".kpi .value").forEach((el) => {
+    document.querySelectorAll<HTMLElement>(".kpi-card .kpi__value").forEach((el) => {
       const raw = el.dataset.count;
       if (!raw) return;
+
       if (prefersReduced) {
         el.textContent = raw;
         return;
       }
-      const isPct = raw.includes("%");
+
+      const isPct = raw.trim().endsWith("%");
       const to = parseFloat(raw);
       if (Number.isFinite(to)) animateCount(el, to, isPct ? "%" : "");
     });
@@ -101,10 +104,10 @@ export default function LandingPage() {
     { label: "Monitoring", href: "#monitoring" },
     { label: "Architecture", href: "#how" },
     { label: "FAQ", href: "#faq" },
-    { label: "Soutenir", href: "#support" }, // 🆕
+    { label: "Soutenir", href: "#support" },
   ];
 
-  // Auto-hide header (ajoute .autohide et toggle .is-hidden selon scroll)
+  // Auto-hide header
   useEffect(() => {
     const header = document.querySelector<HTMLElement>(".site-header");
     if (!header) return;
@@ -121,6 +124,130 @@ export default function LandingPage() {
 
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Auto-slide KPI bar (discrete: 3s hold + quick slide)
+  useEffect(() => {
+    const root = document.querySelector<HTMLElement>(".kpi-bar.kpi-bar--auto");
+    const track = root?.querySelector<HTMLElement>(".kpi-track");
+    if (!root || !track) return;
+
+    const prefersReduced =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (prefersReduced) return;
+
+    // Collect original items and compute step offsets (robust to responsive)
+    const items = Array.from(track.children) as HTMLElement[];
+    const N = items.length;
+    if (N === 0) return;
+
+    // Clone first item for seamless loop
+    const firstClone = items[0].cloneNode(true) as HTMLElement;
+    track.appendChild(firstClone);
+
+    // Helper: recompute left offsets relative to track
+    const getOffsets = () => {
+      const rects = Array.from(track.children).map((el) =>
+        (el as HTMLElement).offsetLeft
+      );
+      // Normalize to start at 0
+      const base = rects[0] || 0;
+      return rects.map((x) => x - base);
+    };
+
+    let offsets = getOffsets();
+    let index = 0; // current visible original index
+    let holdMs = 3000; // stay duration
+    let slideMs = 380; // transition duration
+    let timer: number | null = null;
+
+    // Ensure root is overflow-hidden (defensive)
+    (root.style as any).overflow = "hidden";
+    track.style.willChange = "transform";
+
+    const applyTransform = (i: number, withTransition: boolean) => {
+      track.style.transition = withTransition ? `transform ${slideMs}ms ease` : "none";
+      const x = offsets[Math.min(i, offsets.length - 1)] || 0;
+      track.style.transform = `translateX(${-x}px)`;
+    };
+
+    // Pause/resume on page visibility
+    const onVis = () => {
+      if (document.hidden) {
+        if (timer) window.clearTimeout(timer);
+        timer = null;
+      } else {
+        scheduleNext();
+      }
+    };
+
+    // Recalculate on resize (cards can reflow)
+    const ro = new ResizeObserver(() => {
+      const currentX = offsets[Math.min(index, offsets.length - 1)] || 0;
+      offsets = getOffsets();
+      // Snap to the same logical slide without animation
+      track.style.transition = "none";
+      track.style.transform = `translateX(${-currentX}px)`;
+    });
+    ro.observe(track);
+
+    // Hover pauses the cycle
+    const onEnter = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = null;
+    };
+    const onLeave = () => scheduleNext();
+
+    // Core loop
+    const goNext = () => {
+      // Slide to next (may be the clone)
+      applyTransform(index + 1, true);
+
+      const onEnd = () => {
+        track.removeEventListener("transitionend", onEnd);
+
+        // If we reached the clone (index == N-1 → clone at N),
+        // snap back to real first without transition
+        if (index + 1 >= N) {
+          index = 0;
+          applyTransform(0, false);
+        } else {
+          index += 1;
+        }
+
+        scheduleNext();
+      };
+
+      track.addEventListener("transitionend", onEnd, { once: true });
+    };
+
+    const scheduleNext = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(goNext, holdMs) as unknown as number;
+    };
+
+    // Init: snap to first, then start cycle
+    applyTransform(0, false);
+    scheduleNext();
+
+    document.addEventListener("visibilitychange", onVis);
+    root.addEventListener("mouseenter", onEnter);
+    root.addEventListener("mouseleave", onLeave);
+
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVis);
+      root.removeEventListener("mouseenter", onEnter);
+      root.removeEventListener("mouseleave", onLeave);
+      ro.disconnect();
+      // Clean transition/transform (optional)
+      track.style.transition = "";
+      track.style.transform = "";
+      track.style.willChange = "";
+      // Remove our clone to avoid duplicates on hot reload
+      try { track.lastElementChild === firstClone && track.removeChild(firstClone); } catch {}
+    };
   }, []);
 
   return (
@@ -152,23 +279,11 @@ export default function LandingPage() {
         />
         <meta property="og:type" content="website" />
         <meta property="og:url" content="https://example.com/velib-forecast/" />
-        <meta
-          property="og:image"
-          content="https://example.com/velib-forecast/cover.jpg"
-        />
+        <meta property="og:image" content="https://example.com/velib-forecast/cover.jpg" />
         <meta name="twitter:card" content="summary_large_image" />
-        <meta
-          name="twitter:title"
-          content="Vélib’ Forecast Paris — Prévisions +15 min"
-        />
-        <meta
-          name="twitter:description"
-          content="Carte temps réel & prévisions à +15 minutes."
-        />
-        <meta
-          name="twitter:image"
-          content="https://example.com/velib-forecast/cover.jpg"
-        />
+        <meta name="twitter:title" content="Vélib’ Forecast Paris — Prévisions +15 min" />
+        <meta name="twitter:description" content="Carte temps réel & prévisions à +15 minutes." />
+        <meta name="twitter:image" content="https://example.com/velib-forecast/cover.jpg" />
 
         {/* ===== Perf ===== */}
         <link
@@ -176,15 +291,11 @@ export default function LandingPage() {
           href="https://velib-ui-160046094975.europe-west1.run.app"
           crossOrigin=""
         />
-        <link
-          rel="dns-prefetch"
-          href="https://velib-ui-160046094975.europe-west1.run.app"
-        />
+        <link rel="dns-prefetch" href="https://velib-ui-160046094975.europe-west1.run.app" />
 
         {/* ===== JSON-LD ===== */}
         <script
           type="application/ld+json"
-          // eslint-disable-next-line react/no-danger
           dangerouslySetInnerHTML={{
             __html: JSON.stringify({
               "@context": "https://schema.org",
@@ -214,551 +325,611 @@ export default function LandingPage() {
       <GlobalHeader items={headerItems} brandHref="/" />
 
       {/* ====================== CONTENT ====================== */}
-      <main id="top">
-        {/* ====================== HERO ====================== */}
-        <section className="hero" aria-labelledby="hero-title">
-          <div className="container hero-grid">
-            <div>
-              <div className="eyebrow">
-                <span className="ping" aria-hidden="true" />
-                <span className="chip" aria-label="Horizon de prévision">
-                  Prévisions +15 min • Paris
-                </span>
-                <span className="chip" aria-label="Actualisation">
-                  Données live 5 min
-                </span>
-              </div>
+      {/* 👇 Wrapper .monitoring pour hériter des tokens/fond/containers */}
+      <div className="monitoring">
+        <main id="top" className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
+          {/* Loading bar homogène */}
+          <LoadingBar status={barStatus} />
+          {error && <div className="banner banner--error mt-2">{error}</div>}
 
-              <h1 id="hero-title">
-                Anticipez les stations Vélib’
-                <br />
-                avec une{" "}
-                <span
-                  style={{
-                    background:
-                      "linear-gradient(90deg,var(--primary),var(--primary-2))",
-                    WebkitBackgroundClip: "text",
-                    backgroundClip: "text",
-                    color: "transparent",
-                  }}
-                >
-                  UX taillée pour la ville
-                </span>
-                .
-              </h1>
-
-              <p className="lead">
-                Carte temps réel, prédictions à +15 min par station, comparaison aux
-                comportements historiques, et monitoring natif. Conçu pour fiabilité,
-                vitesse et clarté — même aux heures de pointe.
-              </p>
-
-              <ul className="text-muted" style={{ margin: "10px 0 0", paddingLeft: 18 }}>
-                <li>Filtres quartier, recherche suggérée, focus proximité.</li>
-                <li>Mises à jour live, transitions fluides, lisibilité renforcée.</li>
-                <li>Prévisions calibrées, médiane historique et profils horaires.</li>
-              </ul>
-
-              <div className="cta">
-                <a className="btn" href="#demo" aria-label="Ouvrir la démo en direct">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="M7 7h10v10H7z" stroke="white" strokeWidth="1.8" />
-                    <path d="M3 3v6M3 3h6M21 21v-6M21 21h-6" stroke="white" strokeWidth="1.8" />
-                  </svg>
-                  Ouvrir la démo
-                </a>
-                <a className="btn outline" href="#how">Architecture</a>
-                <a className="btn outline" href="#monitoring">Monitoring</a>
-              </div>
-
-              <div className="tech-chips">
-                <span className="chip">Cloud Run</span>
-                <span className="chip">Next.js</span>
-                <span className="chip">React-Leaflet</span>
-                <span className="chip">DuckDB</span>
-                <span className="chip">LightGBM</span>
-              </div>
-            </div>
-
-            <aside className="glass hero-card" aria-label="Indicateurs clés">
-              <h3>En chiffres — 7 derniers jours</h3>
-              <div className="kpis" role="list">
-                <div className="kpi" role="listitem">
-                  <div className="value" data-count="98%">0%</div>
-                  <div className="label">Observations couvertes</div>
-                </div>
-                <div className="kpi" role="listitem">
-                  <div className="value" data-count="5">0</div>
-                  <div className="label">Fraîcheur (min)</div>
-                </div>
-                <div className="kpi" role="listitem">
-                  <div className="value" data-count="1400">0</div>
-                  <div className="label">Stations suivies</div>
-                </div>
-              </div>
-
-              <div className="embed">
-                <div className="ratio">
-                  <small>Prévisualisation statique — lancez la démo ci-dessous</small>
-                </div>
-              </div>
-
-              <ul className="text-muted" style={{ margin: "12px 0 0", paddingLeft: 18 }}>
-                <li>MAE baseline vs modèle, par station et par segments.</li>
-                <li>Défaut tolérant : trous comblés, horodatage strict, NaN sûrs.</li>
-              </ul>
-            </aside>
-          </div>
-        </section>
-
-        {/* ====================== DEMO (iframe) ====================== */}
-        <section id="demo" aria-labelledby="demo-title">
-          <div className="container">
-            <div className="sec-head">
+          {/* ====================== HERO ====================== */}
+          <section className="panel hero" aria-labelledby="hero-title">
+            <div className="container hero-grid">
               <div>
-                <h2 id="demo-title">Démo en direct</h2>
-                <p>
-                  Application React embarquée : carte en direct, recherche de stations, et
-                  prévisions à +15 minutes. Le premier accès peut prendre quelques secondes
-                  (cold start Cloud Run).
-                </p>
-              </div>
-              <div>
-                <span className="kbd" aria-hidden="true">Alt</span> + <span className="kbd" aria-hidden="true">Clique</span>{" "}
-                <span className="sr-only">Astuce :</span> pour plein écran
-              </div>
-            </div>
-
-            <div className="embed" aria-live="polite">
-              <div className="skeleton" id="skeleton" ref={demoSkeletonRef}>
-                Initialisation de la démo…
-              </div>
-              <iframe
-                ref={demoIframeRef}
-                title="Vélib’ Forecast — Application"
-                src="https://velib-ui-160046094975.europe-west1.run.app/"
-                loading="lazy"
-                allow="fullscreen; clipboard-read; clipboard-write"
-                referrerPolicy="no-referrer-when-downgrade"
-              />
-              <button
-                className="btn btn-fs"
-                type="button"
-                onClick={handleFullscreen}
-                aria-label="Plein écran"
-              >
-                Plein écran
-              </button>
-            </div>
-
-            <div className="actions-row">
-              <a
-                className="btn"
-                href="https://velib-ui-160046094975.europe-west1.run.app/"
-                target="_blank"
-                rel="noopener"
-              >
-                Ouvrir dans un onglet
-              </a>
-              <button className="btn outline" type="button" onClick={handleReload}>
-                Recharger la démo
-              </button>
-              <a className="btn outline" href="#features">Découvrir les fonctions</a>
-            </div>
-
-            <div className="glass prose mt-2">
-              <h3>Pourquoi c’est fluide ?</h3>
-              <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                <li>Préchargement DNS et connexions persistantes.</li>
-                <li>Découpage UI, caches navigateur et CDN.</li>
-                <li>Metrics RUM pour piloter l’expérience réelle.</li>
-              </ul>
-            </div>
-          </div>
-        </section>
-
-        {/* ====================== FEATURES ====================== */}
-        <section id="features" aria-labelledby="features-title">
-          <div className="container">
-            <div className="sec-head">
-              <div>
-                <h2 id="features-title">Plein usage, du matin au soir</h2>
-                <p>
-                  Repérez les stations utiles, visualisez l’évolution à +15 min, comparez à
-                  la médiane, puis basculez en mode monitoring si besoin.
-                </p>
-              </div>
-              <a className="btn outline" href="#demo">
-                Essayer maintenant
-              </a>
-            </div>
-
-            <div className="features">
-              {/* ... (les six features inchangées) ... */}
-              <article className="feature">
-                <div className="icon" aria-hidden="true">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <path d="M12 7v10M7 12h10" stroke="currentColor" strokeWidth="2" />
-                  </svg>
+                <div className="eyebrow">
+                  <span className="ping" aria-hidden="true" />
+                  <span className="chip" aria-label="Horizon de prévision">
+                    Prévisions +15 min • Paris
+                  </span>
+                  <span className="chip" aria-label="Actualisation">
+                    Données live 5 min
+                  </span>
                 </div>
-                <h3>Carte lisible & rapide</h3>
-                <p>
-                  Couleurs travaillées, légende compacte, recherche instantanée, focus quartier.
-                  Affichage pensé pour 1–2 infos clés par station (vélos/capacité + tendance).
+
+                <h1 id="hero-title">
+                  Anticipez les stations Vélib’
+                  <br />
+                  avec une{" "}
+                  <span
+                    style={{
+                      background: "linear-gradient(90deg,var(--primary),var(--primary-2))",
+                      WebkitBackgroundClip: "text",
+                      backgroundClip: "text",
+                      color: "transparent",
+                    }}
+                  >
+                    UX taillée pour la ville
+                  </span>
+                  .
+                </h1>
+
+                <p className="lead">
+                  Carte temps réel, prédictions à +15 min par station, comparaison aux comportements
+                  historiques, et monitoring natif. Conçu pour fiabilité, vitesse et clarté — même
+                  aux heures de pointe.
                 </p>
-              </article>
 
-              <article className="feature">
-                <div className="icon" aria-hidden="true">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <path d="M3 12a9 9 0 1018 0A9 9 0 003 12z" stroke="currentColor" strokeWidth="2" />
-                    <path d="M12 7v6l4 2" stroke="currentColor" strokeWidth="2" />
-                  </svg>
-                </div>
-                <h3>Prévisions à +15 min</h3>
-                <p>
-                  Modèle entraîné sur l’historique et enrichi météo (vents, pluie, saisonnalités).
-                  Calibrage par segments horaires et stations pour limiter les biais.
-                </p>
-              </article>
-
-              <article className="feature">
-                <div className="icon" aria-hidden="true">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <path d="M4 4h16v16H4z" stroke="currentColor" strokeWidth="2" />
-                    <path d="M4 9h16M9 4v16" stroke="currentColor" strokeWidth="2" />
-                  </svg>
-                </div>
-                <h3>Comparaisons utiles</h3>
-                <p>
-                  “Aujourd’hui vs médiane” et profils horaires par station pour comprendre
-                  les dynamiques locales (heures de pointe, zones de reports, anomalies).
-                </p>
-              </article>
-
-              <article className="feature">
-                <div className="icon" aria-hidden="true">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <path d="M4 12h16" stroke="currentColor" strokeWidth="2" />
-                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
-                  </svg>
-                </div>
-                <h3>Monitoring intégré</h3>
-                <p>
-                  KPIs fraîcheur/complétude, alertes simples (saturation/pénurie), suivi
-                  de stabilité des features — pour des décisions fiables.
-                </p>
-              </article>
-
-              <article className="feature">
-                <div className="icon" aria-hidden="true">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <path d="M7 7h10v10H7z" stroke="currentColor" strokeWidth="2" />
-                    <path d="M3 3v6M3 3h6M21 21v-6M21 21h-6" stroke="currentColor" strokeWidth="2" />
-                  </svg>
-                </div>
-                <h3>Accessible partout</h3>
-                <p>
-                  Un simple <code>&lt;iframe&gt;</code> suffit (Cloud Run, proxy, sous-domaine),
-                  avec thème auto (clair/sombre) et navigation clavier.
-                </p>
-              </article>
-
-              <article className="feature">
-                <div className="icon" aria-hidden="true">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" strokeWidth="2" />
-                  </svg>
-                </div>
-                <h3>Pensé pour évoluer</h3>
-                <p>
-                  Code modulaire : nouveaux horizons (T+60), nouvelles villes, nouvelles
-                  sources — sans refonte complète.
-                </p>
-              </article>
-            </div>
-
-            <div className="glass prose mt-2">
-              <h3>Cas d’usage rapides</h3>
-              <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                <li>Communication et info voyageurs : carte intégrée à un site de quartier/entreprise.</li>
-                <li>Immobilier/événementiel : repérer les zones sous- ou sur-servies à l’instant T.</li>
-                <li>Mobilité individuelle : planifier un trajet avec station d’arrivée fiable.</li>
-              </ul>
-            </div>
-          </div>
-        </section>
-
-        {/* ====================== MONITORING ====================== */}
-        <section id="monitoring" aria-labelledby="monitoring-title">
-          <div className="container">
-            <div className="sec-head">
-              <div>
-                <h2 id="monitoring-title">Monitoring & Qualité des données</h2>
-                <p>
-                  Surveille en continu la fraîcheur, la couverture et les anomalies pour préserver la fiabilité des
-                  prévisions. Export des KPIs en JSON pour alimenter d’autres vues.
-                </p>
-              </div>
-              <a className="btn outline" href="#faq">
-                En savoir plus
-              </a>
-            </div>
-
-            <div className="showcase">
-              <figure className="card">
-                <figcaption className="cap">
-                  <strong>Data Health Dashboard</strong>
-                  <span>Détails techniques & KPIs</span>
-                </figcaption>
-                <div className="ratio">
-                  <small>Prévisualisation — insérez vos captures générées</small>
-                </div>
-              </figure>
-
-              <div className="kpi-row">
-                <figure className="card">
-                  <figcaption className="cap">
-                    <strong>Fraîcheur</strong>
-                    <span>Objectif ≤ 5 min</span>
-                  </figcaption>
-                  <div className="ratio" />
-                </figure>
-                <figure className="card">
-                  <figcaption className="cap">
-                    <strong>Complétude</strong>
-                    <span>Stations × heures</span>
-                  </figcaption>
-                  <div className="ratio" />
-                </figure>
-              </div>
-            </div>
-
-            <div className="glass prose mt-2">
-              <h3>Ce que l’on suit</h3>
-              <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                <li><strong>Freshness</strong> : p50/p95, hors-plage, trous de capture.</li>
-                <li><strong>Coverage</strong> : % lignes valides, champs critiques, NaN sûrs.</li>
-                <li><strong>Stability</strong> : dérive simple (KS/PSI) sur features clés.</li>
-                <li><strong>Alerts</strong> : pénurie/saturation anormales, outliers horaires.</li>
-              </ul>
-            </div>
-          </div>
-        </section>
-
-        {/* ====================== HOW ====================== */}
-        <section id="how" aria-labelledby="how-title">
-          <div className="container">
-            <div className="sec-head">
-              <div>
-                <h2 id="how-title">Sous le capot</h2>
-                <p>
-                  Un pipeline robuste de l’ingestion à la mise en prod, avec des composants simples à maintenir et des
-                  points de contrôle clairs.
-                </p>
-              </div>
-            </div>
-
-            <div className="steps" role="list">
-              <div className="step" role="listitem">
-                <span className="chip">1 · Ingestion</span>
-                <strong>GBFS → DuckDB</strong>
-                <p>Snapshots toutes les 5 minutes, consolidation journalière, schéma strict.</p>
-                <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
-                  <li>Parquet shardé (daily/weekly) pour IO efficaces.</li>
-                  <li>Clés station_id + tbin_utc, zones horaires UTC/locale.</li>
+                <ul className="text-muted" style={{ margin: "10px 0 0", paddingLeft: 18 }}>
+                  <li>Filtres quartier, recherche suggérée, focus proximité.</li>
+                  <li>Mises à jour live, transitions fluides, lisibilité renforcée.</li>
+                  <li>Prévisions calibrées, médiane historique et profils horaires.</li>
                 </ul>
-              </div>
-              <div className="step" role="listitem">
-                <span className="chip">2 · Enrichissement</span>
-                <strong>Features calendrier & météo</strong>
-                <p>Jour/semaine, vacances, sin/cos horaires, pluie/vent.</p>
-                <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
-                  <li>Rollings (lags, fenêtres 1–4 h) et indicateurs de tendance.</li>
-                  <li>Sanitization JSON (NaN→null) pour APIs propres.</li>
-                </ul>
-              </div>
-              <div className="step" role="listitem">
-                <span className="chip">3 · Modélisation</span>
-                <strong>LightGBM (T+15)</strong>
-                <p>Évaluation MAE/WAPE vs baseline persistance par segments.</p>
-                <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
-                  <li>Calibration légère, contrôle des sur-/sous-estimations.</li>
-                  <li>Artifacts versionnés (joblib) et manifest JSON.</li>
-                </ul>
-              </div>
-              <div className="step" role="listitem">
-                <span className="chip">4 · App & Docs</span>
-                <strong>Next.js + APIs</strong>
-                <p>Carte interactive, pages Réseau/Modèle/Monitoring/Data.</p>
-                <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
-                  <li>Déploiement Cloud Run, CORS maîtrisé, headers sûrs.</li>
-                  <li>Static props + lazy pour une UX perçue plus rapide.</li>
-                </ul>
-              </div>
-            </div>
 
-            <div className="glass prose mt-2">
-              <h3>Pourquoi c’est fiable ?</h3>
-              <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                <li>Tests unitaires sur parsing/horodatage et contrats de schéma.</li>
-                <li>Nettoyage systématique des valeurs infinies/NaN avant export.</li>
-                <li>Monitoring indépendant et exports JSON réutilisables.</li>
-              </ul>
-            </div>
-          </div>
-        </section>
+                <div className="cta">
+                  <a className="btn" href="#demo" aria-label="Ouvrir la démo en direct">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M7 7h10v10H7z" stroke="white" strokeWidth="1.8" />
+                      <path d="M3 3v6M3 3h6M21 21v-6M21 21h-6" stroke="white" strokeWidth="1.8" />
+                    </svg>
+                    Ouvrir la démo
+                  </a>
+                  <a className="btn outline" href="#how">
+                    Architecture
+                  </a>
+                  <a className="btn outline" href="#monitoring">
+                    Monitoring
+                  </a>
+                </div>
 
-        {/* ====================== FAQ ====================== */}
-        <section id="faq" aria-labelledby="faq-title">
-          <div className="container grid-2">
-            <div>
+                <div className="tech-chips">
+                  <span className="chip">Cloud Run</span>
+                  <span className="chip">Next.js</span>
+                  <span className="chip">React-Leaflet</span>
+                  <span className="chip">DuckDB</span>
+                  <span className="chip">LightGBM</span>
+                </div>
+              </div>
+
+              <aside className="glass hero-card" aria-label="Indicateurs clés">
+                <h3>En chiffres — 7 derniers jours</h3>
+
+                {/* KPI BAR — auto-slide (piste interne en JSX) */}
+                <div className="kpi-bar-wrap">
+                  <div className="kpi-bar kpi-bar--scroll kpi-bar--auto kpi-bar--dense" role="list">
+                    <div className="kpi-track">
+                      <div className="kpi-card" role="listitem">
+                        <div className="kpi__label">Observations couvertes</div>
+                        <div className="kpi__row">
+                          <div className="kpi__value" data-count="98%">0%</div>
+                        </div>
+                      </div>
+
+                      <div className="kpi-card" role="listitem">
+                        <div className="kpi__label">Fraîcheur (p95)</div>
+                        <div className="kpi__row">
+                          <div className="kpi__value" data-count="5">0</div>
+                          <span className="kpi__hint">min</span>
+                        </div>
+                      </div>
+
+                      <div className="kpi-card" role="listitem">
+                        <div className="kpi__label">Stations suivies</div>
+                        <div className="kpi__row">
+                          <div className="kpi__value" data-count="1400">0</div>
+                        </div>
+                      </div>
+
+                      <div className="kpi-card is-muted" role="listitem">
+                        <div className="kpi__label">Drift (7j)</div>
+                        <div className="kpi__row">
+                          <div className="kpi__value" data-count="0.3">0</div>
+                          <span className="kpi-delta kpi-delta--ok">stable</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* meta sous la barre (optionnelle) */}
+                  <div className="kpi-bar-meta">Démo · valeurs illustratives</div>
+                </div>
+
+                <div className="embed">
+                  <div className="ratio">
+                    <small>Prévisualisation statique — lancez la démo ci-dessous</small>
+                  </div>
+                </div>
+
+                <ul className="text-muted" style={{ margin: "12px 0 0", paddingLeft: 18 }}>
+                  <li>MAE baseline vs modèle, par station et par segments.</li>
+                  <li>Défaut tolérant : trous comblés, horodatage strict, NaN sûrs.</li>
+                </ul>
+              </aside>
+            </div>
+          </section>
+
+          {/* ====================== DEMO (iframe) ====================== */}
+          <section id="demo" className="panel" aria-labelledby="demo-title">
+            <div className="container">
               <div className="sec-head">
-                <h2 id="faq-title">FAQ</h2>
+                <div>
+                  <h2 id="demo-title">Démo en direct</h2>
+                  <p>
+                    Application React embarquée : carte en direct, recherche de stations, et
+                    prévisions à +15 minutes. Le premier accès peut prendre quelques secondes
+                    (cold start Cloud Run).
+                  </p>
+                </div>
+                <div>
+                  <span className="kbd" aria-hidden="true">
+                    Alt
+                  </span>{" "}
+                  +{" "}
+                  <span className="kbd" aria-hidden="true">
+                    Clique
+                  </span>{" "}
+                  <span className="sr-only">Astuce :</span> pour plein écran
+                </div>
               </div>
 
-              <details>
-                <summary>La démo met quelques secondes à démarrer, normal ?</summary>
-                <p>
-                  Oui, c’est le cold start de Cloud Run. Les accès suivants sont instantanés.
-                  Vous pouvez configurer une instance minimum pour éviter ce délai.
-                </p>
-              </details>
+              <div className="embed" aria-live="polite">
+                <div className="skeleton" id="skeleton" ref={demoSkeletonRef}>
+                  Initialisation de la démo…
+                </div>
+                <iframe
+                  ref={demoIframeRef}
+                  title="Vélib’ Forecast — Application"
+                  src="https://velib-ui-160046094975.europe-west1.run.app/"
+                  loading="lazy"
+                  allow="fullscreen; clipboard-read; clipboard-write"
+                  referrerPolicy="no-referrer-when-downgrade"
+                />
+                <button
+                  className="btn btn-fs"
+                  type="button"
+                  onClick={handleFullscreen}
+                  aria-label="Plein écran"
+                >
+                  Plein écran
+                </button>
+              </div>
 
-              <details>
-                <summary>Puis-je intégrer l’app dans mon site ?</summary>
-                <p>
-                  Oui, via un simple <code>&lt;iframe&gt;</code>. La page gère le responsive,
-                  le thème clair/sombre et la navigation clavier.
-                </p>
-              </details>
+              <div className="actions-row">
+                <a
+                  className="btn"
+                  href="https://velib-ui-160046094975.europe-west1.run.app/"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  Ouvrir dans un onglet
+                </a>
+                <button className="btn outline" type="button" onClick={handleReload}>
+                  Recharger la démo
+                </button>
+                <a className="btn outline" href="#features">
+                  Découvrir les fonctions
+                </a>
+              </div>
 
-              <details>
-                <summary>Comment sont calculées les prévisions ?</summary>
-                <p>
-                  Entraînement station-par-station avec signaux calendrier/météo. Une baseline
-                  de persistance permet de mesurer l’amélioration réelle et d’éviter
-                  les gains artificiels.
-                </p>
-              </details>
-
-              <details>
-                <summary>Et la qualité des données ?</summary>
-                <p>
-                  Contrôles de fraîcheur (p50/p95), complétude des champs critiques, dérive
-                  simple des features, et alertes sur pénurie/saturation. Exports JSON
-                  pour vos propres tableaux de bord.
-                </p>
-              </details>
+              <div className="glass prose mt-2">
+                <h3>Pourquoi c’est fluide ?</h3>
+                <ul className="text-muted" style={{ paddingLeft: 18 }}>
+                  <li>Préchargement DNS et connexions persistantes.</li>
+                  <li>Découpage UI, caches navigateur et CDN.</li>
+                  <li>Metrics RUM pour piloter l’expérience réelle.</li>
+                </ul>
+              </div>
             </div>
+          </section>
 
-            <aside className="glass prose">
-              <h3>Intégration Cloud Run</h3>
-              <p className="text-muted">Remplacez l’URL ci-dessous par l’endpoint public de votre service.</p>
-              <pre>
-                <code>{`<iframe
+          {/* ====================== FEATURES ====================== */}
+          <section id="features" className="panel" aria-labelledby="features-title">
+            <div className="container">
+              <div className="sec-head">
+                <div>
+                  <h2 id="features-title">Plein usage, du matin au soir</h2>
+                  <p>
+                    Repérez les stations utiles, visualisez l’évolution à +15 min, comparez à la médiane,
+                    puis basculez en mode monitoring si besoin.
+                  </p>
+                </div>
+                <a className="btn outline" href="#demo">
+                  Essayer maintenant
+                </a>
+              </div>
+
+              <div className="features">
+                <article className="feature">
+                  <div className="icon" aria-hidden="true">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <path d="M12 7v10M7 12h10" stroke="currentColor" strokeWidth="2" />
+                    </svg>
+                  </div>
+                  <h3>Carte lisible & rapide</h3>
+                  <p>
+                    Couleurs travaillées, légende compacte, recherche instantanée, focus quartier. Affichage
+                    pensé pour 1–2 infos clés par station (vélos/capacité + tendance).
+                  </p>
+                </article>
+
+                <article className="feature">
+                  <div className="icon" aria-hidden="true">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <path d="M3 12a9 9 0 1018 0A9 9 0 003 12z" stroke="currentColor" strokeWidth="2" />
+                      <path d="M12 7v6l4 2" stroke="currentColor" strokeWidth="2" />
+                    </svg>
+                  </div>
+                  <h3>Prévisions à +15 min</h3>
+                  <p>
+                    Modèle entraîné sur l’historique et enrichi météo (vents, pluie, saisonnalités).
+                    Calibrage par segments horaires et stations pour limiter les biais.
+                  </p>
+                </article>
+
+                <article className="feature">
+                  <div className="icon" aria-hidden="true">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <path d="M4 4h16v16H4z" stroke="currentColor" strokeWidth="2" />
+                      <path d="M4 9h16M9 4v16" stroke="currentColor" strokeWidth="2" />
+                    </svg>
+                  </div>
+                  <h3>Comparaisons utiles</h3>
+                  <p>
+                    “Aujourd’hui vs médiane” et profils horaires par station pour comprendre les dynamiques
+                    locales (heures de pointe, zones de reports, anomalies).
+                  </p>
+                </article>
+
+                <article className="feature">
+                  <div className="icon" aria-hidden="true">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <path d="M4 12h16" stroke="currentColor" strokeWidth="2" />
+                      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
+                    </svg>
+                  </div>
+                  <h3>Monitoring intégré</h3>
+                  <p>
+                    KPIs fraîcheur/complétude, alertes simples (saturation/pénurie), suivi de stabilité des
+                    features — pour des décisions fiables.
+                  </p>
+                </article>
+
+                <article className="feature">
+                  <div className="icon" aria-hidden="true">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <path d="M7 7h10v10H7z" stroke="currentColor" strokeWidth="2" />
+                      <path d="M3 3v6M3 3h6M21 21v-6M21 21h-6" stroke="currentColor" strokeWidth="2" />
+                    </svg>
+                  </div>
+                  <h3>Accessible partout</h3>
+                  <p>
+                    Un simple <code>&lt;iframe&gt;</code> suffit (Cloud Run, proxy, sous-domaine), avec thème
+                    auto (clair/sombre) et navigation clavier.
+                  </p>
+                </article>
+
+                <article className="feature">
+                  <div className="icon" aria-hidden="true">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" strokeWidth="2" />
+                    </svg>
+                  </div>
+                  <h3>Pensé pour évoluer</h3>
+                  <p>
+                    Code modulaire : nouveaux horizons (T+60), nouvelles villes, nouvelles sources — sans
+                    refonte complète.
+                  </p>
+                </article>
+              </div>
+
+              <div className="glass prose mt-2">
+                <h3>Cas d’usage rapides</h3>
+                <ul className="text-muted" style={{ paddingLeft: 18 }}>
+                  <li>
+                    Communication et info voyageurs : carte intégrée à un site de quartier/entreprise.
+                  </li>
+                  <li>
+                    Immobilier/événementiel : repérer les zones sous- ou sur-servies à l’instant T.
+                  </li>
+                  <li>Mobilité individuelle : planifier un trajet avec station d’arrivée fiable.</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          {/* ====================== MONITORING ====================== */}
+          <section id="monitoring" className="panel" aria-labelledby="monitoring-title">
+            <div className="container">
+              <div className="sec-head">
+                <div>
+                  <h2 id="monitoring-title">Monitoring & Qualité des données</h2>
+                  <p>
+                    Surveille en continu la fraîcheur, la couverture et les anomalies pour préserver la
+                    fiabilité des prévisions. Export des KPIs en JSON pour alimenter d’autres vues.
+                  </p>
+                </div>
+                <a className="btn outline" href="#faq">
+                  En savoir plus
+                </a>
+              </div>
+
+              <div className="showcase">
+                <figure className="card">
+                  <figcaption className="cap">
+                    <strong>Data Health Dashboard</strong>
+                    <span>Détails techniques & KPIs</span>
+                  </figcaption>
+                  <div className="ratio">
+                    <small>Prévisualisation — insérez vos captures générées</small>
+                  </div>
+                </figure>
+
+                <div className="kpi-row">
+                  <figure className="card">
+                    <figcaption className="cap">
+                      <strong>Fraîcheur</strong>
+                      <span>Objectif ≤ 5 min</span>
+                    </figcaption>
+                    <div className="ratio" />
+                  </figure>
+                  <figure className="card">
+                    <figcaption className="cap">
+                      <strong>Complétude</strong>
+                      <span>Stations × heures</span>
+                    </figcaption>
+                    <div className="ratio" />
+                  </figure>
+                </div>
+              </div>
+
+              <div className="glass prose mt-2">
+                <h3>Ce que l’on suit</h3>
+                <ul className="text-muted" style={{ paddingLeft: 18 }}>
+                  <li>
+                    <strong>Freshness</strong> : p50/p95, hors-plage, trous de capture.
+                  </li>
+                  <li>
+                    <strong>Coverage</strong> : % lignes valides, champs critiques, NaN sûrs.
+                  </li>
+                  <li>
+                    <strong>Stability</strong> : dérive simple (KS/PSI) sur features clés.
+                  </li>
+                  <li>
+                    <strong>Alerts</strong> : pénurie/saturation anormales, outliers horaires.
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          {/* ====================== HOW ====================== */}
+          <section id="how" className="panel" aria-labelledby="how-title">
+            <div className="container">
+              <div className="sec-head">
+                <div>
+                  <h2 id="how-title">Sous le capot</h2>
+                  <p>
+                    Un pipeline robuste de l’ingestion à la mise en prod, avec des composants simples à
+                    maintenir et des points de contrôle clairs.
+                  </p>
+                </div>
+              </div>
+
+              <div className="steps" role="list">
+                <div className="step" role="listitem">
+                  <span className="chip">1 · Ingestion</span>
+                  <strong>GBFS → DuckDB</strong>
+                  <p>Snapshots toutes les 5 minutes, consolidation journalière, schéma strict.</p>
+                  <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
+                    <li>Parquet shardé (daily/weekly) pour IO efficaces.</li>
+                    <li>Clés station_id + tbin_utc, zones horaires UTC/locale.</li>
+                  </ul>
+                </div>
+                <div className="step" role="listitem">
+                  <span className="chip">2 · Enrichissement</span>
+                  <strong>Features calendrier & météo</strong>
+                  <p>Jour/semaine, vacances, sin/cos horaires, pluie/vent.</p>
+                  <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
+                    <li>Rollings (lags, fenêtres 1–4 h) et indicateurs de tendance.</li>
+                    <li>Sanitization JSON (NaN→null) pour APIs propres.</li>
+                  </ul>
+                </div>
+                <div className="step" role="listitem">
+                  <span className="chip">3 · Modélisation</span>
+                  <strong>LightGBM (T+15)</strong>
+                  <p>Évaluation MAE/WAPE vs baseline persistance par segments.</p>
+                  <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
+                    <li>Calibration légère, contrôle des sur-/sous-estimations.</li>
+                    <li>Artifacts versionnés (joblib) et manifest JSON.</li>
+                  </ul>
+                </div>
+                <div className="step" role="listitem">
+                  <span className="chip">4 · App & Docs</span>
+                  <strong>Next.js + APIs</strong>
+                  <p>Carte interactive, pages Réseau/Modèle/Monitoring/Data.</p>
+                  <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
+                    <li>Déploiement Cloud Run, CORS maîtrisé, headers sûrs.</li>
+                    <li>Static props + lazy pour une UX perçue plus rapide.</li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="glass prose mt-2">
+                <h3>Pourquoi c’est fiable ?</h3>
+                <ul className="text-muted" style={{ paddingLeft: 18 }}>
+                  <li>Tests unitaires sur parsing/horodatage et contrats de schéma.</li>
+                  <li>Nettoyage systématique des valeurs infinies/NaN avant export.</li>
+                  <li>Monitoring indépendant et exports JSON réutilisables.</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          {/* ====================== FAQ ====================== */}
+          <section id="faq" className="panel" aria-labelledby="faq-title">
+            <div className="container grid-2">
+              <div>
+                <div className="sec-head">
+                  <h2 id="faq-title">FAQ</h2>
+                </div>
+
+                <details>
+                  <summary>La démo met quelques secondes à démarrer, normal ?</summary>
+                  <p>
+                    Oui, c’est le cold start de Cloud Run. Les accès suivants sont instantanés. Vous pouvez
+                    configurer une instance minimum pour éviter ce délai.
+                  </p>
+                </details>
+
+                <details>
+                  <summary>Puis-je intégrer l’app dans mon site ?</summary>
+                  <p>
+                    Oui, via un simple <code>&lt;iframe&gt;</code>. La page gère le responsive, le thème
+                    clair/sombre et la navigation clavier.
+                  </p>
+                </details>
+
+                <details>
+                  <summary>Comment sont calculées les prévisions ?</summary>
+                  <p>
+                    Entraînement station-par-station avec signaux calendrier/météo. Une baseline de persistance
+                    permet de mesurer l’amélioration réelle et d’éviter les gains artificiels.
+                  </p>
+                </details>
+
+                <details>
+                  <summary>Et la qualité des données ?</summary>
+                  <p>
+                    Contrôles de fraîcheur (p50/p95), complétude des champs critiques, dérive simple des
+                    features, et alertes sur pénurie/saturation. Exports JSON pour vos propres tableaux de
+                    bord.
+                  </p>
+                </details>
+              </div>
+
+              <aside className="glass prose">
+                <h3>Intégration Cloud Run</h3>
+                <p className="text-muted">Remplacez l’URL ci-dessous par l’endpoint public de votre service.</p>
+                <pre>
+                  <code>{`<iframe
   src="https://velib-ui-160046094975.europe-west1.run.app/"
   width="100%" height="68vh" style="border:0"
   allow="fullscreen"></iframe>`}</code>
-              </pre>
-              <p className="text-muted" style={{ fontSize: ".95rem" }}>
-                Vous pouvez aussi placer l’app derrière un sous-domaine (ex. <em>app.votredomaine.fr</em>),
-                avec un enregistrement CNAME et des headers de sécurité adaptés.
-              </p>
-              <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                <li>CORS restreint, CSP stricte, cookies “None; Secure”.</li>
-                <li>Build reproductible, image minimale, endpoint de santé /ready.</li>
-              </ul>
-            </aside>
-          </div>
-        </section>
-
-        {/* ====================== SUPPORT ====================== */}
-        <section id="support" aria-labelledby="support-title">
-          <div className="container">
-            <div className="sec-head">
-              <div>
-                <h2 id="support-title">Soutenir le projet</h2>
-                <p>
-                  Ce projet est développé et maintenu indépendamment pour proposer une expérience fluide de la
-                  mobilité à Paris. Votre soutien permet de couvrir l’hébergement, la supervision et le temps de R&D.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid-2">
-              {/* Bio courte */}
-              <article className="glass prose">
-                <h3>À propos</h3>
-                <p className="text-muted">
-                  Je m’appelle <strong>Adrien</strong>, ingénieur en mathématiques appliquées spécialisé en
-                  analyse, modélisation statistique et machine learning. J’aime transformer des données réelles
-                  en outils utiles, fiables et élégants – ici, pour anticiper la disponibilité des vélos en ville.
+                </pre>
+                <p className="text-muted" style={{ fontSize: ".95rem" }}>
+                  Vous pouvez aussi placer l’app derrière un sous-domaine (ex. <em>app.votredomaine.fr</em>),
+                  avec un enregistrement CNAME et des headers de sécurité adaptés.
                 </p>
                 <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                  <li>Pipeline temps réel (GBFS + météo) et modèles LightGBM.</li>
-                  <li>App Next.js avec carte interactive et monitoring dédié.</li>
-                  <li>Hébergement sur Cloud Run, coûts optimisés.</li>
+                  <li>CORS restreint, CSP stricte, cookies “None; Secure”.</li>
+                  <li>Build reproductible, image minimale, endpoint de santé /ready.</li>
                 </ul>
-                <p className="text-muted" style={{ fontSize: ".95rem" }}>
-                  Vous pouvez contribuer une fois, vous abonner mensuellement, ou devenir sponsor. Merci 🙏
+              </aside>
+            </div>
+          </section>
+
+          {/* ====================== SUPPORT ====================== */}
+          <section id="support" className="panel" aria-labelledby="support-title">
+            <div className="container">
+              <div className="sec-head">
+                <div>
+                  <h2 id="support-title">Soutenir le projet</h2>
+                  <p>
+                    Ce projet est développé et maintenu indépendamment pour proposer une expérience fluide de la
+                    mobilité à Paris. Votre soutien permet de couvrir l’hébergement, la supervision et le temps de R&D.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid-2">
+                {/* Bio courte */}
+                <article className="glass prose">
+                  <h3>À propos</h3>
+                  <p className="text-muted">
+                    Je m’appelle <strong>Adrien</strong>, ingénieur en mathématiques appliquées spécialisé en
+                    analyse, modélisation statistique et machine learning. J’aime transformer des données réelles
+                    en outils utiles, fiables et élégants – ici, pour anticiper la disponibilité des vélos en ville.
+                  </p>
+                  <ul className="text-muted" style={{ paddingLeft: 18 }}>
+                    <li>Pipeline temps réel (GBFS + météo) et modèles LightGBM.</li>
+                    <li>App Next.js avec carte interactive et monitoring dédié.</li>
+                    <li>Hébergement sur Cloud Run, coûts optimisés.</li>
+                  </ul>
+                  <p className="text-muted" style={{ fontSize: ".95rem" }}>
+                    Vous pouvez contribuer une fois, vous abonner mensuellement, ou devenir sponsor. Merci 🙏
+                  </p>
+                </article>
+
+                {/* Cartes de paiement */}
+                <div className="support-cards">
+                  <figure className="card">
+                    <figcaption className="cap">
+                      <strong>Don unique</strong>
+                      <span>Rapide et sans compte</span>
+                    </figcaption>
+                    <div className="ratio" />
+                    <div className="actions-row">
+                      <a className="btn" href={SUPPORT_ONE_TIME} target="_blank" rel="noopener">
+                        Contribuer une fois
+                      </a>
+                      <a className="btn outline" href={SUPPORT_KOFI} target="_blank" rel="noopener">
+                        Ko-fi
+                      </a>
+                    </div>
+                    <small className="text-muted" style={{ display: "block", marginTop: 8 }}>
+                      Géré par Stripe/Ko-fi. Les frais de plateforme s’appliquent.
+                    </small>
+                  </figure>
+
+                  <figure className="card">
+                    <figcaption className="cap">
+                      <strong>Mensuel</strong>
+                      <span>Annulable à tout moment</span>
+                    </figcaption>
+                    <div className="ratio" />
+                    <div className="actions-row">
+                      <a className="btn" href={SUPPORT_MONTHLY} target="_blank" rel="noopener">
+                        Soutien mensuel
+                      </a>
+                      <a className="btn outline" href={SUPPORT_SPONSORS} target="_blank" rel="noopener">
+                        GitHub Sponsors
+                      </a>
+                    </div>
+                    <small className="text-muted" style={{ display: "block", marginTop: 8 }}>
+                      Abonnements sécurisés. Reçus automatiques par e-mail.
+                    </small>
+                  </figure>
+                </div>
+              </div>
+
+              {/* Encadré fiscalité / contact */}
+              <div className="glass prose mt-2">
+                <h3>Transparence & contact</h3>
+                <ul className="text-muted" style={{ paddingLeft: 18 }}>
+                  <li>Les contributions financent l’hébergement, la supervision et l’amélioration continue.</li>
+                  <li>Pas de contreparties fiscales particulières (don non-déductible), sauf mention contraire.</li>
+                  <li>
+                    Besoin d’un reçu, d’une facture ou d’un partenariat ? Écrivez-moi :{" "}
+                    <em>contact@votredomaine.fr</em>.
+                  </li>
+                </ul>
+                <p className="small muted" style={{ marginTop: 8 }}>
+                  © {year} • Vélib’ Forecast Paris
                 </p>
-              </article>
-
-              {/* Cartes de paiement */}
-              <div className="support-cards">
-                <figure className="card">
-                  <figcaption className="cap">
-                    <strong>Don unique</strong>
-                    <span>Rapide et sans compte</span>
-                  </figcaption>
-                  <div className="ratio" />
-                  <div className="actions-row">
-                    <a className="btn" href={SUPPORT_ONE_TIME} target="_blank" rel="noopener">
-                      Contribuer une fois
-                    </a>
-                    <a className="btn outline" href={SUPPORT_KOFI} target="_blank" rel="noopener">
-                      Ko-fi
-                    </a>
-                  </div>
-                  <small className="text-muted" style={{ display: "block", marginTop: 8 }}>
-                    Géré par Stripe/Ko-fi. Les frais de plateforme s’appliquent.
-                  </small>
-                </figure>
-
-                <figure className="card">
-                  <figcaption className="cap">
-                    <strong>Mensuel</strong>
-                    <span>Annulable à tout moment</span>
-                  </figcaption>
-                  <div className="ratio" />
-                  <div className="actions-row">
-                    <a className="btn" href={SUPPORT_MONTHLY} target="_blank" rel="noopener">
-                      Soutien mensuel
-                    </a>
-                    <a className="btn outline" href={SUPPORT_SPONSORS} target="_blank" rel="noopener">
-                      GitHub Sponsors
-                    </a>
-                  </div>
-                  <small className="text-muted" style={{ display: "block", marginTop: 8 }}>
-                    Abonnements sécurisés. Reçus automatiques par e-mail.
-                  </small>
-                </figure>
               </div>
             </div>
-
-            {/* Encadré fiscalité / contact */}
-            <div className="glass prose mt-2">
-              <h3>Transparence & contact</h3>
-              <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                <li>Les contributions financent l’hébergement, la supervision et l’amélioration continue.</li>
-                <li>Pas de contreparties fiscales particulières (don non-déductible), sauf mention contraire.</li>
-                <li>Besoin d’un reçu, d’une facture ou d’un partenariat ? Écrivez-moi : <em>contact@votredomaine.fr</em>.</li>
-              </ul>
-            </div>
-          </div>
-        </section>
-      </main>
+          </section>
+        </main>
+      </div>
 
       {/* Footer global */}
       <GlobalFooter />

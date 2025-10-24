@@ -6,6 +6,7 @@ import type * as Plotly from "plotly.js";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
 import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
 import KpiBar from "@/components/monitoring/KpiBar";
+import { chartConfig, chartLayout } from "@/lib/plotlyTheme";
 
 import {
   getStationsKpis,
@@ -57,7 +58,7 @@ function hist(
   name: string,
   nbins = 24
 ): Partial<Plotly.PlotData> & { nbinsx?: number } {
-  return { x, type: "histogram" as const, name, nbinsx: nbins, opacity: 0.9 };
+  return { x, type: "histogram" as const, name, nbinsx: nbins, opacity: 0.9, hovertemplate: "%{x:.1f}<extra></extra>" };
 }
 function boxY(
   y: number[],
@@ -65,7 +66,7 @@ function boxY(
 ): Partial<Plotly.PlotData> & {
   boxpoints?: false | "all" | "outliers" | "suspectedoutliers";
 } {
-  return { y, type: "box" as const, name, boxpoints: false };
+  return { y, type: "box" as const, name, boxpoints: false, hovertemplate: "%{y:.2f}<extra></extra>" };
 }
 
 /* ───────────────── Mini MapView (Leaflet) ───────────────── */
@@ -84,16 +85,8 @@ const MapView = dynamic(async () => {
   const { useEffect, useMemo, useState } = await import("react");
 
   const palette = [
-    "#1f77b4",
-    "#ff7f0e",
-    "#2ca02c",
-    "#d62728",
-    "#9467bd",
-    "#8c564b",
-    "#e377c2",
-    "#7f7f7f",
-    "#bcbd22",
-    "#17becf",
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
   ];
 
   function colorOfCluster(c: number | null | undefined, uniq: number[]) {
@@ -106,13 +99,9 @@ const MapView = dynamic(async () => {
     const map = useMap();
     useEffect(() => {
       if (!rows.length) return;
-      let minLat = 90,
-        maxLat = -90,
-        minLon = 180,
-        maxLon = -180;
+      let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
       for (const r of rows) {
-        const la = Number(r.lat),
-          lo = Number(r.lon);
+        const la = Number(r.lat), lo = Number(r.lon);
         if (!Number.isFinite(la) || !Number.isFinite(lo)) continue;
         if (la < minLat) minLat = la;
         if (la > maxLat) maxLat = la;
@@ -120,13 +109,7 @@ const MapView = dynamic(async () => {
         if (lo > maxLon) maxLon = lo;
       }
       if (minLat <= maxLat && minLon <= maxLon) {
-        map.fitBounds(
-          [
-            [minLat, minLon],
-            [maxLat, maxLon],
-          ],
-          { padding: [20, 20] }
-        );
+        map.fitBounds([[minLat, minLon], [maxLat, maxLon]], { padding: [20, 20] });
       }
     }, [rows, map]);
     return null;
@@ -192,24 +175,15 @@ const MapView = dynamic(async () => {
                 key={r.station_id}
                 center={[r.lat, r.lon]}
                 radius={rad}
-                pathOptions={{
-                  color: col,
-                  weight: 0.8,
-                  fillColor: col,
-                  fillOpacity: 0.8,
-                }}
+                pathOptions={{ color: col, weight: 0.8, fillColor: col, fillOpacity: 0.8 }}
               >
                 <Tooltip>
                   <div style={{ display: "grid", gap: 4 }}>
-                    <div>
-                      <b>{r.name ?? r.station_id}</b>
-                    </div>
+                    <div><b>{r.name ?? r.station_id}</b></div>
                     {Number.isFinite(cap) && <div>cap≈{cap | 0}</div>}
                     <div>cluster: {r.cluster ?? "—"}</div>
                     <a
-                      href={`/monitoring/network/dynamics?station_id=${encodeURIComponent(
-                        r.station_id
-                      )}`}
+                      href={`/monitoring/network/dynamics?station_id=${encodeURIComponent(r.station_id)}`}
                       style={{ textDecoration: "underline" }}
                     >
                       View dynamics →
@@ -239,15 +213,7 @@ const MapView = dynamic(async () => {
         >
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Clusters</div>
           {uniq.map((c) => (
-            <div
-              key={String(c)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                margin: "2px 0",
-              }}
-            >
+            <div key={String(c)} style={{ display: "flex", alignItems: "center", gap: 6, margin: "2px 0" }}>
               <span
                 style={{
                   width: 12,
@@ -284,40 +250,40 @@ export default function NetworkStationsPage() {
   const [sizeByCapacity, setSizeByCapacity] = useState<boolean>(true);
   const [autoFit, setAutoFit] = useState<boolean>(true);
 
-  // ✅ Statut uniforme pour la barre
+  // ✅ LoadingBar status (aligned with overview.tsx)
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
+  /* // CSV export (désactivé pour le moment)
   function exportCSV() {
     const rows = filteredRows;
     const header = ["station_id", "name", "lat", "lon", "capacity_est", "cluster"];
     const lines = [
       header.join(","),
       ...rows.map((r) =>
-        header
-          .map((k) => {
-            const v = (r as any)[k];
-            if (v == null) return "";
-            const s = String(v).replace(/"/g, '""');
-            return /[",\n]/.test(s) ? `"${s}"` : s;
-          })
-          .join(",")
+        header.map((k) => {
+          const v = (r as any)[k];
+          if (v == null) return "";
+          const s = String(v).replace(/"/g, '""');
+          return /[",\n]/.test(s) ? `"${s}"` : s;
+        }).join(",")
       ),
     ];
-    const blob = new Blob([lines.join("\n")], {
-      type: "text/csv;charset=utf-8",
-    });
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "network_stations_clusters.csv";
     a.click();
     URL.revokeObjectURL(a.href);
   }
+  */
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         setLoading(true);
+
+        // Fetch all in parallel
         const [rKpis, rCent, rStats] = await Promise.allSettled([
           getStationsKpis(),
           getStationsCentroids(),
@@ -332,26 +298,27 @@ export default function NetworkStationsPage() {
         setCentroids(c);
         setStats7Doc(s7);
 
+        // Error on partial failure
+        const failures = [rKpis, rCent, rStats].filter(
+          (r): r is PromiseRejectedResult => r.status === "rejected"
+        );
+        setError(failures.length ? failures.map((f) => String((f.reason && (f.reason.message ?? f.reason)) || "request failed")).join(" | ") : null);
+
+        // Build clusterRows from stats7
         if (s7 && Array.isArray(s7.rows)) {
           let rows = s7.rows.map((x: any) => ({
             station_id: String(x.station_id),
             name: x.name ?? undefined,
             lat: Number.isFinite(Number(x.lat)) ? Number(x.lat) : NaN,
             lon: Number.isFinite(Number(x.lon)) ? Number(x.lon) : NaN,
-            capacity_est: Number.isFinite(Number(x.capacity_est))
-              ? Number(x.capacity_est)
-              : NaN,
+            capacity_est: Number.isFinite(Number(x.capacity_est)) ? Number(x.capacity_est) : NaN,
             cluster: x.cluster != null ? Number(x.cluster) : null,
           })) as ClusterRow[];
 
-          // backfill coords/capacity from stations index if missing
-          let haveCoords = rows.some(
-            (r) => Number.isFinite(r.lat) && Number.isFinite(r.lon)
-          );
+          // Backfill if missing
+          let haveCoords = rows.some((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon));
           if (!haveCoords) {
-            const idx = await fetchStationsIndex().catch(
-              () => ({} as Record<string, StationMeta>)
-            );
+            const idx = await fetchStationsIndex().catch(() => ({} as Record<string, StationMeta>));
             rows = rows.map((r) => {
               if (!Number.isFinite(r.lat) || !Number.isFinite(r.lon)) {
                 const m = idx[r.station_id];
@@ -372,25 +339,18 @@ export default function NetworkStationsPage() {
               return r;
             });
           }
-          setClusterRows(
-            rows.filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon))
-          );
+          setClusterRows(rows.filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon)));
         }
-
-        setError(null);
       } catch (e: any) {
         if (alive) setError(String(e?.message ?? e));
       } finally {
         if (alive) setLoading(false);
       }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
-  const generatedAt =
-    kpis?.generated_at ?? centroids?.generated_at ?? stats7Doc?.generated_at;
+  const generatedAt = kpis?.generated_at ?? centroids?.generated_at ?? stats7Doc?.generated_at;
 
   const filteredRows = useMemo(() => {
     let arr = clusterRows;
@@ -420,6 +380,7 @@ export default function NetworkStationsPage() {
         mode: "lines" as const,
         name: `Cluster ${c.cluster}`,
         connectgaps: false,
+        hovertemplate: "%{x} — %{y:.2f}<extra>Cluster " + c.cluster + "</extra>",
       }));
   }, [centroids, xLabels]);
 
@@ -428,42 +389,29 @@ export default function NetworkStationsPage() {
     .map((r) => parseRatioLoose(r["coverage_pct"]))
     .filter(isFiniteNum)
     .map((v) => v * 100);
-  const volatilityAll = rows
-    .map((r) => parseNumberLoose(r["volatility"]))
-    .filter(isFiniteNum);
-  const penuryPct = rows
-    .map((r) => parseRatioLoose(r["penury_rate"]) * 100)
-    .filter(isFiniteNum);
-  const saturationPct = rows
-    .map((r) => parseRatioLoose(r["saturation_rate"]) * 100)
-    .filter(isFiniteNum);
+  const volatilityAll = rows.map((r) => parseNumberLoose(r["volatility"])).filter(isFiniteNum);
+  const penuryPct = rows.map((r) => parseRatioLoose(r["penury_rate"]) * 100).filter(isFiniteNum);
+  const saturationPct = rows.map((r) => parseRatioLoose(r["saturation_rate"]) * 100).filter(isFiniteNum);
 
   return (
     <div className="monitoring">
       <Head>
         <title>Monitoring — Network / Stations</title>
-        <meta
-          name="description"
-          content="Clusters map + 24h profiles (centroids) and recent distributions."
-        />
+        <meta name="description" content="Clusters map + 24h profiles (centroids) and recent distributions." />
       </Head>
 
-      {/* Contenu principal (header/footer injectés par _app.tsx) */}
-      <main
-        className="page"
-        style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}
-      >
+      {/* Main content (header/footer injected by _app.tsx) */}
+      <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
           title="Network — Stations"
           subtitle="Clusters, map and distributions"
           generatedAt={generatedAt}
           extraActions={[
-            { label: "Stations", href: "/monitoring/network/stations" },
-            { label: "Performance", href: "/monitoring/model/performance" },
+            { label: "Overview", href: "/monitoring/network/overview" },
+            { label: "Dynamics", href: "/monitoring/network/dynamics" },
           ]}
         />
 
-        {/* Loading / Error → LoadingBar uniforme */}
         <LoadingBar status={barStatus} />
 
         {/* ───────────────── KPIs (KpiBar) ───────────────── */}
@@ -480,7 +428,6 @@ export default function NetworkStationsPage() {
             ]}
           />
 
-          {/* Meta sous la barre (pas dans les étiquettes) */}
           <div className="kpi-bar-meta">
             Window: {kpis?.window_days ?? "—"} days · Schema v{kpis?.schema_version ?? "—"}
           </div>
@@ -499,86 +446,65 @@ export default function NetworkStationsPage() {
             <select
               className="select"
               value={clusterFilter ?? ""}
-              onChange={(e) =>
-                setClusterFilter(
-                  e.target.value === "" ? null : Number(e.target.value)
-                )
-              }
+              onChange={(e) => setClusterFilter(e.target.value === "" ? null : Number(e.target.value))}
             >
               <option value="">All clusters</option>
-              {Array.from(
-                new Set(clusterRows.map((r) => r.cluster).filter((v) => v != null))
-              )
+              {Array.from(new Set(clusterRows.map((r) => r.cluster).filter((v) => v != null)))
                 .sort((a: any, b: any) => Number(a) - Number(b))
                 .map((c: any) => (
-                  <option key={String(c)} value={String(c)}>
-                    Cluster {String(c)}
-                  </option>
+                  <option key={String(c)} value={String(c)}>Cluster {String(c)}</option>
                 ))}
             </select>
             <label className="check">
-              <input
-                type="checkbox"
-                checked={sizeByCapacity}
-                onChange={(e) => setSizeByCapacity(e.target.checked)}
-              />
+              <input type="checkbox" checked={sizeByCapacity} onChange={(e) => setSizeByCapacity(e.target.checked)} />
               Size = capacity
             </label>
             <label className="check">
-              <input
-                type="checkbox"
-                checked={autoFit}
-                onChange={(e) => setAutoFit(e.target.checked)}
-              />
+              <input type="checkbox" checked={autoFit} onChange={(e) => setAutoFit(e.target.checked)} />
               Auto-fit
             </label>
-            <button className="btn btn-primary" onClick={exportCSV}>
-              Export CSV
-            </button>
+            {/* <button className="btn btn--primary" onClick={exportCSV}>Export CSV</button> */}
           </div>
 
           <div className="map-block">
             <div className="map-wrap" style={{ width: "100%", height: 520 }}>
               {filteredRows.length ? (
-                <MapView
-                  rows={filteredRows}
-                  sizeByCapacity={sizeByCapacity}
-                  autoFit={autoFit}
-                />
+                <MapView rows={filteredRows} sizeByCapacity={sizeByCapacity} autoFit={autoFit} />
               ) : (
                 <div className="empty">No cluster/coordinate data available.</div>
               )}
             </div>
           </div>
-          <div className="small mt-2">
-            Basemap: Carto Light (no labels) · Color = cluster · Size ≈ estimated
-            capacity.
+          <div className="figure-note small">
+            Basemap: Carto Light (no labels). Color encodes the cluster; point size ≈ estimated capacity.
           </div>
         </section>
 
         {/* Centroids */}
         <section className="mt-6">
           <h2>24h profiles — Centroids</h2>
-          {centroidTraces.length ? (
-            <Plot
-              data={centroidTraces as Plotly.Data[]}
-              layout={{
-                autosize: true,
-                height: 380,
-                margin: { l: 52, r: 10, t: 30, b: 40 },
-                xaxis: { title: { text: "Hour" } },
-                yaxis: { title: { text: "Occupancy (ratio)" }, rangemode: "tozero" },
-                legend: { orientation: "h" },
-                paper_bgcolor: "rgba(0,0,0,0)",
-                plot_bgcolor: "rgba(0,0,0,0)",
-                hovermode: "x unified",
-              }}
-              config={{ displayModeBar: false, responsive: true }}
-              className="plot plot--lg"
-            />
-          ) : (
-            <div className="empty">Centroids unavailable.</div>
-          )}
+          <div className="card plot-card">
+            <h3>Mean 24-hour occupancy profile by cluster (ratio)</h3>
+            {centroidTraces.length ? (
+              <>
+                <Plot
+                  data={centroidTraces as Plotly.Data[]}
+                  layout={chartLayout({
+                    height: 380,
+                    xaxis: { title: { text: "Hour (HH:MM)" } },
+                    yaxis: { title: { text: "Occupancy (ratio)" }, rangemode: "tozero" },
+                  })}
+                  config={chartConfig}
+                  className="plot plot--lg"
+                />
+              </>
+            ) : (
+              <div className="empty">Centroids unavailable.</div>
+            )}
+          </div>
+          <div className="figure-note small">
+            Each series is the cluster centroid over 24h; X-axis labels come from the provided `x_labels` or default to HH:00.
+          </div>
         </section>
 
         {/* Distributions */}
@@ -586,20 +512,16 @@ export default function NetworkStationsPage() {
           <h2>Recent indicators — distributions</h2>
           <div className="grid-2">
             <div className="card plot-card">
-              <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>Coverage (7 days)</h3>
+              <h3>Coverage over last 7 days — share of time (%)</h3>
               {coverageAll.length ? (
                 <Plot
                   data={[hist(coverageAll, "coverage", 24)] as Plotly.Data[]}
-                  layout={{
-                    autosize: true,
+                  layout={chartLayout({
                     height: 280,
-                    margin: { l: 48, r: 10, t: 10, b: 36 },
                     xaxis: { title: { text: "Coverage (%)" }, range: [0, 100] },
-                    yaxis: { title: { text: "Stations" } },
-                    paper_bgcolor: "rgba(0,0,0,0)",
-                    plot_bgcolor: "rgba(0,0,0,0)",
-                  }}
-                  config={{ displayModeBar: false, responsive: true }}
+                    yaxis: { title: { text: "Stations (count)" } },
+                  })}
+                  config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
@@ -608,21 +530,15 @@ export default function NetworkStationsPage() {
             </div>
 
             <div className="card plot-card">
-              <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>
-                Bike volatility (σ, 7 days)
-              </h3>
+              <h3>Bike count volatility σ — last 7 days</h3>
               {volatilityAll.length ? (
                 <Plot
                   data={[boxY(volatilityAll, "σ(bikes)")] as Plotly.Data[]}
-                  layout={{
-                    autosize: true,
+                  layout={chartLayout({
                     height: 280,
-                    margin: { l: 48, r: 10, t: 10, b: 36 },
                     yaxis: { title: { text: "σ bikes / station (7d)" }, rangemode: "tozero" },
-                    paper_bgcolor: "rgba(0,0,0,0)",
-                    plot_bgcolor: "rgba(0,0,0,0)",
-                  }}
-                  config={{ displayModeBar: false, responsive: true }}
+                  })}
+                  config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
@@ -631,20 +547,16 @@ export default function NetworkStationsPage() {
             </div>
 
             <div className="card plot-card">
-              <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>% penury (7 days)</h3>
+              <h3>Penury — share of time over last 7 days (%)</h3>
               {penuryPct.length ? (
                 <Plot
                   data={[hist(penuryPct, "% penury", 24)] as Plotly.Data[]}
-                  layout={{
-                    autosize: true,
+                  layout={chartLayout({
                     height: 280,
-                    margin: { l: 48, r: 10, t: 10, b: 36 },
                     xaxis: { title: { text: "Percentage of time (%)" }, range: [0, 100] },
-                    yaxis: { title: { text: "Stations" } },
-                    paper_bgcolor: "rgba(0,0,0,0)",
-                    plot_bgcolor: "rgba(0,0,0,0)",
-                  }}
-                  config={{ displayModeBar: false, responsive: true }}
+                    yaxis: { title: { text: "Stations (count)" } },
+                  })}
+                  config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
@@ -653,22 +565,16 @@ export default function NetworkStationsPage() {
             </div>
 
             <div className="card plot-card">
-              <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>
-                % saturation (7 days)
-              </h3>
+              <h3>Saturation — share of time over last 7 days (%)</h3>
               {saturationPct.length ? (
                 <Plot
                   data={[hist(saturationPct, "% saturation", 24)] as Plotly.Data[]}
-                  layout={{
-                    autosize: true,
+                  layout={chartLayout({
                     height: 280,
-                    margin: { l: 48, r: 10, t: 10, b: 36 },
                     xaxis: { title: { text: "Percentage of time (%)" }, range: [0, 100] },
-                    yaxis: { title: { text: "Stations" } },
-                    paper_bgcolor: "rgba(0,0,0,0)",
-                    plot_bgcolor: "rgba(0,0,0,0)",
-                  }}
-                  config={{ displayModeBar: false, responsive: true }}
+                    yaxis: { title: { text: "Stations (count)" } },
+                  })}
+                  config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
@@ -678,7 +584,7 @@ export default function NetworkStationsPage() {
           </div>
 
           {stats7Doc && (
-            <div className="small mt-2">
+            <div className="figure-note small">
               Schema v{stats7Doc.schema_version} — generated {stats7Doc.generated_at}
             </div>
           )}

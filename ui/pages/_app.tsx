@@ -3,13 +3,13 @@ import type { AppProps } from "next/app";
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
-import "@/styles/globals.css";
 
-// ✅ header/footer en CSS global
+// Global base styles
+import "@/styles/globals.css";
 import "@/styles/header.css";
 import "@/styles/footer.css";
 
-// ✅ next/font — Urbanist
+// Font (next/font) → expose --font-urbanist
 import { Urbanist } from "next/font/google";
 const urbanist = Urbanist({
   subsets: ["latin"],
@@ -18,110 +18,77 @@ const urbanist = Urbanist({
   display: "swap",
 });
 
-// ✅ Buffer shim (browser)
+// Browser Buffer shim
 import { Buffer } from "buffer";
 if (typeof window !== "undefined" && !(window as any).Buffer) {
   (window as any).Buffer = Buffer;
 }
 
-// ✅ Header & Footer communs (hors landing)
+// Common layout (non-landing)
 import GlobalHeader from "@/components/layout/GlobalHeader";
 import GlobalFooter from "@/components/layout/GlobalFooter";
+
+type Ctx = "landing" | "monitoring" | "app";
 
 export default function MyApp({ Component, pageProps }: AppProps) {
   const router = useRouter();
 
-  // Helper : déduit le contexte selon le pathname
-  const computeCtx = (path: string): "landing" | "monitoring" | "app" => {
-    if (path.startsWith("/monitoring")) return "monitoring";
-    if (path.startsWith("/app")) return "app";
-    return "landing";
-  };
+  const computeCtx = (path: string): Ctx =>
+    path.startsWith("/monitoring") ? "monitoring" :
+    path.startsWith("/app")        ? "app" :
+                                     "landing";
 
-  // ⚡ init immédiate pour éviter un flash de styles
-  const [ctx, setCtx] = useState<"landing" | "monitoring" | "app">(
-    () => computeCtx(router.pathname)
-  );
+  // Init rapide pour éviter le flash mauvais contexte
+  const [ctx, setCtx] = useState<Ctx>(() => computeCtx(router.pathname));
 
-  const useIsoLayoutEffect =
-    typeof window !== "undefined" ? useLayoutEffect : useEffect;
-
-  // ✅ applique la variable de police Urbanist sur <html>
+  // Applique la classe de variable Urbanist directement sur <html>
+  const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
   useIsoLayoutEffect(() => {
-    if (typeof document === "undefined") return;
-    const html = document.documentElement;
+    const html = typeof document !== "undefined" ? document.documentElement : null;
+    if (!html) return;
     html.classList.add(urbanist.variable);
-    return () => html.classList.remove(urbanist.variable);
+    return () => { html.classList.remove(urbanist.variable); };
   }, []);
 
-  // ✅ met à jour le contexte lors des navigations client
+  // Suivi des navigations client → mise à jour du contexte
   useEffect(() => {
-    const onRoute = (url: string) => {
-      const pathname = url.split("?")[0].split("#")[0];
-      setCtx(computeCtx(pathname));
-    };
+    const onRoute = (url: string) => setCtx(computeCtx(url.split(/[?#]/)[0]));
     router.events.on("routeChangeComplete", onRoute);
     return () => router.events.off("routeChangeComplete", onRoute);
   }, [router.events]);
 
-  // ✅ charge dynamiquement la feuille de style contextuelle
+  // Chargement des feuilles de style contextuelles
   useEffect(() => {
-    // Nettoie les anciens liens dynamiques
-    document
-      .querySelectorAll('link[data-dynamic-style="true"]')
-      .forEach((el) => el.remove());
+    // purge avant reload
+    document.querySelectorAll('link[data-dynamic-style="true"]').forEach((el) => el.remove());
 
-    // charge le CSS contextuel (landing / monitoring / app)
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = `/css/${ctx}.css`;
-    link.dataset.dynamicStyle = "true";
-    document.head.appendChild(link);
+    const addCSS = (href: string) => {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = href;
+      link.dataset.dynamicStyle = "true";
+      document.head.appendChild(link);
+    };
 
-    // ➕ MonitoringNav + KpiBar + LoadingBar CSS (uniquement en contexte monitoring)
+    // CSS principal selon contexte
+    addCSS(`/css/${ctx}.css`);
+
+    // Bundles spécifiques
     if (ctx === "monitoring") {
-      const mnLink = document.createElement("link");
-      mnLink.rel = "stylesheet";
-      mnLink.href = `/css/monitoringnav.css`;
-      mnLink.dataset.dynamicStyle = "true";
-      document.head.appendChild(mnLink);
-
-      const kpiBarLink = document.createElement("link");
-      kpiBarLink.rel = "stylesheet";
-      kpiBarLink.href = `/css/kpibar.css`;
-      kpiBarLink.dataset.dynamicStyle = "true";
-      document.head.appendChild(kpiBarLink);
-
-      const lbLink = document.createElement("link");
-      lbLink.rel = "stylesheet";
-      lbLink.href = `/css/loadingbar.css`;
-      lbLink.dataset.dynamicStyle = "true";
-      document.head.appendChild(lbLink);
-    }
-
-    // ➕ Map view + LoadingBar CSS si contexte "app"
-    if (ctx === "app") {
-      const mapLink = document.createElement("link");
-      mapLink.rel = "stylesheet";
-      mapLink.href = `/css/mapview.css`;
-      mapLink.dataset.dynamicStyle = "true";
-      document.head.appendChild(mapLink);
-
-      const lbLink = document.createElement("link");
-      lbLink.rel = "stylesheet";
-      lbLink.href = `/css/loadingbar.css`;
-      lbLink.dataset.dynamicStyle = "true";
-      document.head.appendChild(lbLink);
+      addCSS("/css/monitoringnav.css");
+      addCSS("/css/kpibar.css");
+      addCSS("/css/loadingbar.css");
+    } else if (ctx === "app") {
+      addCSS("/css/mapview.css");
+      addCSS("/css/loadingbar.css");
     }
 
     return () => {
-      document
-        .querySelectorAll('link[data-dynamic-style="true"]')
-        .forEach((el) => el.remove());
+      document.querySelectorAll('link[data-dynamic-style="true"]').forEach((el) => el.remove());
     };
   }, [ctx]);
 
-  // ✅ items du header commun (toutes pages ≠ landing)
+  // Header commun (hors landing)
   const sharedHeaderItems = useMemo(
     () => [
       { label: "Accueil", href: "/" },
@@ -135,30 +102,19 @@ export default function MyApp({ Component, pageProps }: AppProps) {
     <>
       <Head>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta
-          name="theme-color"
-          content="#0b1220"
-          media="(prefers-color-scheme: dark)"
-        />
-        <meta
-          name="theme-color"
-          content="#ffffff"
-          media="(prefers-color-scheme: light)"
-        />
+        <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)" />
+        <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
         <link rel="icon" href="/favicon.svg" />
+        {/* <link rel="preconnect" href="https://velib-ui-160046094975.europe-west1.run.app" crossOrigin="" /> */}
       </Head>
 
       <div className={ctx}>
-        {/* halo décoratif global */}
-        <div className="fx--page" aria-hidden="true" />
+        {/* halo décoratif global — désactivé sur la landing pour laisser le fond défiler */}
+        {ctx !== "landing" && <div className="fx--page" aria-hidden="true" />}
 
-        {/* Header commun à toutes les pages sauf la landing */}
+        {/* Header / Footer globaux hors landing */}
         {ctx !== "landing" && <GlobalHeader items={sharedHeaderItems} />}
-
-        {/* Contenu principal */}
         <Component {...pageProps} />
-
-        {/* Footer commun à toutes les pages sauf la landing */}
         {ctx !== "landing" && <GlobalFooter />}
       </div>
     </>

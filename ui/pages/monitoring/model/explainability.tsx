@@ -6,7 +6,8 @@ import type { ScatterData } from "plotly.js";
 import type * as Plotly from "plotly.js";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
 import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
-import KpiBar from "@/components/monitoring/KpiBar"; // ✅ NEW
+import KpiBar from "@/components/monitoring/KpiBar";
+import { chartConfig, chartLayout } from "@/lib/plotlyTheme";
 
 import {
   getExplainOverview,
@@ -19,13 +20,13 @@ import {
   type UncertaintyDoc,
 } from "@/lib/services/monitoring/model_explainability";
 
-/* client-only Plotly */
+/* ───────────────── Plotly (client only) ───────────────── */
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ssr: false,
   loading: () => <div className="empty">Chargement du graphique…</div>,
 });
 
-/* Helpers */
+/* ───────────────── Helpers ───────────────── */
 function ok<T>(r: PromiseSettledResult<T>): T | null {
   return r.status === "fulfilled" ? r.value : null;
 }
@@ -33,11 +34,11 @@ const fmtNum = (x?: number | null, d = 2) => (Number.isFinite(Number(x)) ? Numbe
 const fmtInt = (x?: number | null) => (Number.isFinite(Number(x)) ? Number(x).toLocaleString("fr-FR") : "—");
 const fmtYesNo = (b?: any) => (b ? "Oui" : "Non");
 const fmtDate = (s?: string | null) => (s ? s : "—");
-/** Avoids call stack blow-ups from Math.min/max(...bigArray) */
+/** Avoid `Math.min/max(...bigArray)` call stack blow-ups */
 function safeMinMax(arrs: number[][]): { min: number; max: number } {
   let min = Number.POSITIVE_INFINITY,
     max = Number.NEGATIVE_INFINITY;
-  for (const arr of arrs)
+  for (const arr of arrs) {
     for (let i = 0; i < arr.length; i++) {
       const v = arr[i];
       if (Number.isFinite(v)) {
@@ -45,12 +46,13 @@ function safeMinMax(arrs: number[][]): { min: number; max: number } {
         if (v > max) max = v;
       }
     }
+  }
   if (!Number.isFinite(min)) min = 0;
   if (!Number.isFinite(max)) max = 0;
   return { min, max };
 }
 
-/* Page */
+/* ───────────────── Page ───────────────── */
 export default function ModelExplainabilityPage() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [residuals, setResiduals] = useState<ResidualsDoc | null>(null);
@@ -65,18 +67,31 @@ export default function ModelExplainabilityPage() {
     (async () => {
       try {
         setLoading(true);
-        const res = await Promise.allSettled([
+        const [rOverview, rResiduals, rCalib, rUnc] = await Promise.allSettled([
           getExplainOverview(),
           getExplainResiduals(),
           getExplainCalibration(),
           getExplainUncertainty(),
         ]);
         if (!alive) return;
-        setOverview(ok(res[0]));
-        setResiduals(ok(res[1]));
-        setCalib(ok(res[2]));
-        setUnc(ok(res[3]));
-        setError(null);
+
+        setOverview(ok(rOverview));
+        setResiduals(ok(rResiduals));
+        setCalib(ok(rCalib));
+        setUnc(ok(rUnc));
+
+        // Erreur si échec partiel (aligné autres pages)
+        const results = [rOverview, rResiduals, rCalib, rUnc];
+        const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+        if (failures.length > 0) {
+          const msg =
+            failures
+              .map((f) => String((f.reason && (f.reason.message ?? f.reason)) || "request failed"))
+              .join(" | ") || "API error";
+          setError(msg);
+        } else {
+          setError(null);
+        }
       } catch (e: any) {
         if (alive) setError(String(e?.message ?? e));
       } finally {
@@ -89,20 +104,32 @@ export default function ModelExplainabilityPage() {
   }, []);
 
   const generatedAt =
-    overview?.generated_at || residuals?.generated_at || calib?.generated_at || unc?.generated_at || undefined;
+    overview?.generated_at ||
+    residuals?.generated_at ||
+    calib?.generated_at ||
+    unc?.generated_at ||
+    undefined;
 
-  // ✅ barre de chargement uniforme
+  // Barre d’état unifiée
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
-  /* ---------------- KPI BAR (dense + scroll) ---------------- */
+  /* ---------------- KPI BAR (dense + meta) ---------------- */
   const kpiItems = useMemo(
     () => [
       { label: "Stations (perf)", value: fmtInt(overview?.perf_stations) },
       { label: "Lignes (n)", value: fmtInt(overview?.perf_rows) },
       { label: "Prédictions", value: fmtYesNo(overview?.has_y_pred) },
       { label: "Incertitude", value: fmtYesNo(overview?.has_uncertainty) },
-      { label: "β global", value: calib?.fit?.beta ?? null, fmt: (v: any) => (Number.isFinite(Number(v)) ? Number(v).toFixed(3) : "—") },
-      { label: "α global", value: calib?.fit?.alpha ?? null, fmt: (v: any) => (Number.isFinite(Number(v)) ? Number(v).toFixed(3) : "—") },
+      {
+        label: "β global",
+        value: calib?.fit?.beta ?? null,
+        fmt: (v: any) => (Number.isFinite(Number(v)) ? Number(v).toFixed(3) : "—"),
+      },
+      {
+        label: "α global",
+        value: calib?.fit?.alpha ?? null,
+        fmt: (v: any) => (Number.isFinite(Number(v)) ? Number(v).toFixed(3) : "—"),
+      },
     ],
     [overview, calib]
   );
@@ -128,7 +155,14 @@ export default function ModelExplainabilityPage() {
     const emp = residuals?.qq?.emp ?? [];
     if (!th.length || th.length !== emp.length) return [];
     const { min, max } = safeMinMax([th, emp]);
-    const line: Partial<ScatterData> = { x: [min, max], y: [min, max], type: "scatter", mode: "lines", name: "y = x", hoverinfo: "none" };
+    const line: Partial<ScatterData> = {
+      x: [min, max],
+      y: [min, max],
+      type: "scatter",
+      mode: "lines",
+      name: "y = x",
+      hoverinfo: "none",
+    };
     const pts: Partial<ScatterData> = { x: th, y: emp, type: "scatter", mode: "markers", name: "Quantiles" };
     return [line, pts];
   }, [residuals]);
@@ -152,7 +186,14 @@ export default function ModelExplainabilityPage() {
     const xp = rows.map((r) => r.y_pred_mean);
     const yt = rows.map((r) => r.y_true_mean);
     const { min, max } = safeMinMax([xp, yt]);
-    const line: Partial<ScatterData> = { x: [min, max], y: [min, max], type: "scatter", mode: "lines", name: "y = x", hoverinfo: "none" };
+    const line: Partial<ScatterData> = {
+      x: [min, max],
+      y: [min, max],
+      type: "scatter",
+      mode: "lines",
+      name: "y = x",
+      hoverinfo: "none",
+    };
     const pts: Partial<ScatterData> = { x: xp, y: yt, type: "scatter", mode: "markers", name: "Binned means" };
     return [line, pts];
   }, [calib]);
@@ -174,7 +215,14 @@ export default function ModelExplainabilityPage() {
   const relErrBars: Partial<Plotly.PlotData>[] = useMemo(() => {
     const rows = calib?.rel_error_levels ?? [];
     if (!rows.length) return [];
-    return [{ x: rows.map((r) => r.level), y: rows.map((r) => r.mape_like * 100), type: "bar" as const, name: "MAPE-like (%)" }];
+    return [
+      {
+        x: rows.map((r) => r.level),
+        y: rows.map((r) => r.mape_like * 100),
+        type: "bar" as const,
+        name: "MAPE-like (%)",
+      },
+    ];
   }, [calib]);
 
   const stationBias = useMemo(() => {
@@ -185,12 +233,15 @@ export default function ModelExplainabilityPage() {
     return { tops: sorted.slice(0, 20), bots: sorted.slice(-20).reverse() };
   }, [calib]);
 
-  /* Render */
+  /* ───────────────── Render ───────────────── */
   return (
     <div className="monitoring">
       <Head>
         <title>Monitoring — Model / Explainability</title>
-        <meta name="description" content="Résidus, QQ, ACF, hétéroscédasticité, calibration et incertitude." />
+        <meta
+          name="description"
+          content="Résidus, QQ, ACF, hétéroscédasticité, calibration et incertitude."
+        />
       </Head>
 
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
@@ -203,7 +254,7 @@ export default function ModelExplainabilityPage() {
 
         <LoadingBar status={barStatus} />
 
-        {/* ✅ KpiBar (dense + scroll) + meta sous la barre */}
+        {/* KpiBar + meta */}
         <section className="mt-4">
           <KpiBar items={kpiItems} dense />
           {metaLine && <div className="kpi-bar-meta">{metaLine}</div>}
@@ -213,21 +264,17 @@ export default function ModelExplainabilityPage() {
         <section className="mt-6">
           <h2>Résidus</h2>
           <div className="grid-2">
-            <div className="card">
+            <div className="plot-card">
               <h3>Histogramme</h3>
               {histData.length ? (
                 <Plot
                   data={histData as Plotly.Data[]}
-                  layout={{
-                    autosize: true,
+                  layout={chartLayout({
                     height: 320,
-                    margin: { l: 54, r: 10, t: 10, b: 40 },
                     xaxis: { title: { text: "Erreur (y_true - y_pred)" } },
                     yaxis: { title: { text: "Comptes" } },
-                    paper_bgcolor: "rgba(0,0,0,0)",
-                    plot_bgcolor: "rgba(0,0,0,0)",
-                  }}
-                  config={{ displayModeBar: false, responsive: true }}
+                  })}
+                  config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
@@ -235,22 +282,18 @@ export default function ModelExplainabilityPage() {
               )}
             </div>
 
-            <div className="card">
+            <div className="plot-card">
               <h3>QQ-plot (normalisé)</h3>
               {qqData.length ? (
                 <Plot
                   data={qqData as Plotly.Data[]}
-                  layout={{
-                    autosize: true,
+                  layout={chartLayout({
                     height: 320,
-                    margin: { l: 54, r: 10, t: 10, b: 40 },
                     xaxis: { title: { text: "Théorique" } },
                     yaxis: { title: { text: "Empirique" } },
                     hovermode: "closest",
-                    paper_bgcolor: "rgba(0,0,0,0)",
-                    plot_bgcolor: "rgba(0,0,0,0)",
-                  }}
-                  config={{ displayModeBar: false, responsive: true }}
+                  })}
+                  config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
@@ -260,21 +303,17 @@ export default function ModelExplainabilityPage() {
           </div>
 
           <div className="grid-2 mt-4">
-            <div className="card">
+            <div className="plot-card">
               <h3>ACF du résidu (lag 5 min)</h3>
               {acfData.length ? (
                 <Plot
                   data={acfData as Plotly.Data[]}
-                  layout={{
-                    autosize: true,
+                  layout={chartLayout({
                     height: 320,
-                    margin: { l: 54, r: 10, t: 10, b: 40 },
                     xaxis: { title: { text: "Lag (5 min)" } },
                     yaxis: { title: { text: "Corrélation" } },
-                    paper_bgcolor: "rgba(0,0,0,0)",
-                    plot_bgcolor: "rgba(0,0,0,0)",
-                  }}
-                  config={{ displayModeBar: false, responsive: true }}
+                  })}
+                  config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
@@ -282,21 +321,17 @@ export default function ModelExplainabilityPage() {
               )}
             </div>
 
-            <div className="card">
+            <div className="plot-card">
               <h3>Hétéroscédasticité (MAE par quantile de y_true)</h3>
               {heteroData.length ? (
                 <Plot
                   data={heteroData as Plotly.Data[]}
-                  layout={{
-                    autosize: true,
+                  layout={chartLayout({
                     height: 320,
-                    margin: { l: 54, r: 10, t: 10, b: 80 },
                     xaxis: { title: { text: "Quantiles(y_true)" }, tickangle: -30 },
                     yaxis: { title: { text: "MAE" } },
-                    paper_bgcolor: "rgba(0,0,0,0)",
-                    plot_bgcolor: "rgba(0,0,0,0)",
-                  }}
-                  config={{ displayModeBar: false, responsive: true }}
+                  })}
+                  config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
@@ -305,7 +340,7 @@ export default function ModelExplainabilityPage() {
             </div>
           </div>
 
-          <div className="card mt-4">
+          <div className="plot-card mt-4">
             <h3>Épisodes d’erreurs (|résidu| ≥ 4)</h3>
             {residuals?.episodes?.length ? (
               <ul className="status-list" style={{ listStyle: "none", paddingLeft: 0 }}>
@@ -319,8 +354,23 @@ export default function ModelExplainabilityPage() {
                         max run:&nbsp;<b>{fmtInt(r.max_run)}</b>
                       </div>
                       <div style={{ flex: 1 }}>
-                        <div className="bar">
-                          <div className="bar__fill" style={{ width: `${Math.min(100, Number(r.max_run) * 4)}%` }} aria-hidden />
+                        <div
+                          style={{
+                            height: 6,
+                            borderRadius: 999,
+                            background: "#111827",
+                            position: "relative",
+                            overflow: "hidden",
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: "100%",
+                              width: `${Math.min(100, Number(r.max_run) * 4)}%`,
+                              background: "var(--ok)",
+                            }}
+                            aria-hidden
+                          />
                         </div>
                       </div>
                     </div>
@@ -338,21 +388,17 @@ export default function ModelExplainabilityPage() {
           <h2>Calibration</h2>
 
           <div className="grid-2">
-            <div className="card">
+            <div className="plot-card">
               <h3>Binned means (y_pred → y_true)</h3>
               {calibBinning.length ? (
                 <Plot
                   data={calibBinning as Plotly.Data[]}
-                  layout={{
-                    autosize: true,
+                  layout={chartLayout({
                     height: 320,
-                    margin: { l: 54, r: 10, t: 10, b: 40 },
                     xaxis: { title: { text: "E[y_pred]" } },
                     yaxis: { title: { text: "E[y_true]" } },
-                    paper_bgcolor: "rgba(0,0,0,0)",
-                    plot_bgcolor: "rgba(0,0,0,0)",
-                  }}
-                  config={{ displayModeBar: false, responsive: true }}
+                  })}
+                  config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
@@ -360,27 +406,23 @@ export default function ModelExplainabilityPage() {
               )}
               {calib?.fit && (
                 <div className="small mt-2">
-                  Fit global: y ≈ α + β·ŷ — α={fmtNum(calib.fit.alpha, 3)}, β={fmtNum(calib.fit.beta, 3)} · n={fmtInt(calib.fit.n)}
+                  Fit global: y ≈ α + β·ŷ — α={fmtNum(calib.fit.alpha, 3)}, β={fmtNum(calib.fit.beta, 3)} · n=
+                  {fmtInt(calib.fit.n)}
                 </div>
               )}
             </div>
 
-            <div className="card">
+            <div className="plot-card">
               <h3>β par heure (locale)</h3>
               {betaByHour.length ? (
                 <Plot
                   data={betaByHour as Plotly.Data[]}
-                  layout={{
-                    autosize: true,
+                  layout={chartLayout({
                     height: 320,
-                    margin: { l: 54, r: 10, t: 10, b: 36 },
                     xaxis: { title: { text: "Heure" } },
                     yaxis: { title: { text: "β" } },
-                    hovermode: "x unified",
-                    paper_bgcolor: "rgba(0,0,0,0)",
-                    plot_bgcolor: "rgba(0,0,0,0)",
-                  }}
-                  config={{ displayModeBar: false, responsive: true }}
+                  })}
+                  config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
@@ -390,21 +432,17 @@ export default function ModelExplainabilityPage() {
           </div>
 
           <div className="grid-2 mt-4">
-            <div className="card">
+            <div className="plot-card">
               <h3>Erreur relative par niveau</h3>
               {relErrBars.length ? (
                 <Plot
                   data={relErrBars as Plotly.Data[]}
-                  layout={{
-                    autosize: true,
+                  layout={chartLayout({
                     height: 320,
-                    margin: { l: 54, r: 10, t: 10, b: 36 },
                     xaxis: { title: { text: "Niveau (quantiles y_true)" } },
                     yaxis: { title: { text: "MAPE-like (%)" } },
-                    paper_bgcolor: "rgba(0,0,0,0)",
-                    plot_bgcolor: "rgba(0,0,0,0)",
-                  }}
-                  config={{ displayModeBar: false, responsive: true }}
+                  })}
+                  config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
@@ -412,7 +450,7 @@ export default function ModelExplainabilityPage() {
               )}
             </div>
 
-            <div className="card">
+            <div className="plot-card">
               <h3>Stations (biais moyen)</h3>
               {calib?.bias_by_station?.length ? (
                 <ul className="status-list" style={{ listStyle: "none", paddingLeft: 0 }}>
@@ -424,10 +462,22 @@ export default function ModelExplainabilityPage() {
                             <b>{r.name ?? r.station_id}</b>
                             <span className="muted">{r.name ? ` (#${r.station_id})` : ""} · n={fmtInt(r.n)}</span>
                           </div>
-                          <div className="bar mt-2">
+                          <div
+                            style={{
+                              height: 6,
+                              borderRadius: 999,
+                              background: "#111827",
+                              marginTop: 6,
+                              position: "relative",
+                              overflow: "hidden",
+                            }}
+                          >
                             <div
-                              className="bar__fill bar__fill--danger"
-                              style={{ width: `${Math.min(100, Math.abs(Number(r.bias ?? 0)) * 5)}%` }}
+                              style={{
+                                width: `${Math.min(100, Math.abs(Number(r.bias ?? 0)) * 5)}%`,
+                                height: "100%",
+                                background: "#ef4444",
+                              }}
                               aria-hidden
                             />
                           </div>
@@ -455,21 +505,25 @@ export default function ModelExplainabilityPage() {
         {/* Incertitude */}
         <section className="mt-6">
           <h2>Incertitude</h2>
-          <div className="card">
+          <div className="plot-card">
             {unc?.coverage ? (
               <div className="row">
-                {/* petits KPI inline — on garde ce pattern local */}
                 <div className="kpi">
-                  <div className="kpi__label">Coverage empirique</div>
-                  <div className="kpi__value">{Number.isFinite(Number(unc.coverage.empirical)) ? `${(Number(unc.coverage.empirical) * 100).toFixed(1)}%` : "—"}</div>
+                  <div className="kpi__label small muted">Coverage empirique</div>
+                  <div className="kpi__value" style={{ fontWeight: 700 }}>
+                    {Number.isFinite(Number(unc.coverage.empirical))
+                      ? `${(Number(unc.coverage.empirical) * 100).toFixed(1)}%`
+                      : "—"}
+                  </div>
                 </div>
                 <div className="kpi">
-                  <div className="kpi__label">Échantillon</div>
-                  <div className="kpi__value">{fmtInt(unc.coverage.n)}</div>
+                  <div className="kpi__label small muted">Échantillon</div>
+                  <div className="kpi__value" style={{ fontWeight: 700 }}>{fmtInt(unc.coverage.n)}</div>
                 </div>
                 {(unc.method || Number.isFinite(Number(unc.nominal))) && (
                   <div className="small muted">
-                    {unc.method ? `Méthode: ${unc.method}` : ""}{Number.isFinite(Number(unc.nominal)) ? ` · nominal=${(Number(unc.nominal) * 100).toFixed(0)}%` : ""}
+                    {unc.method ? `Méthode: ${unc.method}` : ""}
+                    {Number.isFinite(Number(unc.nominal)) ? ` · nominal=${(Number(unc.nominal) * 100).toFixed(0)}%` : ""}
                   </div>
                 )}
                 <div className="small muted">

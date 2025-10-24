@@ -1,11 +1,12 @@
 // ui/pages/monitoring/overview.tsx
 import Head from "next/head";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import type * as Plotly from "plotly.js";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
 import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
 import KpiBar, { fmtPct, fmtInt } from "@/components/monitoring/KpiBar";
+import { chartConfig, chartLayout } from "@/lib/plotlyTheme";
 
 import {
   getOverviewKpis,
@@ -61,21 +62,14 @@ const SnapshotMap = dynamic(async () => {
         minLon = 180,
         maxLon = -180;
       for (const r of pts) {
-        const la = Number(r.lat),
-          lo = Number(r.lon);
+        const la = Number(r.lat), lo = Number(r.lon);
         if (la < minLat) minLat = la;
         if (la > maxLat) maxLat = la;
         if (lo < minLon) minLon = lo;
         if (lo > maxLon) maxLon = lo;
       }
       if (minLat <= maxLat && minLon <= maxLon) {
-        map.fitBounds(
-          [
-            [minLat, minLon],
-            [maxLat, maxLon],
-          ],
-          { padding: [20, 20] }
-        );
+        map.fitBounds([[minLat, minLon], [maxLat, maxLon]], { padding: [20, 20] });
       }
     }, [rows, map]);
     return null;
@@ -83,10 +77,7 @@ const SnapshotMap = dynamic(async () => {
 
   function MapInner({ rows }: { rows: MapRow[] }) {
     const valid = useMemo(
-      () =>
-        rows.filter(
-          (r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon))
-        ),
+      () => rows.filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon))),
       [rows]
     );
     const latMed = valid.length
@@ -107,11 +98,7 @@ const SnapshotMap = dynamic(async () => {
 
     return (
       <div style={{ position: "relative", width: "100%", height: "100%" }}>
-        <MapContainer
-          center={[latMed, lonMed]}
-          zoom={12}
-          style={{ height: "100%", width: "100%", background: "#fff" }}
-        >
+        <MapContainer center={[latMed, lonMed]} zoom={12} style={{ height: "100%", width: "100%", background: "#fff" }}>
           <TileLayer
             url={tileUrl}
             attribution='&copy; OpenStreetMap, &copy; <a href="https://carto.com/">CARTO</a>'
@@ -122,10 +109,7 @@ const SnapshotMap = dynamic(async () => {
             const pen = r.is_penury === 1;
             const sat = r.is_saturation === 1;
             const col = pen ? "#ef4444" : sat ? "#3b82f6" : "#10b981";
-            const rad = Math.max(
-              3,
-              Math.min(9, Math.sqrt(Math.max(0, Number(r.bikes ?? 0))) + (sat ? 2 : 0))
-            );
+            const rad = Math.max(3, Math.min(9, Math.sqrt(Math.max(0, Number(r.bikes ?? 0))) + (sat ? 2 : 0)));
             return (
               <CircleMarker
                 key={r.station_id}
@@ -135,22 +119,13 @@ const SnapshotMap = dynamic(async () => {
               >
                 <Tooltip>
                   <div style={{ display: "grid", gap: 4 }}>
-                    <div>
-                      <b>{r.name}</b>
-                    </div>
-                    <div>
-                      bikes: {Number.isFinite(Number(r.bikes)) ? Number(r.bikes) : "?"}
-                    </div>
-                    <div>
-                      docks:{" "}
-                      {Number.isFinite(Number(r.docks_avail)) ? Number(r.docks_avail) : "?"}
-                    </div>
+                    <div><b>{r.name}</b></div>
+                    <div>bikes: {Number.isFinite(Number(r.bikes)) ? Number(r.bikes) : "?"}</div>
+                    <div>docks: {Number.isFinite(Number(r.docks_avail)) ? Number(r.docks_avail) : "?"}</div>
                     {pen && <div style={{ color: "#ef4444" }}>penury</div>}
                     {sat && <div style={{ color: "#3b82f6" }}>saturation</div>}
                     <a
-                      href={`/monitoring/network/dynamics?station_id=${encodeURIComponent(
-                        r.station_id
-                      )}`}
+                      href={`/monitoring/network/dynamics?station_id=${encodeURIComponent(r.station_id)}`}
                       style={{ textDecoration: "underline" }}
                     >
                       View dynamics →
@@ -162,7 +137,7 @@ const SnapshotMap = dynamic(async () => {
           })}
         </MapContainer>
 
-        {/* Légende snapshot */}
+        {/* Légende snapshot (bulle) */}
         <div
           style={{
             position: "absolute",
@@ -181,39 +156,15 @@ const SnapshotMap = dynamic(async () => {
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Snapshot</div>
           <div style={{ display: "grid", gap: 4 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span
-                style={{
-                  width: 12,
-                  height: 12,
-                  borderRadius: 999,
-                  background: "#ef4444",
-                  border: "1px solid #0002",
-                }}
-              />
+              <span style={{ width: 12, height: 12, borderRadius: 999, background: "#ef4444", border: "1px solid #0002" }} />
               <span>Pénurie</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span
-                style={{
-                  width: 12,
-                  height: 12,
-                  borderRadius: 999,
-                  background: "#3b82f6",
-                  border: "1px solid #0002",
-                }}
-              />
+              <span style={{ width: 12, height: 12, borderRadius: 999, background: "#3b82f6", border: "1px solid #0002" }} />
               <span>Saturation</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span
-                style={{
-                  width: 12,
-                  height: 12,
-                  borderRadius: 999,
-                  background: "#10b981",
-                  border: "1px solid #0002",
-                }}
-              />
+              <span style={{ width: 12, height: 12, borderRadius: 999, background: "#10b981", border: "1px solid #0002" }} />
               <span>OK</span>
             </div>
           </div>
@@ -227,7 +178,6 @@ const SnapshotMap = dynamic(async () => {
 
 /* ───────────────────────── Page ───────────────────────── */
 export default function OverviewPage() {
-  // State
   const [kpis, setKpis] = useState<OverviewKpis | null>(null);
   const [dist, setDist] = useState<OverviewSnapshotDistribution | null>(null);
   const [today, setToday] = useState<OverviewTodayCurve | null>(null);
@@ -240,7 +190,6 @@ export default function OverviewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load all (corrigé pour refléter correctement l'erreur)
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -265,15 +214,8 @@ export default function OverviewPage() {
           getOverviewStationsTension(),
         ];
 
-        const [
-          kpisRes,
-          distRes,
-          todayRes,
-          refMedianRes,
-          lagsRes,
-          snapMapRes,
-          tensionRes,
-        ] = await Promise.allSettled(calls);
+        const [kpisRes, distRes, todayRes, refMedianRes, lagsRes, snapMapRes, tensionRes] =
+          await Promise.allSettled(calls);
 
         setKpis(ok(kpisRes));
         setDist(ok(distRes));
@@ -283,23 +225,12 @@ export default function OverviewPage() {
         setSnapMap(ok(snapMapRes));
         setTension(ok(tensionRes));
 
-        const allResults = [
-          kpisRes,
-          distRes,
-          todayRes,
-          refMedianRes,
-          lagsRes,
-          snapMapRes,
-          tensionRes,
-        ];
-        const failures = allResults.filter(
-          (r): r is PromiseRejectedResult => r.status === "rejected"
-        );
+        const allResults = [kpisRes, distRes, todayRes, refMedianRes, lagsRes, snapMapRes, tensionRes];
+        const failures = allResults.filter((r): r is PromiseRejectedResult => r.status === "rejected");
         if (failures.length > 0) {
           const msg =
-            failures
-              .map((f) => String((f.reason && (f.reason.message ?? f.reason)) || "request failed"))
-              .join(" | ") || "API error";
+            failures.map((f) => String((f.reason && (f.reason.message ?? f.reason)) || "request failed")).join(" | ") ||
+            "API error";
           setError(msg);
         } else {
           setError(null);
@@ -314,10 +245,7 @@ export default function OverviewPage() {
         if (alive) setLoading(false);
       }
     })();
-
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
   const generatedAt =
@@ -330,10 +258,8 @@ export default function OverviewPage() {
       <Head>
         <title>Monitoring — Network / Overview</title>
         <meta name="description" content="KPIs réseau, snapshot, courbes et carte." />
-        {/* ⚠️ Place les CSS globaux (leaflet, monitoring) dans _app.tsx / globals.css. Pas d’injection locale ici. */}
       </Head>
 
-      {/* Contenu principal (header/footer injectés par _app.tsx) */}
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
           title="Network — Overview"
@@ -345,67 +271,51 @@ export default function OverviewPage() {
           ]}
         />
 
-        {/* Loading / Error → LoadingBar uniforme */}
         <LoadingBar status={barStatus} />
 
         {/* KPIs Snapshot — via KpiBar */}
         <section className="mt-4">
           <h2>Résumé — snapshot</h2>
-
           <KpiBar
             items={[
               { label: "Stations actives", value: fmtInt(kpis?.stations_active) },
               { label: "Hors ligne", value: fmtInt(kpis?.stations_offline) },
               { label: "≥1 vélo", value: fmtPct(kpis?.availability_bike_pct, 1) },
               { label: "≥1 place", value: fmtPct(kpis?.availability_dock_pct, 1) },
-              {
-                label: "Couverture (récente)",
-                value: fmtPct(Number(kpis?.coverage_pct ?? NaN), 1),
-              },
+              { label: "Couverture (récente)", value: fmtPct(Number(kpis?.coverage_pct ?? NaN), 1) },
             ]}
             dense
           />
-
-          {/* 🆕 Métadonnées en dehors des cartes */}
           <div className="kpi-bar-meta">
-            Window: {kpis?.last_days ?? "—"} days · Ref: {kpis?.ref_days ?? "—"} days · Schema v
-            {kpis?.schema_version ?? "—"}
-            <span style={{ marginLeft: 8, opacity: 0.8 }}>
-              ({kpis?.snapshot_ts_local ?? "—"})
-            </span>
+            Window: {kpis?.last_days ?? "—"} days · Ref: {kpis?.ref_days ?? "—"} days · Schema v{ kpis?.schema_version ?? "—" }
+            <span style={{ marginLeft: 8, opacity: 0.8 }}>({kpis?.snapshot_ts_local ?? "—"})</span>
           </div>
         </section>
-
 
         {/* === Carte snapshot === */}
         <section className="mt-6">
           <h2>Stations map — Snapshot</h2>
-
           <div className="map-block">
             <div className="map-wrap" style={{ width: "100%", height: 520 }}>
-              {snapMap?.rows?.length ? (
-                <SnapshotMap rows={snapMap.rows} />
-              ) : (
-                <div className="empty">No snapshot map data.</div>
-              )}
+              {snapMap?.rows?.length ? <SnapshotMap rows={snapMap.rows} /> : <div className="empty">No snapshot map data.</div>}
             </div>
           </div>
-
-          <div className="small mt-2">
-            Basemap: Carto Light (no labels) · Red=pénurie · Blue=saturation · Green=OK (size ~ √bikes).
+          {/* ⬇️ Note HORS du conteneur, harmonisée */}
+          <div className="figure-note small">
+            Basemap : Carto Light (no labels). Rouge = pénurie ; Bleu = saturation ; Vert = OK. La taille des points est proportionnelle à √(bikes).
           </div>
         </section>
 
         {/* === Distribution snapshot === */}
         <section className="mt-6">
           <h2>Snapshot — distribution</h2>
-          <div className="card plot-card">
-            <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>Distribution (%)</h3>
-            {Array.isArray(dist) && dist.length ? (
-              <Plot
-                data={
-                  ([
-                    {
+          {Array.isArray(dist) && dist.length ? (
+            <>
+              <div className="card plot-card">
+                <h3>Distribution des états du snapshot — proportion des stations (%)</h3>
+                <Plot
+                  data={
+                    ([{
                       x: dist.map(
                         (x) =>
                           (
@@ -420,25 +330,32 @@ export default function OverviewPage() {
                       y: dist.map((x) => Number(x.pct)),
                       type: "bar",
                       name: "Snapshot (%)",
+                      hovertemplate: "%{x} — %{y:.1f}%<extra></extra>",
+                    }] as unknown) as Plotly.Data[]
+                  }
+                  layout={chartLayout({
+                    height: 280,
+                    yaxis: {
+                      title: { text: "Proportion des stations (%)" },
+                      range: [0, 100],
+                      ticksuffix: "%",
                     },
-                  ] as unknown) as Plotly.Data[]
-                }
-                layout={{
-                  autosize: true,
-                  height: 280,
-                  margin: { l: 48, r: 10, t: 10, b: 36 },
-                  yaxis: { title: { text: "%" }, range: [0, 100] },
-                  xaxis: { title: { text: "State" } },
-                  paper_bgcolor: "rgba(0,0,0,0)",
-                  plot_bgcolor: "rgba(0,0,0,0)",
-                }}
-                config={{ displayModeBar: false, responsive: true }}
-                className="plot plot--sm"
-              />
-            ) : (
+                    xaxis: { title: { text: "État (catégories)" } },
+                  })}
+                  config={chartConfig}
+                  className="plot plot--sm"
+                />
+              </div>
+              {/* ⬇️ Note HORS du conteneur, harmonisée */}
+              <div className="figure-note small">
+                Lecture : parts des stations par état instantané (pénurie, saturation, etc.). La somme approche 100 % (arrondis).
+              </div>
+            </>
+          ) : (
+            <div className="card plot-card">
               <div className="empty">No snapshot distribution.</div>
-            )}
-          </div>
+            </div>
+          )}
         </section>
 
         {/* Courbes du jour vs référence */}
@@ -449,13 +366,12 @@ export default function OverviewPage() {
               today?.points?.length
                 ? ({
                     x: today.points.map((p) => p.hhmm),
-                    y: today.points.map((p) =>
-                      Number.isFinite(Number(p.pct)) ? Number(p.pct) : null
-                    ),
+                    y: today.points.map((p) => (Number.isFinite(Number(p.pct)) ? Number(p.pct) : null)),
                     type: "scatter",
                     mode: "lines",
-                    name: "Hier (UTC)",
+                    name: "J−1 (UTC)",
                     connectgaps: false,
+                    hovertemplate: "%{x} — %{y:.1f}%<extra>J−1</extra>",
                   } as Partial<Plotly.PlotData>)
                 : null;
 
@@ -468,35 +384,40 @@ export default function OverviewPage() {
                     ),
                     type: "scatter",
                     mode: "lines",
-                    name: "Référence (UTC)",
+                    name: "Référence (médiane)",
                     connectgaps: false,
+                    hovertemplate: "%{x} — %{y:.1f}%<extra>Référence</extra>",
                   } as Partial<Plotly.PlotData>)
                 : null;
 
             return curveToday || curveRef ? (
               <>
-                <Plot
-                  data={[curveRef, curveToday].filter(Boolean) as Plotly.Data[]}
-                  layout={{
-                    autosize: true,
-                    height: 380,
-                    margin: { l: 52, r: 10, t: 30, b: 40 },
-                    xaxis: { title: { text: "Heure (UTC)" } },
-                    yaxis: { title: { text: "Stations avec ≥1 vélo (%)" }, range: [0, 100] },
-                    legend: { orientation: "h" },
-                    paper_bgcolor: "rgba(0,0,0,0)",
-                    plot_bgcolor: "rgba(0,0,0,0)",
-                    hovermode: "x unified",
-                  }}
-                  config={{ displayModeBar: false, responsive: true }}
-                  className="plot plot--lg"
-                />
-                <div className="small mt-2">
-                  Les courbes sont en UTC. « Hier (UTC) » correspond au jour UTC complet (00:00–23:55).
+                <div className="card plot-card">
+                  <h3>Disponibilité ≥1 vélo — courbe journalière (J−1 UTC) vs médiane de référence</h3>
+                  <Plot
+                    data={[curveRef, curveToday].filter(Boolean) as Plotly.Data[]}
+                    layout={chartLayout({
+                      height: 380,
+                      xaxis: { title: { text: "Heure (UTC, HH:MM)" } },
+                      yaxis: {
+                        title: { text: "Stations avec ≥1 vélo (%)" },
+                        range: [0, 100],
+                        ticksuffix: "%",
+                      },
+                    })}
+                    config={chartConfig}
+                    className="plot plot--lg"
+                  />
+                </div>
+                {/* ⬇️ Note HORS du conteneur, harmonisée */}
+                <div className="figure-note small">
+                  Séries agrégées par pas de 5 minutes. J−1 couvre 00:00–23:55 (UTC). La référence est la médiane historique sur la fenêtre indiquée.
                 </div>
               </>
             ) : (
-              <div className="empty">Curves unavailable.</div>
+              <div className="card plot-card">
+                <div className="empty">Curves unavailable.</div>
+              </div>
             );
           })()}
         </section>
@@ -548,169 +469,189 @@ export default function OverviewPage() {
           )}
         </section>
 
-        {/* Stations en tension */}
+        {/* Stations en tension — Top pénurie / Top saturation en tableaux */}
         <section className="mt-6">
           <h2>Stations en tension (fenêtre récente)</h2>
-          <div className="grid-2">
-            <div className="card">
-              <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>Top pénurie</h3>
-              {(() => {
-                const rows = tension?.rows ?? [];
-                const stations = rows
-                  .filter((r) => Number.isFinite(Number(r.penury_rate)))
-                  .sort((a, b) => Number(b.penury_rate) - Number(a.penury_rate))
-                  .slice(0, 20)
-                  .map((r) => {
-                    const id = String(r.station_id);
-                    const meta = stationsIdx[id];
-                    return {
-                      station_id: id,
-                      name: meta?.name ?? id,
-                      penury_pct: Number(r.penury_rate) * 100,
-                      href: `/monitoring/network/dynamics?station_id=${encodeURIComponent(id)}`,
-                    };
-                  });
 
-                return stations.length ? (
-                  <ul
+          {(() => {
+            const rows = tension?.rows ?? [];
+
+            const topPenRows = rows
+              .filter((r) => Number.isFinite(Number(r.penury_rate)))
+              .sort((a, b) => Number(b.penury_rate) - Number(a.penury_rate))
+              .slice(0, 20)
+              .map((r) => {
+                const id = String(r.station_id);
+                const name = stationsIdx[id]?.name ?? (r as any).name ?? id;
+                const pct = Number(r.penury_rate) * 100;
+                return { station_id: id, name, pct };
+              });
+
+            const topSatRows = rows
+              .filter((r) => Number.isFinite(Number(r.saturation_rate)))
+              .sort((a, b) => Number(b.saturation_rate) - Number(a.saturation_rate))
+              .slice(0, 20)
+              .map((r) => {
+                const id = String(r.station_id);
+                const name = stationsIdx[id]?.name ?? (r as any).name ?? id;
+                const pct = Number(r.saturation_rate) * 100;
+                return { station_id: id, name, pct };
+              });
+
+            return (
+              <div className="grid-2">
+{/* Top pénurie — compact, sans scroll horizontal */}
+<div className="card">
+  <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>Top pénurie</h3>
+  {topPenRows.length ? (
+    <div className="table-scroll" style={{ overflowX: "hidden" }}>
+      <div
+        className="table-grid"
+        style={{
+          ["--cols" as any]: "minmax(0,1fr)", // 1 seule colonne fluide
+          minWidth: 0,                         // ✅ neutralise le min-width global (720px)
+        }}
+      >
+        <div className="table-head table-head--sticky">Station</div>
+
+        {topPenRows.map((r) => (
+          <div key={`pen-${r.station_id}`} className="table-row">
+            <div className="table-cell">
+              {/* Ligne nom + pourcentage à droite */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0,1fr) auto",
+                  alignItems: "baseline",
+                  gap: 8,
+                }}
+              >
+                <div>
+                  <div
                     style={{
-                      margin: 0,
-                      padding: 0,
-                      listStyle: "none",
-                      display: "grid",
-                      gap: 8,
+                      fontWeight: 600,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
                     }}
+                    title={r.name}
                   >
-                    {stations.map((r) => (
-                      <li key={r.station_id}>
-                        <a href={r.href} style={{ textDecoration: "none", color: "inherit" }}>
-                          <div
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "minmax(0,1fr) 64px",
-                              alignItems: "center",
-                              gap: 10,
-                            }}
-                          >
-                            <div style={{ overflow: "hidden" }}>
-                              <div style={{ whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
-                                <b>{r.name}</b>{" "}
-                                <span style={{ opacity: 0.6 }}>({r.station_id})</span>
-                              </div>
-                              <div
-                                style={{
-                                  height: 6,
-                                  borderRadius: 999,
-                                  background: "#111827",
-                                  marginTop: 6,
-                                  position: "relative",
-                                  overflow: "hidden",
-                                }}
-                              >
-                                <div
-                                  style={{
-                                    width: `${Math.max(0, Math.min(100, r.penury_pct ?? 0))}%`,
-                                    height: "100%",
-                                    background: "#ef4444",
-                                  }}
-                                />
-                              </div>
-                            </div>
-                            <div style={{ textAlign: "right", fontWeight: 700 }}>
-                              {fmtPct(r.penury_pct ?? undefined, 1)}
-                            </div>
-                          </div>
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <div className="empty">—</div>
-                );
-              })()}
-            </div>
+                    {r.name}
+                  </div>
+                  <div className="mono" style={{ fontSize: 12, opacity: 0.7 }}>
+                    {r.station_id}
+                  </div>
+                </div>
+                <div style={{ fontWeight: 700 }}>{fmtPct(r.pct, 1)}</div>
+              </div>
 
-            <div className="card">
-              <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>Top saturation</h3>
-              {(() => {
-                const rows = tension?.rows ?? [];
-                const stations = rows
-                  .filter((r) => Number.isFinite(Number(r.saturation_rate)))
-                  .sort((a, b) => Number(b.saturation_rate) - Number(a.saturation_rate))
-                  .slice(0, 20)
-                  .map((r) => {
-                    const id = String(r.station_id);
-                    const meta = stationsIdx[id];
-                    return {
-                      station_id: id,
-                      name: meta?.name ?? id,
-                      saturation_pct: Number(r.saturation_rate) * 100,
-                      href: `/monitoring/network/dynamics?station_id=${encodeURIComponent(id)}`,
-                    };
-                  });
-
-                return stations.length ? (
-                  <ul
-                    style={{
-                      margin: 0,
-                      padding: 0,
-                      listStyle: "none",
-                      display: "grid",
-                      gap: 8,
-                    }}
-                  >
-                    {stations.map((r) => (
-                      <li key={r.station_id}>
-                        <a href={r.href} style={{ textDecoration: "none", color: "inherit" }}>
-                          <div
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "minmax(0,1fr) 64px",
-                              alignItems: "center",
-                              gap: 10,
-                            }}
-                          >
-                            <div style={{ overflow: "hidden" }}>
-                              <div style={{ whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
-                                <b>{r.name}</b>{" "}
-                                <span style={{ opacity: 0.6 }}>({r.station_id})</span>
-                              </div>
-                              <div
-                                style={{
-                                  height: 6,
-                                  borderRadius: 999,
-                                  background: "#111827",
-                                  marginTop: 6,
-                                  position: "relative",
-                                  overflow: "hidden",
-                                }}
-                              >
-                                <div
-                                  style={{
-                                    width: `${Math.max(
-                                      0,
-                                      Math.min(100, r.saturation_pct ?? 0)
-                                    )}%`,
-                                    height: "100%",
-                                    background: "#3b82f6",
-                                  }}
-                                />
-                              </div>
-                            </div>
-                            <div style={{ textAlign: "right", fontWeight: 700 }}>
-                              {fmtPct(r.saturation_pct ?? undefined, 1)}
-                            </div>
-                          </div>
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <div className="empty">—</div>
-                );
-              })()}
+              {/* Barre plus étroite, sous le nom */}
+              <div
+                className="bar"
+                style={{
+                  height: 5,
+                  marginTop: 6,
+                  width: "min(52%, 240px)", // ✅ beaucoup plus court
+                }}
+              >
+                <div
+                  className="bar__fill"
+                  style={{
+                    width: `${Math.max(0, Math.min(100, r.pct))}%`,
+                    background: "#ef4444",
+                  }}
+                  aria-hidden
+                />
+              </div>
             </div>
           </div>
+        ))}
+      </div>
+    </div>
+  ) : (
+    <div className="empty">—</div>
+  )}
+</div>
+
+{/* Top saturation — compact, sans scroll horizontal */}
+<div className="card">
+  <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>Top saturation</h3>
+  {topSatRows.length ? (
+    <div className="table-scroll" style={{ overflowX: "hidden" }}>
+      <div
+        className="table-grid"
+        style={{
+          ["--cols" as any]: "minmax(0,1fr)", // 1 seule colonne fluide
+          minWidth: 0,                         // ✅ neutralise le min-width global (720px)
+        }}
+      >
+        <div className="table-head table-head--sticky">Station</div>
+
+        {topSatRows.map((r) => (
+          <div key={`sat-${r.station_id}`} className="table-row">
+            <div className="table-cell">
+              {/* Ligne nom + pourcentage à droite */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0,1fr) auto",
+                  alignItems: "baseline",
+                  gap: 8,
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title={r.name}
+                  >
+                    {r.name}
+                  </div>
+                  <div className="mono" style={{ fontSize: 12, opacity: 0.7 }}>
+                    {r.station_id}
+                  </div>
+                </div>
+                <div style={{ fontWeight: 700 }}>{fmtPct(r.pct, 1)}</div>
+              </div>
+
+              {/* Barre plus étroite, sous le nom */}
+              <div
+                className="bar"
+                style={{
+                  height: 5,
+                  marginTop: 6,
+                  width: "min(52%, 240px)", // ✅ beaucoup plus court
+                }}
+              >
+                <div
+                  className="bar__fill"
+                  style={{
+                    width: `${Math.max(0, Math.min(100, r.pct))}%`,
+                    background: "#3b82f6",
+                  }}
+                  aria-hidden
+                />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  ) : (
+    <div className="empty">—</div>
+  )}
+</div>
+
+
+
+
+              </div>
+            );
+          })()}
 
           {tension && (
             <div className="small mt-2">
@@ -723,7 +664,28 @@ export default function OverviewPage() {
   );
 }
 
-/* ───────────────────────── UI atoms ───────────────────────── */
+/* ───────────────────────── UI atoms (branchés sur monitoring.css) ───────────────────────── */
+function Row({ children }: { children: ReactNode }) {
+  const items = Array.isArray(children) ? children : [children];
+  // aligne à droite la dernière colonne (%)
+  return (
+    <div className="table-row">
+      {items.map((child, i) => {
+        const isLast = i === items.length - 1;
+        return (
+          <div key={i} className={`table-cell ${isLast ? "table-cell--right" : ""}`}>
+            {child}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function HeaderCell({ children }: { children: ReactNode }) {
+  return <div className="table-head table-head--sticky">{children}</div>;
+}
+
 function CardSmall({
   title,
   values,
@@ -737,9 +699,7 @@ function CardSmall({
       <div className="grid-4">
         {values.map((x) => (
           <div key={x.label} style={{ textAlign: "center" }}>
-            <div className="small" style={{ opacity: 0.75 }}>
-              {x.label}
-            </div>
+            <div className="small" style={{ opacity: 0.75 }}>{x.label}</div>
             <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtPct(x.v ?? undefined, 1)}</div>
           </div>
         ))}
