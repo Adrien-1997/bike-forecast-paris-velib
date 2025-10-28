@@ -1,0 +1,16 @@
+{
+  "model_type": "xgb",
+  "horizon_bins": 15,
+  "built_at_utc": "2025-10-25T20:15:48Z",
+  "git_sha": null,
+  "feature_count": 45,
+  "features_hash8": "c10f2fc9",
+  "metrics": {
+    "mae": 1.9335764646530151,
+    "rmse": 2.923431873321533
+  },
+  "version": "2.0.1",
+  "n_train": 7696901,
+  "n_valid": 855212,
+  "seed": 42
+}

@@ -8,15 +8,20 @@
 # Entrée : GCS_DAILY_PREFIX/compact_YYYY-MM-DD.parquet
 #
 # ENV requis :
-#   GCS_DAILY_PREFIX       = gs://<bucket>/velib/daily
-#   GCS_EXPORTS_PREFIX     = gs://<bucket>/velib/exports
-#   MODEL_URI_15           = gs://<bucket>/velib/models/lgb_nbvelos_T+15min.joblib
+#   GCS_DAILY_PREFIX    = gs://<bucket>/velib/daily
+#   GCS_EXPORTS_PREFIX  = gs://<bucket>/velib/exports
+#
+# Modèles (un par horizon en minutes) — peuvent être:
+#   - un FICHIER: gs://.../models/h15/latest.joblib (ou *.joblib)
+#   - un PRÉFIXE/DOSSIER: gs://.../models/h15         → résolu en latest.joblib
+#   MODEL_URI_15, MODEL_URI_60, etc.
 #
 # Optionnels :
-#   FORECAST_HORIZONS      = "15" (défaut "15,60")
-#   PENURY_THRESH          = 2
-#   SATURATION_THRESH      = 2
-#   DAY                    = "YYYY-MM-DD" (défaut today UTC)
+#   FORECAST_HORIZONS   = "15,60" (défaut "15,60")
+#   PENURY_THRESH       = 2
+#   SATURATION_THRESH   = 2
+#   DAY                 = "YYYY-MM-DD" (défaut today UTC)
+#   HISTORY_BACK_MIN    = 240  (min d'historique J-1 à ajouter avant minuit ; défaut 4h)
 #
 # Exécution :
 #   python -m service.jobs.build_datasets
@@ -42,17 +47,19 @@ except Exception as e:
     raise RuntimeError("google-cloud-storage est requis (GCS I/O)") from e
 
 # ─────────────────────────────────────────────
-#  Imports training/forecast (multi-layout safe)
+#  Imports training/forecast (STRICT ALIGNEMENT)
 # ─────────────────────────────────────────────
-
-from service.core.cal_features import add_time_features
-from service.core.forecast import predict_from_features_df
+# On réutilise EXACTEMENT la fabrique de features du training.
+from service.core.forecast import _add_features_spatial, predict_from_features_df
 
 BIN_MIN = 5
 COLS = [
     "ts_utc","tbin_utc","station_id","bikes","capacity","mechanical","ebike",
     "status","lat","lon","name","temp_C","precip_mm","wind_mps"
 ]
+
+# minutes d'historique du jour-1 à concaténer (évite la cassure à minuit)
+HISTORY_BACK_MIN = int(os.environ.get("HISTORY_BACK_MIN", "240"))
 
 # ───────────────────────────── GCS helpers ─────────────────────────────
 
@@ -95,7 +102,6 @@ def _copy_gcs(src_gs: str, dst_gs: str):
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 def _anchor_day_utc() -> str:
-    """Détermine le jour ancre (YYYY-MM-DD) à partir de $DAY ou today UTC."""
     day_env = os.environ.get("DAY")
     if day_env:
         d = day_env.strip()
@@ -108,7 +114,6 @@ def _anchor_day_utc() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 def _list_available_dailies(prefix: str) -> List[str]:
-    """Liste triée des jours disponibles pour compact_*.parquet"""
     bkt, pfx = _split(prefix)
     cli = storage.Client()
     days = []
@@ -121,14 +126,12 @@ def _list_available_dailies(prefix: str) -> List[str]:
     return days
 
 def _find_best_daily(prefix: str, anchor_day: str) -> Optional[str]:
-    """Retourne le dernier jour ≤ anchor_day existant dans GCS."""
     avail = _list_available_dailies(prefix)
     if not avail:
         return None
     candidates = [d for d in avail if d <= anchor_day]
     if candidates:
         return candidates[-1]
-    # sinon le plus proche > anchor (rare)
     for d in avail:
         if d > anchor_day:
             return d
@@ -166,6 +169,26 @@ def _dedup_latest(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values(["station_id","tbin_utc","ts_utc"])
     return df.groupby(["station_id","tbin_utc"], as_index=False).tail(1).reset_index(drop=True)
 
+# ───────────────────────────── Prev-day tail helper ─────────────────────────────
+
+def _maybe_read_prev_tail(prefix: str, day_iso: str, back_min: int) -> pd.DataFrame:
+    """Lit compact_(jour-1).parquet et renvoie la fenêtre [J-1 24h-back, J 00:00[ (UTC)."""
+    if back_min <= 0:
+        return pd.DataFrame()
+    day = pd.to_datetime(day_iso).tz_localize("UTC").tz_convert(None)
+    start_prev_tail = day - pd.Timedelta(minutes=back_min)
+    prev_day_iso = (day - pd.Timedelta(days=1)).date().isoformat()
+    prev_uri = f"{prefix.rstrip('/')}/compact_{prev_day_iso}.parquet"
+    try:
+        df_prev = _read_gcs_parquet(prev_uri)
+    except FileNotFoundError:
+        return pd.DataFrame()
+    df_prev = _enforce_schema(df_prev)
+    df_prev = _dedup_latest(df_prev)
+    m = (df_prev["tbin_utc"] >= start_prev_tail) & (df_prev["tbin_utc"] < day)
+    tail = df_prev.loc[m].copy()
+    return tail
+
 # ───────────────────────────── Events build (jour unique) ─────────────────────────────
 
 def _build_events(df_day: pd.DataFrame, penury: int, saturation: int) -> pd.DataFrame:
@@ -185,7 +208,6 @@ def _build_events(df_day: pd.DataFrame, penury: int, saturation: int) -> pd.Data
     else:
         df["status_code"] = pd.NA
 
-    # h / min depuis tbin_utc
     t = pd.to_datetime(df["tbin_utc"], errors="coerce")
     df["h"]   = t.dt.hour.astype("Int8")
     df["min"] = t.dt.minute.astype("Int8")
@@ -197,7 +219,6 @@ def _build_events(df_day: pd.DataFrame, penury: int, saturation: int) -> pd.Data
         "h","min",
     ]
     out = df[keep].sort_values(["tbin_utc","station_id"]).reset_index(drop=True)
-
     out["station_id"] = out["station_id"].astype("string")
     out["tbin_utc"]   = pd.to_datetime(out["tbin_utc"], errors="coerce")
     return out
@@ -235,62 +256,45 @@ def _build_perf_base(events: pd.DataFrame, horizons_min: List[int]) -> pd.DataFr
     perf = perf[keep].sort_values(["tbin_utc","station_id","horizon_bins"]).reset_index(drop=True)
     return perf
 
-# ───────────────────────────── Features d'inférence ─────────────────────────────
+# ───────────────────────────── Features d'inférence (ALIGNÉES TRAINING) ─────────────────────────────
 
-def _build_inference_features(events: pd.DataFrame) -> pd.DataFrame:
-    ev = events.sort_values(["station_id","tbin_utc"]).copy()
+def _build_inference_features(events: pd.DataFrame, horizon_bins: int = 3) -> pd.DataFrame:
+    """
+    Fabrique STRICTEMENT alignée avec le training :
+    - utilise _add_features_spatial (lags/rollings complets, lags météo, statiques, KNN)
+    - prépare tbin_latest & capacity_bin pour predict_from_features_df
+    """
+    ev = _enforce_schema(events)
+    ev = _dedup_latest(ev)
 
-    def _per_station(st: pd.DataFrame) -> pd.DataFrame:
-        st = st.sort_values("tbin_utc").copy()
-        for L in (1,2,3,6,12,24,48):
-            st[f"lag_bikes_{L}"] = st["bikes"].shift(L)
-        s_shift = st["bikes"].shift(1)
-        for W in (3,6,12):
-            st[f"roll_mean_{W}"] = s_shift.rolling(W, min_periods=max(1, W//2)).mean()
-            st[f"roll_std_{W}"]  = s_shift.rolling(W, min_periods=max(1, W//2)).std()
-        st["tbin_latest"]   = st["tbin_utc"]
-        st["capacity_bin"]  = st["capacity"]
-        st["occ_ratio_bin"] = st["occ_ratio"]
-        return st
+    enhanced, _feat_cols = _add_features_spatial(ev, horizon_bins=horizon_bins)
 
-    gb = ev.groupby("station_id", dropna=True, group_keys=True)
+    enhanced = enhanced.copy()
+    enhanced["tbin_latest"] = pd.to_datetime(enhanced["tbin_utc"], errors="coerce")
     try:
-        tmp = gb.apply(_per_station, include_groups=False)
-    except TypeError:
-        tmp = gb.apply(_per_station)
-    feats = tmp.reset_index(level=0).reset_index(drop=True)
+        enhanced["capacity_bin"] = enhanced["capacity"].round().astype("Int64")
+    except Exception:
+        enhanced["capacity_bin"] = pd.Series([pd.NA] * len(enhanced), dtype="Int64")
 
-    feats = add_time_features(feats, ts_col="tbin_utc", add_paris_derived=True)
+    enhanced["station_id"] = enhanced["station_id"].astype("string")
+    enhanced["tbin_utc"]   = pd.to_datetime(enhanced["tbin_utc"], errors="coerce")
 
-    if "station_id" not in feats.columns:
-        raise RuntimeError("Invariant: 'station_id' manquant après groupby.apply() — check pipeline.")
-    feats["station_id"]  = feats["station_id"].astype("string")
-    feats["tbin_latest"] = pd.to_datetime(feats["tbin_latest"], errors="coerce")
-    feats["tbin_utc"]    = pd.to_datetime(feats["tbin_utc"], errors="coerce")
-
-    if "status" in feats.columns:
-        cats = sorted([s for s in feats["status"].dropna().unique()])
-        s_map = {s:i for i,s in enumerate(cats)}
-        feats["status_code"] = feats["status"].map(s_map).astype("Int64")
-
-    return feats
+    return enhanced
 
 # ───────────────────────────── Inférence (y_pred_int) ─────────────────────────────
 
 def _infer_y_pred(perf_base: pd.DataFrame, feats_all: pd.DataFrame, horizons_min: List[int]) -> pd.DataFrame:
     if perf_base.empty:
         merged = perf_base.assign(y_pred_int=pd.Series([pd.NA]*len(perf_base), dtype="Int64"))
-        # h/min même si vide (consistance schéma)
         t = pd.to_datetime(merged["tbin_utc"], errors="coerce")
         merged["h"]   = t.dt.hour.astype("Int8")
         merged["min"] = t.dt.minute.astype("Int8")
         return merged[["tbin_utc","station_id","horizon_bins","y_true","y_baseline_persist","y_pred_int","bikes","capacity","occ_ratio","h","min"]]
 
-    # URIs modèle par horizon
     uri_map: Dict[int, Optional[str]] = {}
     for hmin in horizons_min:
         hb = max(1, int(round(hmin / BIN_MIN)))
-        uri_map[hb] = os.environ.get(f"MODEL_URI_{hmin}")
+        uri_map[hb] = os.environ.get(f"MODEL_URI_{hmin}")  # fichier *ou* prefix (résolu en latest)
 
     def _pick_pred_cols(df: pd.DataFrame) -> Tuple[Optional[str], Optional[str]]:
         int_prefs   = ["bikes_pred_int", "y_pred_int"]
@@ -310,7 +314,6 @@ def _infer_y_pred(perf_base: pd.DataFrame, feats_all: pd.DataFrame, horizons_min
         if sub.empty:
             continue
 
-        # types solides
         sub = sub.copy()
         sub["station_id"]  = sub["station_id"].astype("string")
         sub["tbin_utc"]    = pd.to_datetime(sub["tbin_utc"], errors="coerce")
@@ -320,10 +323,10 @@ def _infer_y_pred(perf_base: pd.DataFrame, feats_all: pd.DataFrame, horizons_min
         feats["station_id"] = feats["station_id"].astype("string")
         feats["tbin_utc"]   = pd.to_datetime(feats["tbin_utc"], errors="coerce")
 
-        # Features pour le temps source (certains modèles en ont besoin)
+        # Features au temps source (tbin_utc)
         X = sub.merge(feats, on=["tbin_utc","station_id"], how="left")
 
-        # Table des prédictions à merger au temps cible
+        # Table des prédictions à merger au temps CIBLE
         pred_df = sub[["station_id","tbin_target"]].rename(columns={"tbin_target":"_key_target"}).copy()
         pred_df["y_pred_int"] = pd.Series([pd.NA]*len(pred_df), dtype="Int64")
 
@@ -332,19 +335,22 @@ def _infer_y_pred(perf_base: pd.DataFrame, feats_all: pd.DataFrame, horizons_min
             try:
                 preds = predict_from_features_df(
                     feats_df=X,
-                    model_uri=uri,
+                    model_uri=uri,          # peut être prefix: résolu en latest.joblib
                     horizon_bins=hb,
                     model_alias=None,
                 )
                 if not preds.empty:
                     preds = preds.copy()
-                    # Harmonise types de clés côté prédictions
-                    if "station_id" in preds.columns:
-                        preds["station_id"] = preds["station_id"].astype("string")
+                    preds["station_id"] = preds["station_id"].astype("string")
 
-                    # Identifie la colonne temps côté prédiction (cible)
                     time_key: Optional[str] = None
-                    if "tbin_latest" in preds.columns:
+                    if "target_ts_utc" in preds.columns:
+                        preds["target_ts_utc"] = pd.to_datetime(preds["target_ts_utc"], errors="coerce")
+                        time_key = "target_ts_utc"
+                    elif "tbin_target" in preds.columns:
+                        preds["tbin_target"] = pd.to_datetime(preds["tbin_target"], errors="coerce")
+                        time_key = "tbin_target"
+                    elif "tbin_latest" in preds.columns:
                         preds["tbin_latest"] = pd.to_datetime(preds["tbin_latest"], errors="coerce")
                         time_key = "tbin_latest"
                     elif "tbin_utc" in preds.columns:
@@ -357,23 +363,19 @@ def _infer_y_pred(perf_base: pd.DataFrame, feats_all: pd.DataFrame, horizons_min
                             keep = preds[["station_id", time_key, int_col]].rename(
                                 columns={time_key:"_key_target", int_col:"_y_int"}
                             )
-                            pred_df = pred_df.merge(
-                                keep, on=["station_id","_key_target"], how="left"
-                            )
+                            pred_df = pred_df.merge(keep, on=["station_id","_key_target"], how="left")
                             pred_df["y_pred_int"] = pred_df["y_pred_int"].fillna(pred_df["_y_int"]).astype("Int64")
                             pred_df.drop(columns=["_y_int"], inplace=True)
                         else:
                             keep = preds[["station_id", time_key, float_col]].rename(
                                 columns={time_key:"_key_target", float_col:"_y_f"}
                             )
-                            pred_df = pred_df.merge(
-                                keep, on=["station_id","_key_target"], how="left"
-                            )
+                            pred_df = pred_df.merge(keep, on=["station_id","_key_target"], how="left")
                             ypf = pred_df["_y_f"].astype("float64")
                             pred_df["y_pred_int"] = pd.Series(np.rint(ypf).astype("float64"), dtype="Int64")
                             pred_df.drop(columns=["_y_f"], inplace=True)
                     else:
-                        print(f"[build_datasets][warn] modèle {uri} (h={hmin}) sans colonne/clé de prédiction reconnue: {list(preds.columns)}")
+                        print(f"[build_datasets][warn] modèle {uri} (h={hmin}) sans colonne/clé reconnue: {list(preds.columns)}")
                 else:
                     print(f"[build_datasets][warn] modèle {uri} (h={hmin}) a renvoyé un DF vide.")
             except Exception as e:
@@ -381,7 +383,7 @@ def _infer_y_pred(perf_base: pd.DataFrame, feats_all: pd.DataFrame, horizons_min
         else:
             print(f"[build_datasets][warn] MODEL_URI_{hmin} non défini — y_pred_int=<NA>")
 
-        # Re-mapper la prédiction cible sur la table perf (clé = station_id + tbin_target)
+        # Re-mapper la prédiction *cible* sur la table perf (clé = station_id + tbin_target)
         sub_perf = perf_base.loc[perf_base["horizon_bins"] == hb].copy()
         sub_perf = sub_perf.merge(
             pred_df.rename(columns={"_key_target":"tbin_target"})[["station_id","tbin_target","y_pred_int"]],
@@ -399,16 +401,14 @@ def _infer_y_pred(perf_base: pd.DataFrame, feats_all: pd.DataFrame, horizons_min
 
     merged = pd.concat(out_parts, ignore_index=True, sort=False) if out_parts else perf_base.assign(y_pred_int=pd.Series([pd.NA]*len(perf_base), dtype="Int64"))
 
-    # h / min depuis tbin_utc (temps source dans la sortie)
+    # h / min depuis tbin_utc (temps source)
     t = pd.to_datetime(merged["tbin_utc"], errors="coerce")
     merged["h"]   = t.dt.hour.astype("Int8")
     merged["min"] = t.dt.minute.astype("Int8")
 
-    # Sortie finale sans tbin_target
     cols = ["tbin_utc","station_id","horizon_bins","y_true","y_baseline_persist","y_pred_int","bikes","capacity","occ_ratio","h","min"]
     merged = merged[cols].sort_values(["tbin_utc","station_id","horizon_bins"]).reset_index(drop=True)
 
-    # Types finaux
     merged["tbin_utc"]   = pd.to_datetime(merged["tbin_utc"], errors="coerce")
     merged["station_id"] = merged["station_id"].astype("string")
     merged["y_pred_int"] = merged["y_pred_int"].astype("Int64")
@@ -440,28 +440,49 @@ def main() -> int:
 
     day = best_day
     daily_uri = f"{DAILY_PREFIX.rstrip('/')}/compact_{day}.parquet"
-    print(f"[build_datasets] day={day} daily_uri={daily_uri} horizons={HORIZONS}")
+    print(f"[build_datasets] day={day} daily_uri={daily_uri} horizons={HORIZONS} (history_back_min={HISTORY_BACK_MIN})")
 
+    # Fenêtre du jour ancre
+    day_start = pd.to_datetime(day).tz_localize("UTC").tz_convert(None)
+    day_end   = day_start + timedelta(days=1)
+
+    # Lecture jour + éventuelle "queue" du jour-1 (ex: 4h)
     df_day = _read_gcs_parquet(daily_uri)
+    prev_tail = _maybe_read_prev_tail(DAILY_PREFIX, day, HISTORY_BACK_MIN)
+    if len(prev_tail):
+        print(f"[build_datasets] prev tail rows: {len(prev_tail):,} (from {HISTORY_BACK_MIN} min before midnight)")
+        df_hist = pd.concat([prev_tail, df_day], ignore_index=True)
+    else:
+        print("[build_datasets] no prev tail available")
+        df_hist = df_day
 
-    # EVENTS
-    events = _build_events(df_day, penury=PENURY_T, saturation=SAT_T)
+    # EVENTS construits sur l'historique (évite la cassure à minuit)
+    events_combined = _build_events(df_hist, penury=PENURY_T, saturation=SAT_T)
+
+    # On NE PUBLIE que le jour ancre
+    events = events_combined[(events_combined["tbin_utc"] >= day_start) & (events_combined["tbin_utc"] < day_end)].copy()
     if events.empty:
-        print("[build_datasets] events empty — exit 0")
+        print("[build_datasets] events empty after day filter — exit 0")
         return 0
-    events_main = f"{EXPORTS_PREFIX.rstrip('/')}/events.parquet"
+    events_main  = f"{EXPORTS_PREFIX.rstrip('/')}/events.parquet"
     events_dated = f"{EXPORTS_PREFIX.rstrip('/')}/events_{day}.parquet"
     _write_gcs_parquet(events, events_dated)
     _copy_gcs(events_dated, events_main)
 
     # PERF + y_pred_int
-    perf_base = _build_perf_base(events, horizons_min=HORIZONS)
-    feats_all = _build_inference_features(events)
+    perf_base = _build_perf_base(events, horizons_min=HORIZONS)  # base à partir des events DU JOUR
+    # Features d'inférence construites sur l'HISTORIQUE (prev tail + jour)
+    feats_all = _build_inference_features(events_combined, horizon_bins=3)
     perf = _infer_y_pred(perf_base=perf_base, feats_all=feats_all, horizons_min=HORIZONS)
+
+    # Filtre final (sécurité) : ne garder que le jour ancre
+    if not perf.empty:
+        perf = perf[(perf["tbin_utc"] >= day_start) & (perf["tbin_utc"] < day_end)].copy()
+
     if perf.empty:
         print("[build_datasets] perf empty — nothing written")
         return 0
-    perf_main = f"{EXPORTS_PREFIX.rstrip('/')}/perf.parquet"
+    perf_main  = f"{EXPORTS_PREFIX.rstrip('/')}/perf.parquet"
     perf_dated = f"{EXPORTS_PREFIX.rstrip('/')}/perf_{day}.parquet"
     _write_gcs_parquet(perf, perf_dated)
     _copy_gcs(perf_dated, perf_main)

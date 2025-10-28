@@ -17,6 +17,7 @@ except Exception as e:
 #         | export_data_health | push_hf
 # - GCS_LOCK           : gs://.../velib/locks/job.lock  (optionnel)
 # - PYTHON_BIN         : binaire python (optionnel, défaut: "python")
+# - DRY_RUN           : 1|0 (affiche la commande sans l'exécuter)
 #
 # Aides au calcul de date (pour compact_daily / compact_monthly) :
 # - DAY                : YYYY-MM-DD (prioritaire si présent)
@@ -25,11 +26,14 @@ except Exception as e:
 JOB        = (os.environ.get("JOB", "ingest") or "ingest").strip()
 PYTHON_BIN = os.environ.get("PYTHON_BIN") or "python"
 LOCK_URI   = os.environ.get("GCS_LOCK")
+DRY_RUN    = os.environ.get("DRY_RUN") in ("1", "true", "True")
+
 
 def parse_gs(uri: str) -> Tuple[str, str]:
     assert uri.startswith("gs://"), f"invalid GCS URI: {uri}"
     bkt, path = uri[5:].split("/", 1)
     return bkt, path
+
 
 def lock_blob(client: storage.Client, lock_uri: str | None):
     """Best-effort lock via objet GCS vide (if_generation_match=0)."""
@@ -39,26 +43,29 @@ def lock_blob(client: storage.Client, lock_uri: str | None):
     blob = client.bucket(bkt).blob(key)
     try:
         blob.upload_from_string(b"", if_generation_match=0)
+        print(f"[lock] acquired → {lock_uri}")
         return blob
     except Exception:
+        # busy or cannot create
         return None
+
 
 def _dispatch_command(job: str) -> List[str]:
     """
-    Construit la commande Python **par module** (-m), nouvelle arbo:
-      - jobs.ingest
-      - jobs.compact_daily
-      - jobs.compact_monthly
-      - jobs.latest_7d
-      - jobs.build_serving_forecast            (nouveau nom)
-      - jobs.train_model
-      - jobs.export_training_base
-      - jobs.export_training_base_to_gcs
-      - jobs.export_data_health
-      - jobs.push_hf
+    Construit la commande Python **par module** (-m), arbo service.jobs.* :
+      - service.jobs.ingest
+      - service.jobs.compact_daily
+      - service.jobs.compact_monthly
+      - service.jobs.latest_7d
+      - service.jobs.build_serving_forecast
+      - service.jobs.train_model
+      - service.jobs.export_training_base
+      - service.jobs.export_training_base_to_gcs
+      - service.jobs.export_data_health
+      - service.jobs.push_hf
     Compat alias:
-      - build_features_4h → jobs.build_serving_forecast
-      - build_latest      → jobs.latest_7d
+      - build_features_4h → build_serving_forecast
+      - build_latest      → latest_7d
     """
     alias: Dict[str, str] = {
         "build_features_4h": "build_serving_forecast",
@@ -67,21 +74,21 @@ def _dispatch_command(job: str) -> List[str]:
     normalized = alias.get(job, job)
 
     modules = {
-        "ingest":                       "jobs.ingest",
-        "compact_daily":                "jobs.compact_daily",
-        "compact_monthly":              "jobs.compact_monthly",
-        "latest_7d":                    "jobs.latest_7d",
-        "build_serving_forecast":       "jobs.build_serving_forecast",
-        "train_model":                  "jobs.train_model",
-        "export_training_base":         "jobs.export_training_base",
-        "export_training_base_to_gcs":  "jobs.export_training_base_to_gcs",
-        "export_data_health":           "jobs.export_data_health",
-        "push_hf":                      "jobs.push_hf",
+        "ingest":                       "service.jobs.ingest",
+        "compact_daily":                "service.jobs.compact_daily",
+        "compact_monthly":              "service.jobs.compact_monthly",
+        "latest_7d":                    "service.jobs.latest_7d",
+        "build_serving_forecast":       "service.jobs.build_serving_forecast",
+        "train_model":                  "service.jobs.train_model",
+        "export_training_base":         "service.jobs.export_training_base",
+        "export_training_base_to_gcs":  "service.jobs.export_training_base_to_gcs",
+        "export_data_health":           "service.jobs.export_data_health",
+        "push_hf":                      "service.jobs.push_hf",
     }
     if normalized not in modules:
         raise ValueError(f"unknown JOB={job}")
-
     return [PYTHON_BIN, "-m", modules[normalized]]
+
 
 def _maybe_set_day_env(job: str):
     """
@@ -111,6 +118,7 @@ def _maybe_set_day_env(job: str):
     os.environ["DAY"] = day
     print(f"[job] DAY not provided → computed from offset={offset}: DAY={day} (UTC)")
 
+
 def main() -> int:
     client = storage.Client()
 
@@ -120,7 +128,7 @@ def main() -> int:
     # 1) Lock optionnel
     lock = lock_blob(client, LOCK_URI)
     if LOCK_URI and lock is None:
-        print("[lock] busy (or error acquiring lock) → exit 0")
+        print(f"[lock] busy or create error → {LOCK_URI} → exit 0")
         return 0
     elif not LOCK_URI:
         print("[lock] disabled (no GCS_LOCK)")
@@ -135,16 +143,23 @@ def main() -> int:
 
         # Echo utile debug (sans secrets)
         keys_to_echo = [
-            "JOB","PYTHONPATH",
-            "GCS_RAW_PREFIX","GCS_DAILY_PREFIX","GCS_MONTHLY_PREFIX",
-            "GCS_SERVING_PREFIX","SERVING_FORECAST_PREFIX",
-            "DAY","DAY_OFFSET"
+            "JOB", "PYTHONPATH",
+            "GCS_RAW_PREFIX", "GCS_DAILY_PREFIX", "GCS_MONTHLY_PREFIX",
+            "GCS_SERVING_PREFIX", "SERVING_FORECAST_PREFIX", "GCS_MONITORING_PREFIX",
+            "GCS_EXPORTS_PREFIX",
+            "DAY", "DAY_OFFSET",
+            "MODEL_TYPE", "HORIZON_BINS",
         ]
         echo = " ".join(f"{k}={os.environ.get(k)}" for k in keys_to_echo if os.environ.get(k) is not None)
         if echo:
             print(f"[env] {echo}")
 
+        # 3) Exécution (ou dry-run)
         print("[job] run:", " ".join(cmd))
+        if DRY_RUN:
+            print("[job] DRY_RUN=1 → skipping execution")
+            return 0
+
         run(cmd, check=True)
         return 0
 
@@ -159,6 +174,7 @@ def main() -> int:
             with contextlib.suppress(Exception):
                 lock.delete()
                 print("[lock] released")
+
 
 if __name__ == "__main__":
     sys.exit(main())

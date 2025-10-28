@@ -19,7 +19,7 @@
 #
 # ENV (required):
 #   GCS_EXPORTS_PREFIX     = gs://<bucket>/velib/exports
-#   GCS_MONITORING_PREFIX  = gs://<bucket>/velib   (or .../velib/monitoring)
+#   GCS_MONITORING_PREFIX  = gs://<bucket>/velib
 #
 # ENV (optional):
 #   PERF_TZ              = Europe/Paris

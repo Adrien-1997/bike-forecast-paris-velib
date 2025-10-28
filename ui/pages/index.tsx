@@ -1,4 +1,5 @@
 // ui/pages/index.tsx
+import Script from "next/script";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Head from "next/head";
 import GlobalHeader from "@/components/layout/GlobalHeader";
@@ -15,18 +16,40 @@ export default function LandingPage() {
 
   // 🔐 Liens de paiement (remplace par tes URLs Stripe/Ko-fi/Sponsors)
   const SUPPORT_ONE_TIME =
-    process.env.NEXT_PUBLIC_SUPPORT_ONE_TIME ?? "https://buy.stripe.com/test_123"; // Don unique (Stripe Payment Link)
+    process.env.NEXT_PUBLIC_SUPPORT_ONE_TIME ?? "https://buy.stripe.com/test_123"; // Don unique
   const SUPPORT_MONTHLY =
-    process.env.NEXT_PUBLIC_SUPPORT_MONTHLY ?? "https://buy.stripe.com/test_monthly_123"; // Abonnement mensuel
+    process.env.NEXT_PUBLIC_SUPPORT_MONTHLY ?? "https://buy.stripe.com/test_monthly_123"; // Abonnement
   const SUPPORT_SPONSORS =
-    process.env.NEXT_PUBLIC_SUPPORT_SPONSORS ?? "https://github.com/sponsors/adrien"; // GitHub Sponsors (optionnel)
+    process.env.NEXT_PUBLIC_SUPPORT_SPONSORS ?? "https://github.com/sponsors/Adrien-1997"; // Sponsors
   const SUPPORT_KOFI =
-    process.env.NEXT_PUBLIC_SUPPORT_KOFI ?? "https://ko-fi.com/adrien"; // Ko-fi (optionnel)
+    process.env.NEXT_PUBLIC_SUPPORT_KOFI ?? "https://ko-fi.com/adrien61942"; // Ko-fi
+
+  // 🔑 Ko-fi username (déduit de l'URL ou via env)
+  const KOFI_USERNAME =
+    process.env.NEXT_PUBLIC_KOFI_USERNAME ??
+    (() => {
+      try {
+        const u = new URL(SUPPORT_KOFI);
+        const seg = u.pathname.split("/").filter(Boolean);
+        return seg[0] || "adrien61942";
+      } catch {
+        return "adrien61942";
+      }
+    })();
+
+  function getCssVar(name: string, fallback: string) {
+    try {
+      const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      return v || fallback;
+    } catch {
+      return fallback;
+    }
+  }
 
   // ────────────────────────────────────────────────────────────────────────────
   // LoadingBar (même logique que monitoring, simple succès)
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loading] = useState<boolean>(false);
+  const [error] = useState<string | null>(null);
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
   // ────────────────────────────────────────────────────────────────────────────
@@ -126,7 +149,7 @@ export default function LandingPage() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Auto-slide KPI bar (discrete: 3s hold + quick slide)
+  // Auto-slide KPI bar
   useEffect(() => {
     const root = document.querySelector<HTMLElement>(".kpi-bar.kpi-bar--auto");
     const track = root?.querySelector<HTMLElement>(".kpi-track");
@@ -137,32 +160,25 @@ export default function LandingPage() {
       window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     if (prefersReduced) return;
 
-    // Collect original items and compute step offsets (robust to responsive)
     const items = Array.from(track.children) as HTMLElement[];
     const N = items.length;
     if (N === 0) return;
 
-    // Clone first item for seamless loop
     const firstClone = items[0].cloneNode(true) as HTMLElement;
     track.appendChild(firstClone);
 
-    // Helper: recompute left offsets relative to track
     const getOffsets = () => {
-      const rects = Array.from(track.children).map((el) =>
-        (el as HTMLElement).offsetLeft
-      );
-      // Normalize to start at 0
+      const rects = Array.from(track.children).map((el) => (el as HTMLElement).offsetLeft);
       const base = rects[0] || 0;
       return rects.map((x) => x - base);
     };
 
     let offsets = getOffsets();
-    let index = 0; // current visible original index
-    let holdMs = 3000; // stay duration
-    let slideMs = 380; // transition duration
+    let index = 0;
+    let holdMs = 3000;
+    let slideMs = 380;
     let timer: number | null = null;
 
-    // Ensure root is overflow-hidden (defensive)
     (root.style as any).overflow = "hidden";
     track.style.willChange = "transform";
 
@@ -172,7 +188,6 @@ export default function LandingPage() {
       track.style.transform = `translateX(${-x}px)`;
     };
 
-    // Pause/resume on page visibility
     const onVis = () => {
       if (document.hidden) {
         if (timer) window.clearTimeout(timer);
@@ -182,40 +197,31 @@ export default function LandingPage() {
       }
     };
 
-    // Recalculate on resize (cards can reflow)
     const ro = new ResizeObserver(() => {
       const currentX = offsets[Math.min(index, offsets.length - 1)] || 0;
       offsets = getOffsets();
-      // Snap to the same logical slide without animation
       track.style.transition = "none";
       track.style.transform = `translateX(${-currentX}px)`;
     });
     ro.observe(track);
 
-    // Hover pauses the cycle
     const onEnter = () => {
       if (timer) window.clearTimeout(timer);
       timer = null;
     };
     const onLeave = () => scheduleNext();
 
-    // Core loop
     const goNext = () => {
-      // Slide to next (may be the clone)
       applyTransform(index + 1, true);
 
       const onEnd = () => {
         track.removeEventListener("transitionend", onEnd);
-
-        // If we reached the clone (index == N-1 → clone at N),
-        // snap back to real first without transition
         if (index + 1 >= N) {
           index = 0;
           applyTransform(0, false);
         } else {
           index += 1;
         }
-
         scheduleNext();
       };
 
@@ -227,7 +233,6 @@ export default function LandingPage() {
       timer = window.setTimeout(goNext, holdMs) as unknown as number;
     };
 
-    // Init: snap to first, then start cycle
     applyTransform(0, false);
     scheduleNext();
 
@@ -241,14 +246,51 @@ export default function LandingPage() {
       root.removeEventListener("mouseenter", onEnter);
       root.removeEventListener("mouseleave", onLeave);
       ro.disconnect();
-      // Clean transition/transform (optional)
       track.style.transition = "";
       track.style.transform = "";
       track.style.willChange = "";
-      // Remove our clone to avoid duplicates on hot reload
-      try { track.lastElementChild === firstClone && track.removeChild(firstClone); } catch {}
+      try {
+        track.lastElementChild === firstClone && track.removeChild(firstClone);
+      } catch {}
     };
   }, []);
+
+  // ───────────────────────────────────────────────────────────────
+  // Ko-fi : ouverture via le bouton "Ko-fi" (branché au widget)
+  const openKoFi = () => {
+    try {
+      const api = (window as any).kofiWidgetOverlay;
+      const primary = getCssVar("--primary", "#ff6a00");
+
+      if (api && typeof api.draw === "function") {
+        // Dessiner une seule fois le widget, aux couleurs du site
+        if (!(window as any).__kofiDrawn) {
+          api.draw(KOFI_USERNAME, {
+            type: "floating-chat",
+            "floating-chat.donateButton.text": "Soutenez-moi",
+            "floating-chat.donateButton.background-color": primary,
+            "floating-chat.donateButton.text-color": "#ffffff",
+          });
+          (window as any).__kofiDrawn = true;
+        }
+
+        // Petit délai pour laisser le DOM du widget apparaître, puis ouverture
+        setTimeout(() => {
+          const btn =
+            document.querySelector<HTMLButtonElement>(
+              ".floatingchat-container button, .floatingchat-container [role='button']"
+            );
+          if (btn) btn.click();
+          else window.open(SUPPORT_KOFI, "_blank", "noopener,noreferrer"); // fallback
+        }, 60);
+        return;
+      }
+    } catch {
+      // ignore
+    }
+    // Fallback si la lib n'est pas dispo (CSP/adblock)
+    window.open(SUPPORT_KOFI, "_blank", "noopener,noreferrer");
+  };
 
   return (
     <>
@@ -314,6 +356,20 @@ export default function LandingPage() {
             }),
           }}
         />
+
+        {/* Ko-fi overlay script */}
+        <Script
+          id="kofi-overlay"
+          src="https://storage.ko-fi.com/cdn/scripts/overlay-widget.js"
+          strategy="afterInteractive"
+        />
+
+        {/* Z-index de sécurité pour que le widget soit au-dessus */}
+        <style jsx global>{`
+          .floatingchat-container {
+            z-index: 10000 !important;
+          }
+        `}</style>
       </Head>
 
       {/* ===== A11y skip link ===== */}
@@ -364,9 +420,8 @@ export default function LandingPage() {
                 </h1>
 
                 <p className="lead">
-                  Carte temps réel, prédictions à +15 min par station, comparaison aux comportements
-                  historiques, et monitoring natif. Conçu pour fiabilité, vitesse et clarté — même
-                  aux heures de pointe.
+                  Carte temps réel, prédictions à +15 min par station, comparaison aux comportements historiques, et
+                  monitoring natif. Conçu pour fiabilité, vitesse et clarté — même aux heures de pointe.
                 </p>
 
                 <ul className="text-muted" style={{ margin: "10px 0 0", paddingLeft: 18 }}>
@@ -403,7 +458,7 @@ export default function LandingPage() {
               <aside className="glass hero-card" aria-label="Indicateurs clés">
                 <h3>En chiffres — 7 derniers jours</h3>
 
-                {/* KPI BAR — auto-slide (piste interne en JSX) */}
+                {/* KPI BAR — auto-slide */}
                 <div className="kpi-bar-wrap">
                   <div className="kpi-bar kpi-bar--scroll kpi-bar--auto kpi-bar--dense" role="list">
                     <div className="kpi-track">
@@ -439,7 +494,6 @@ export default function LandingPage() {
                     </div>
                   </div>
 
-                  {/* meta sous la barre (optionnelle) */}
                   <div className="kpi-bar-meta">Démo · valeurs illustratives</div>
                 </div>
 
@@ -464,19 +518,13 @@ export default function LandingPage() {
                 <div>
                   <h2 id="demo-title">Démo en direct</h2>
                   <p>
-                    Application React embarquée : carte en direct, recherche de stations, et
-                    prévisions à +15 minutes. Le premier accès peut prendre quelques secondes
-                    (cold start Cloud Run).
+                    Application React embarquée : carte en direct, recherche de stations, et prévisions à +15 minutes. Le
+                    premier accès peut prendre quelques secondes (cold start Cloud Run).
                   </p>
                 </div>
                 <div>
-                  <span className="kbd" aria-hidden="true">
-                    Alt
-                  </span>{" "}
-                  +{" "}
-                  <span className="kbd" aria-hidden="true">
-                    Clique
-                  </span>{" "}
+                  <span className="kbd" aria-hidden="true">Alt</span> +{" "}
+                  <span className="kbd" aria-hidden="true">Clique</span>{" "}
                   <span className="sr-only">Astuce :</span> pour plein écran
                 </div>
               </div>
@@ -538,8 +586,8 @@ export default function LandingPage() {
                 <div>
                   <h2 id="features-title">Plein usage, du matin au soir</h2>
                   <p>
-                    Repérez les stations utiles, visualisez l’évolution à +15 min, comparez à la médiane,
-                    puis basculez en mode monitoring si besoin.
+                    Repérez les stations utiles, visualisez l’évolution à +15 min, comparez à la médiane, puis basculez en
+                    mode monitoring si besoin.
                   </p>
                 </div>
                 <a className="btn outline" href="#demo">
@@ -556,8 +604,8 @@ export default function LandingPage() {
                   </div>
                   <h3>Carte lisible & rapide</h3>
                   <p>
-                    Couleurs travaillées, légende compacte, recherche instantanée, focus quartier. Affichage
-                    pensé pour 1–2 infos clés par station (vélos/capacité + tendance).
+                    Couleurs travaillées, légende compacte, recherche instantanée, focus quartier. Affichage pensé pour 1–2
+                    infos clés par station (vélos/capacité + tendance).
                   </p>
                 </article>
 
@@ -570,8 +618,8 @@ export default function LandingPage() {
                   </div>
                   <h3>Prévisions à +15 min</h3>
                   <p>
-                    Modèle entraîné sur l’historique et enrichi météo (vents, pluie, saisonnalités).
-                    Calibrage par segments horaires et stations pour limiter les biais.
+                    Modèle entraîné sur l’historique et enrichi météo (vents, pluie, saisonnalités). Calibrage par segments
+                    horaires et stations pour limiter les biais.
                   </p>
                 </article>
 
@@ -584,8 +632,8 @@ export default function LandingPage() {
                   </div>
                   <h3>Comparaisons utiles</h3>
                   <p>
-                    “Aujourd’hui vs médiane” et profils horaires par station pour comprendre les dynamiques
-                    locales (heures de pointe, zones de reports, anomalies).
+                    “Aujourd’hui vs médiane” et profils horaires par station pour comprendre les dynamiques locales (heures
+                    de pointe, zones de reports, anomalies).
                   </p>
                 </article>
 
@@ -598,8 +646,8 @@ export default function LandingPage() {
                   </div>
                   <h3>Monitoring intégré</h3>
                   <p>
-                    KPIs fraîcheur/complétude, alertes simples (saturation/pénurie), suivi de stabilité des
-                    features — pour des décisions fiables.
+                    KPIs fraîcheur/complétude, alertes simples (saturation/pénurie), suivi de stabilité des features — pour
+                    des décisions fiables.
                   </p>
                 </article>
 
@@ -612,8 +660,8 @@ export default function LandingPage() {
                   </div>
                   <h3>Accessible partout</h3>
                   <p>
-                    Un simple <code>&lt;iframe&gt;</code> suffit (Cloud Run, proxy, sous-domaine), avec thème
-                    auto (clair/sombre) et navigation clavier.
+                    Un simple <code>&lt;iframe&gt;</code> suffit (Cloud Run, proxy, sous-domaine), avec thème auto
+                    (clair/sombre) et navigation clavier.
                   </p>
                 </article>
 
@@ -625,8 +673,7 @@ export default function LandingPage() {
                   </div>
                   <h3>Pensé pour évoluer</h3>
                   <p>
-                    Code modulaire : nouveaux horizons (T+60), nouvelles villes, nouvelles sources — sans
-                    refonte complète.
+                    Code modulaire : nouveaux horizons (T+60), nouvelles villes, nouvelles sources — sans refonte complète.
                   </p>
                 </article>
               </div>
@@ -634,12 +681,8 @@ export default function LandingPage() {
               <div className="glass prose mt-2">
                 <h3>Cas d’usage rapides</h3>
                 <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                  <li>
-                    Communication et info voyageurs : carte intégrée à un site de quartier/entreprise.
-                  </li>
-                  <li>
-                    Immobilier/événementiel : repérer les zones sous- ou sur-servies à l’instant T.
-                  </li>
+                  <li>Communication et info voyageurs : carte intégrée à un site de quartier/entreprise.</li>
+                  <li>Immobilier/événementiel : repérer les zones sous- ou sur-servies à l’instant T.</li>
                   <li>Mobilité individuelle : planifier un trajet avec station d’arrivée fiable.</li>
                 </ul>
               </div>
@@ -653,8 +696,8 @@ export default function LandingPage() {
                 <div>
                   <h2 id="monitoring-title">Monitoring & Qualité des données</h2>
                   <p>
-                    Surveille en continu la fraîcheur, la couverture et les anomalies pour préserver la
-                    fiabilité des prévisions. Export des KPIs en JSON pour alimenter d’autres vues.
+                    Surveille en continu la fraîcheur, la couverture et les anomalies pour préserver la fiabilité des
+                    prévisions. Export des KPIs en JSON pour alimenter d’autres vues.
                   </p>
                 </div>
                 <a className="btn outline" href="#faq">
@@ -718,8 +761,8 @@ export default function LandingPage() {
                 <div>
                   <h2 id="how-title">Sous le capot</h2>
                   <p>
-                    Un pipeline robuste de l’ingestion à la mise en prod, avec des composants simples à
-                    maintenir et des points de contrôle clairs.
+                    Un pipeline robuste de l’ingestion à la mise en prod, avec des composants simples à maintenir et des
+                    points de contrôle clairs.
                   </p>
                 </div>
               </div>
@@ -785,33 +828,32 @@ export default function LandingPage() {
                 <details>
                   <summary>La démo met quelques secondes à démarrer, normal ?</summary>
                   <p>
-                    Oui, c’est le cold start de Cloud Run. Les accès suivants sont instantanés. Vous pouvez
-                    configurer une instance minimum pour éviter ce délai.
+                    Oui, c’est le cold start de Cloud Run. Les accès suivants sont instantanés. Vous pouvez configurer une
+                    instance minimum pour éviter ce délai.
                   </p>
                 </details>
 
                 <details>
                   <summary>Puis-je intégrer l’app dans mon site ?</summary>
                   <p>
-                    Oui, via un simple <code>&lt;iframe&gt;</code>. La page gère le responsive, le thème
-                    clair/sombre et la navigation clavier.
+                    Oui, via un simple <code>&lt;iframe&gt;</code>. La page gère le responsive, le thème clair/sombre et la
+                    navigation clavier.
                   </p>
                 </details>
 
                 <details>
                   <summary>Comment sont calculées les prévisions ?</summary>
                   <p>
-                    Entraînement station-par-station avec signaux calendrier/météo. Une baseline de persistance
-                    permet de mesurer l’amélioration réelle et d’éviter les gains artificiels.
+                    Entraînement station-par-station avec signaux calendrier/météo. Une baseline de persistance permet de
+                    mesurer l’amélioration réelle et d’éviter les gains artificiels.
                   </p>
                 </details>
 
                 <details>
                   <summary>Et la qualité des données ?</summary>
                   <p>
-                    Contrôles de fraîcheur (p50/p95), complétude des champs critiques, dérive simple des
-                    features, et alertes sur pénurie/saturation. Exports JSON pour vos propres tableaux de
-                    bord.
+                    Contrôles de fraîcheur (p50/p95), complétude des champs critiques, dérive simple des features, et
+                    alertes sur pénurie/saturation. Exports JSON pour vos propres tableaux de bord.
                   </p>
                 </details>
               </div>
@@ -826,8 +868,8 @@ export default function LandingPage() {
   allow="fullscreen"></iframe>`}</code>
                 </pre>
                 <p className="text-muted" style={{ fontSize: ".95rem" }}>
-                  Vous pouvez aussi placer l’app derrière un sous-domaine (ex. <em>app.votredomaine.fr</em>),
-                  avec un enregistrement CNAME et des headers de sécurité adaptés.
+                  Vous pouvez aussi placer l’app derrière un sous-domaine (ex. <em>app.votredomaine.fr</em>), avec un
+                  enregistrement CNAME et des headers de sécurité adaptés.
                 </p>
                 <ul className="text-muted" style={{ paddingLeft: 18 }}>
                   <li>CORS restreint, CSP stricte, cookies “None; Secure”.</li>
@@ -844,8 +886,8 @@ export default function LandingPage() {
                 <div>
                   <h2 id="support-title">Soutenir le projet</h2>
                   <p>
-                    Ce projet est développé et maintenu indépendamment pour proposer une expérience fluide de la
-                    mobilité à Paris. Votre soutien permet de couvrir l’hébergement, la supervision et le temps de R&D.
+                    Ce projet est développé et maintenu indépendamment pour proposer une expérience fluide de la mobilité à
+                    Paris. Votre soutien permet de couvrir l’hébergement, la supervision et le temps de R&D.
                   </p>
                 </div>
               </div>
@@ -855,9 +897,9 @@ export default function LandingPage() {
                 <article className="glass prose">
                   <h3>À propos</h3>
                   <p className="text-muted">
-                    Je m’appelle <strong>Adrien</strong>, ingénieur en mathématiques appliquées spécialisé en
-                    analyse, modélisation statistique et machine learning. J’aime transformer des données réelles
-                    en outils utiles, fiables et élégants – ici, pour anticiper la disponibilité des vélos en ville.
+                    Je m’appelle <strong>Adrien</strong>, ingénieur en mathématiques appliquées spécialisé en analyse,
+                    modélisation statistique et machine learning. J’aime transformer des données réelles en outils utiles,
+                    fiables et élégants – ici, pour anticiper la disponibilité des vélos en ville.
                   </p>
                   <ul className="text-muted" style={{ paddingLeft: 18 }}>
                     <li>Pipeline temps réel (GBFS + météo) et modèles LightGBM.</li>
@@ -881,9 +923,16 @@ export default function LandingPage() {
                       <a className="btn" href={SUPPORT_ONE_TIME} target="_blank" rel="noopener">
                         Contribuer une fois
                       </a>
-                      <a className="btn outline" href={SUPPORT_KOFI} target="_blank" rel="noopener">
+
+                      {/* BOUTON KO-FI BRANCHÉ SUR LE WIDGET */}
+                      <button
+                        className="btn outline"
+                        type="button"
+                        onClick={openKoFi}
+                        aria-label="Soutenez-moi sur Ko-fi"
+                      >
                         Ko-fi
-                      </a>
+                      </button>
                     </div>
                     <small className="text-muted" style={{ display: "block", marginTop: 8 }}>
                       Géré par Stripe/Ko-fi. Les frais de plateforme s’appliquent.
@@ -918,8 +967,7 @@ export default function LandingPage() {
                   <li>Les contributions financent l’hébergement, la supervision et l’amélioration continue.</li>
                   <li>Pas de contreparties fiscales particulières (don non-déductible), sauf mention contraire.</li>
                   <li>
-                    Besoin d’un reçu, d’une facture ou d’un partenariat ? Écrivez-moi :{" "}
-                    <em>contact@votredomaine.fr</em>.
+                    Besoin d’un reçu, d’une facture ou d’un partenariat ? Écrivez-moi : <em>contact@votredomaine.fr</em>.
                   </li>
                 </ul>
                 <p className="small muted" style={{ marginTop: 8 }}>

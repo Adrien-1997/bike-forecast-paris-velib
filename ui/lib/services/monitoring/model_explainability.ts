@@ -1,10 +1,9 @@
 // ui/lib/services/monitoring/model_explainability.ts
-// Service pour la page /monitoring/model/explainability
-// → utilise lib/http.ts (token & base déjà gérés)
+// Service pour /monitoring/model/explainability (ETag + base/token gérés par lib/http)
 
 import { fetchJsonWithEtag } from "@/lib/http";
 
-/* ───────────────────────── Types ───────────────────────── */
+/* ── Types ─────────────────────────────────────────────── */
 export type Overview = {
   schema_version: string;
   generated_at: string;
@@ -55,18 +54,18 @@ export type UncertaintyDoc = {
   nominal?: number;
 };
 
-/* ───────────────────────── Helpers ───────────────────────── */
-const path = (suffix: string) => `/monitoring/model/explainability${suffix}`;
+/* ── Helpers ───────────────────────────────────────────── */
+const path = (s: string) => `/monitoring/model/explainability${s}`;
 
-/* ───────────────────────── API calls (ETag) ───────────────────────── */
-export const getExplainOverview = () =>
-  fetchJsonWithEtag<Overview>(path("/overview"));
+/* ── API (ETag) ────────────────────────────────────────── */
+export const getExplainOverview = (h: number) =>
+  fetchJsonWithEtag<Overview>(path(`/overview?h=${encodeURIComponent(h)}`));
 
-export const getExplainResiduals = () =>
-  fetchJsonWithEtag<ResidualsDoc>(path("/residuals"));
+export const getExplainResiduals = (h: number) =>
+  fetchJsonWithEtag<ResidualsDoc>(path(`/residuals?h=${encodeURIComponent(h)}`));
 
-export const getExplainCalibration = () =>
-  fetchJsonWithEtag<CalibrationDoc>(path("/calibration"));
+export const getExplainCalibration = (h: number) =>
+  fetchJsonWithEtag<CalibrationDoc>(path(`/calibration?h=${encodeURIComponent(h)}`));
 
-export const getExplainUncertainty = () =>
-  fetchJsonWithEtag<UncertaintyDoc>(path("/uncertainty"));
+export const getExplainUncertainty = (h: number) =>
+  fetchJsonWithEtag<UncertaintyDoc>(path(`/uncertainty?h=${encodeURIComponent(h)}`));

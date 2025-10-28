@@ -34,16 +34,16 @@ _ensure_repo_root()
 # ─────────────────────────────────────────────
 try:
     from service.core.cal_features import add_time_features
-    from service.core.features import BASE_COLUMNS as TRAIN_BASE_COLUMNS
+    from service.core.time_features import BASE_COLUMNS as TRAIN_BASE_COLUMNS
     from service.core.forecast import predict_from_features_df
 except ModuleNotFoundError:
     try:
         from service.core.cal_features import add_time_features
-        from service.core.features import BASE_COLUMNS as TRAIN_BASE_COLUMNS
+        from service.core.time_features import BASE_COLUMNS as TRAIN_BASE_COLUMNS
         from service.core.forecast import predict_from_features_df
     except ModuleNotFoundError:
         from service.core.cal_features import add_time_features
-        from service.core.features import BASE_COLUMNS as TRAIN_BASE_COLUMNS
+        from service.core.time_features import BASE_COLUMNS as TRAIN_BASE_COLUMNS
         from service.core.forecast import predict_from_features_df
 
 # ─────────────────────────────────────────────

@@ -15,7 +15,7 @@ except Exception as e:
 # /monitoring/model/explainability/*
 router = APIRouter(prefix="/monitoring/model/explainability")
 
-# ── Helpers GCS (repris du routeur performance pour cohérence) ───────────────
+# ── Helpers GCS (cohérents avec model/performance) ────────────────────────────
 def _split_gs(uri: str) -> Tuple[str, str]:
     if not uri.startswith("gs://"):
         raise ValueError(f"Bad GCS URI: {uri}")
@@ -74,8 +74,7 @@ def _proxy_json(gs_uri: str, request: Request, ttl: int = 120) -> JSONResponse:
     resp.headers.setdefault("Access-Control-Allow-Origin", "*")
     return resp
 
-# ── Endpoints EXPLAINABILITY (latest only) ────────────────────────────────────
-
+# ── Endpoints EXPLAINABILITY (latest only, multi-horizon) ─────────────────────
 DocNameExplain = Literal["overview", "residuals", "calibration", "uncertainty"]
 
 _TTL_BY_DOC = {
@@ -89,34 +88,44 @@ _TTL_BY_DOC = {
 def model_explain_available():
     return {
         "docs": ["overview", "residuals", "calibration", "uncertainty"],
+        "horizons": "utiliser ?h=<minutes> (ex: 15, 60)",
         "time_travel": "latest uniquement (param ?at=… ignoré si non valide)",
         "examples": [
-            "/monitoring/model/explainability/overview",
-            "/monitoring/model/explainability/residuals",
-            "/monitoring/model/explainability/calibration",
-            "/monitoring/model/explainability/uncertainty",
-            "/monitoring/model/explainability/manifest",
+            "/monitoring/model/explainability/overview?h=15",
+            "/monitoring/model/explainability/residuals?h=60",
+            "/monitoring/model/explainability/calibration?h=15",
+            "/monitoring/model/explainability/uncertainty?h=60",
+            "/monitoring/model/explainability/manifest?h=15",
         ],
     }
 
 @router.get("/manifest")
-def model_explain_manifest(request: Request, at: Optional[str] = None):
+def model_explain_manifest(
+    request: Request,
+    h: int = Query(15, description="Horizon en minutes (ex: 15, 60)"),
+    at: Optional[str] = None,
+):
+    if h <= 0:
+        raise HTTPException(status_code=400, detail="Paramètre h (minutes) doit être > 0")
     mon = _mon_prefix_or_500()
     folder = _sanitize_at(at)  # 'latest'
     base = f"{mon}/monitoring" if not mon.endswith("/monitoring") else mon
-    # pas de manifest dédié côté job explain -> on peut renvoyer overview.json comme "manifest"
-    gs_uri = f"{base}/model/explainability/{folder}/overview.json"
+    # Pas de manifest dédié côté job explain → on renvoie overview.json comme "manifest", mais par horizon
+    gs_uri = f"{base}/model/explainability/{folder}/h{int(h)}/overview.json"
     return _proxy_json(gs_uri, request, ttl=60)
 
 @router.get("/{doc}")
 def model_explain_doc(
     doc: DocNameExplain,
     request: Request,
+    h: int = Query(15, description="Horizon en minutes (ex: 15, 60)"),
     at: Optional[str] = None,
 ):
+    if h <= 0:
+        raise HTTPException(status_code=400, detail="Paramètre h (minutes) doit être > 0")
     mon = _mon_prefix_or_500()
     folder = _sanitize_at(at)  # 'latest'
     base = f"{mon}/monitoring" if not mon.endswith("/monitoring") else mon
-    gs_uri = f"{base}/model/explainability/{folder}/{doc}.json"
+    gs_uri = f"{base}/model/explainability/{folder}/h{int(h)}/{doc}.json"
     ttl = _TTL_BY_DOC.get(doc, 180)
     return _proxy_json(gs_uri, request, ttl=ttl)

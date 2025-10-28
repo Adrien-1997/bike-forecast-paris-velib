@@ -1,17 +1,27 @@
 // ui/lib/http.ts
 // Centralized HTTP utility — timeout, JSON parsing, ETag caching, and error handling.
 
+/*─────────────────────────────── Base URL & Token ───────────────────────────────*/
+
 export const API_BASE = (
   process.env.NEXT_PUBLIC_API_BASE ||
-  "https://velib-api-160046094975.europe-west1.run.app"
+  (process.env.NODE_ENV === "production"
+    ? "https://velib-api-160046094975.europe-west1.run.app"
+    : "http://localhost:8081")
 ).replace(/\/$/, "");
 
 export const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN || "";
+export const DEFAULT_TIMEOUT_MS = Number(
+  process.env.NEXT_PUBLIC_HTTP_TIMEOUT_MS ?? "30000"
+); // 30s par défaut
 
-// Debug logs
+// Debug logs (visible dans console navigateur)
 console.log("[http] API_BASE =", API_BASE);
+console.log("[http] timeout =", DEFAULT_TIMEOUT_MS, "ms");
 if (API_TOKEN) console.log("[http] using token (set)");
 else console.warn("[http] no API token defined");
+
+/*─────────────────────────────── Types & Helpers ───────────────────────────────*/
 
 type JsonInit = RequestInit & {
   timeoutMs?: number;
@@ -29,9 +39,7 @@ export class HttpError extends Error {
   }
 }
 
-/*─────────────────────────────── Helpers ───────────────────────────────*/
-
-function withTimeout(ms = 10_000) {
+function withTimeout(ms = DEFAULT_TIMEOUT_MS) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), ms);
   return { signal: ctrl.signal, done: () => clearTimeout(id) };
@@ -48,16 +56,31 @@ function addTs(url: string) {
   return `${url}${url.includes("?") ? "&" : "?"}${ts}`;
 }
 
+async function fetchWithRetry(input: RequestInfo, init: RequestInit, tries = 2) {
+  try {
+    return await fetch(input, init);
+  } catch (e: any) {
+    if (
+      tries > 1 &&
+      (e?.name === "AbortError" || /aborted/i.test(String(e)))
+    ) {
+      console.warn("[http] retry after abort/timeout →", input);
+      return fetchWithRetry(input, init, tries - 1);
+    }
+    throw e;
+  }
+}
+
 /*─────────────────────────────── Core JSON fetch ───────────────────────────────*/
 
 export async function json<T>(path: string, init: JsonInit = {}): Promise<T> {
   const { path: url0 } = resolveUrl(path);
   const url = addTs(url0);
-  const { timeoutMs = 10_000, noCache = true, ...rest } = init;
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, noCache = true, ...rest } = init;
   const t = withTimeout(timeoutMs);
 
   try {
-    const res = await fetch(url, {
+    const res = await fetchWithRetry(url, {
       ...rest,
       headers: {
         accept: "application/json",
@@ -82,7 +105,7 @@ export async function json<T>(path: string, init: JsonInit = {}): Promise<T> {
   }
 }
 
-/*─────────────────────────────── ETag caching ───────────────────────────────*/
+/*─────────────────────────────── ETag caching (with fallback) ───────────────────────────────*/
 
 export async function fetchJsonWithEtag<T>(
   pathOrUrl: string,
@@ -90,7 +113,7 @@ export async function fetchJsonWithEtag<T>(
 ): Promise<T> {
   const { path: url0 } = resolveUrl(pathOrUrl);
   const url = addTs(url0);
-  const { timeoutMs = 10_000, noCache = false, ...rest } = init;
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, noCache = false, ...rest } = init;
   const t = withTimeout(timeoutMs);
 
   const etagKey = `etag:${url0}`;
@@ -99,7 +122,7 @@ export async function fetchJsonWithEtag<T>(
     typeof window !== "undefined" ? localStorage.getItem(etagKey) : null;
 
   try {
-    const res = await fetch(url, {
+    const res = await fetchWithRetry(url, {
       ...rest,
       headers: {
         accept: "application/json",
@@ -112,9 +135,33 @@ export async function fetchJsonWithEtag<T>(
       signal: t.signal,
     });
 
+    // 304 mais aucun cache local → re-fetch complet
     if (res.status === 304 && typeof window !== "undefined") {
       const cached = localStorage.getItem(bodyKey);
       if (cached) return JSON.parse(cached) as T;
+
+      const res2 = await fetchWithRetry(addTs(url0), {
+        ...rest,
+        headers: {
+          accept: "application/json",
+          "Content-Type": "application/json",
+          ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
+          ...(rest.headers || {}),
+        },
+        cache: "no-store",
+        signal: t.signal,
+      });
+      const text2 = await res2.text();
+      if (!res2.ok) throw new HttpError(res2.status, res2.statusText, text2);
+      const data2 = JSON.parse(text2) as T;
+      const etag2 = res2.headers.get("ETag");
+      if (etag2) {
+        try {
+          localStorage.setItem(etagKey, etag2);
+          localStorage.setItem(bodyKey, text2);
+        } catch {}
+      }
+      return data2;
     }
 
     const text = await res.text();
@@ -126,9 +173,7 @@ export async function fetchJsonWithEtag<T>(
       try {
         localStorage.setItem(etagKey, etag);
         localStorage.setItem(bodyKey, text);
-      } catch {
-        /* ignore quota or privacy errors */
-      }
+      } catch {}
     }
     return data;
   } finally {

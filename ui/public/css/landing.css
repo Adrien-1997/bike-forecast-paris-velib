@@ -641,3 +641,18 @@ section .container > .glass.prose.mt-2{
 .kpi-bar.kpi-bar--auto .kpi-track {
   animation: none !important;
 }
+
+
+
+
+
+/* S'assure que le bouton est au-dessus du header sticky */
+.floatingchat-container {
+  z-index: 10000 !important;
+  right: 20px !important;   /* position par défaut : bas-droite */
+  bottom: 20px !important;
+}
+
+@media (max-width: 640px) {
+  .floatingchat-container { bottom: 80px !important; } /* si bandeau cookie, etc. */
+}

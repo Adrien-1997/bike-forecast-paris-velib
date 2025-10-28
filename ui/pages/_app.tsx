@@ -34,33 +34,47 @@ export default function MyApp({ Component, pageProps }: AppProps) {
   const router = useRouter();
 
   const computeCtx = (path: string): Ctx =>
-    path.startsWith("/monitoring") ? "monitoring" :
-    path.startsWith("/app")        ? "app" :
-                                     "landing";
+    path.startsWith("/monitoring")
+      ? "monitoring"
+      : path.startsWith("/app")
+      ? "app"
+      : "landing";
 
   // Init rapide pour éviter le flash mauvais contexte
   const [ctx, setCtx] = useState<Ctx>(() => computeCtx(router.pathname));
 
   // Applique la classe de variable Urbanist directement sur <html>
-  const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
+  const useIsoLayoutEffect =
+    typeof window !== "undefined" ? useLayoutEffect : useEffect;
   useIsoLayoutEffect(() => {
-    const html = typeof document !== "undefined" ? document.documentElement : null;
+    const html =
+      typeof document !== "undefined" ? document.documentElement : null;
     if (!html) return;
     html.classList.add(urbanist.variable);
-    return () => { html.classList.remove(urbanist.variable); };
+    return () => {
+      html.classList.remove(urbanist.variable);
+    };
   }, []);
 
   // Suivi des navigations client → mise à jour du contexte
   useEffect(() => {
-    const onRoute = (url: string) => setCtx(computeCtx(url.split(/[?#]/)[0]));
-    router.events.on("routeChangeComplete", onRoute);
-    return () => router.events.off("routeChangeComplete", onRoute);
+    const updateCtx = (url: string) =>
+      setCtx(computeCtx(url.split(/[?#]/)[0]));
+
+    router.events.on("routeChangeStart", updateCtx);
+    router.events.on("routeChangeComplete", updateCtx);
+    return () => {
+      router.events.off("routeChangeStart", updateCtx);
+      router.events.off("routeChangeComplete", updateCtx);
+    };
   }, [router.events]);
 
   // Chargement des feuilles de style contextuelles
   useEffect(() => {
     // purge avant reload
-    document.querySelectorAll('link[data-dynamic-style="true"]').forEach((el) => el.remove());
+    document
+      .querySelectorAll('link[data-dynamic-style="true"]')
+      .forEach((el) => el.remove());
 
     const addCSS = (href: string) => {
       const link = document.createElement("link");
@@ -77,6 +91,7 @@ export default function MyApp({ Component, pageProps }: AppProps) {
     if (ctx === "monitoring") {
       addCSS("/css/monitoringnav.css");
       addCSS("/css/kpibar.css");
+      addCSS("/css/switchtoggle.css"); // ✅ nouvelle feuille pour SwitchBar
       addCSS("/css/loadingbar.css");
     } else if (ctx === "app") {
       addCSS("/css/mapview.css");
@@ -84,7 +99,9 @@ export default function MyApp({ Component, pageProps }: AppProps) {
     }
 
     return () => {
-      document.querySelectorAll('link[data-dynamic-style="true"]').forEach((el) => el.remove());
+      document
+        .querySelectorAll('link[data-dynamic-style="true"]')
+        .forEach((el) => el.remove());
     };
   }, [ctx]);
 
@@ -102,10 +119,22 @@ export default function MyApp({ Component, pageProps }: AppProps) {
     <>
       <Head>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)" />
-        <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+        <meta
+          name="theme-color"
+          content="#0b1220"
+          media="(prefers-color-scheme: dark)"
+        />
+        <meta
+          name="theme-color"
+          content="#ffffff"
+          media="(prefers-color-scheme: light)"
+        />
         <link rel="icon" href="/favicon.svg" />
-        {/* <link rel="preconnect" href="https://velib-ui-160046094975.europe-west1.run.app" crossOrigin="" /> */}
+        {/* <link
+          rel="preconnect"
+          href="https://velib-ui-160046094975.europe-west1.run.app"
+          crossOrigin=""
+        /> */}
       </Head>
 
       <div className={ctx}>

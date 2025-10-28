@@ -7,6 +7,7 @@ import MonitoringNav from "@/components/monitoring/MonitoringNav";
 import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
 import KpiBar from "@/components/monitoring/KpiBar";
 import { chartConfig, chartLayout } from "@/lib/plotlyTheme";
+import HorizonToggle from "@/components/common/HorizonToggle";
 
 import {
   getPerformanceManifest,
@@ -81,6 +82,7 @@ export default function ModelPerformancePage() {
   const [h, setH] = useQueryParamH(15);
 
   const [manifest, setManifest] = useState<Manifest | null>(null);
+
   const [kpis, setKpis] = useState<KPIs | null>(null);
   const [daily, setDaily] = useState<DailyMetrics | null>(null);
   const [byHour, setByHour] = useState<ByHour | null>(null);
@@ -100,15 +102,16 @@ export default function ModelPerformancePage() {
         const m = await getPerformanceManifest();
         if (!alive) return;
         setManifest(m);
-        if (Array.isArray(m.horizons) && m.horizons.length && !m.horizons.includes(h)) {
-          setH(m.horizons[0]);
-        }
+        const hs = Array.isArray(m.horizons) && m.horizons.length ? m.horizons : [15, 60];
+        if (!hs.includes(h)) setH(hs[0]);
         setError(null);
       } catch (e: any) {
         if (alive) setError(String(e?.message ?? e));
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -137,40 +140,34 @@ export default function ModelPerformancePage() {
         setLift(ok(res[5]));
         setHist(ok(res[6]));
 
-        // Erreur si échec partiel (aligné autres pages)
         const failures = res.filter((r): r is PromiseRejectedResult => r.status === "rejected");
-        if (failures.length > 0) {
-          const msg = failures
-            .map((f) => String((f.reason && (f.reason.message ?? f.reason)) || "request failed"))
-            .join(" | ") || "API error";
-          setError(msg);
-        } else {
-          setError(null);
-        }
+        setError(failures.length ? "Une ou plusieurs requêtes ont échoué." : null);
       } catch (e: any) {
         if (alive) setError(String(e?.message ?? e));
       } finally {
         if (alive) setLoading(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [h]);
 
   const generatedAt = kpis?.generated_at ?? manifest?.generated_at ?? null;
-
-  // ✅ Barre d’état uniforme
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
   /* ───────── KPI BAR ───────── */
   const kpiItems = useMemo(() => {
-    const liftPct = Number.isFinite(Number(kpis?.lift_vs_baseline)) ? Number(kpis!.lift_vs_baseline) * 100 : null;
+    const liftPct =
+      Number.isFinite(Number(kpis?.lift_vs_baseline)) ? Number(kpis!.lift_vs_baseline) * 100 : null;
+
     return [
-      { label: "Stations", value: fmtInt(kpis?.n_stations) },
-      { label: "Lignes (n)", value: fmtInt(kpis?.n_rows) },
-      { label: "MAE — Modèle", value: fmtNum(kpis?.mae_model, 2) },
-      { label: "MAE — Baseline", value: fmtNum(kpis?.mae_baseline, 2) },
-      { label: "Lift vs baseline", value: fmtPct(liftPct, 1) },
-      { label: "Coverage préd.", value: fmtPct(kpis?.coverage_pred_pct, 1) },
+      { label: "Stations",       value: kpis?.n_stations,           fmt: (v: number | string | null | undefined) => fmtInt(Number(v)) },
+      { label: "Lignes (n)",     value: kpis?.n_rows,               fmt: (v: number | string | null | undefined) => fmtInt(Number(v)) },
+      { label: "MAE — Modèle",   value: kpis?.mae_model,            fmt: (v: number | string | null | undefined) => fmtNum(Number(v), 2) },
+      { label: "MAE — Baseline", value: kpis?.mae_baseline,         fmt: (v: number | string | null | undefined) => fmtNum(Number(v), 2) },
+      { label: "Lift vs baseline", value: liftPct,                  fmt: (v: number | string | null | undefined) => fmtPct(Number(v), 1) },
+      { label: "Coverage préd.",   value: kpis?.coverage_pred_pct,  fmt: (v: number | string | null | undefined) => fmtPct(Number(v), 1) },
     ];
   }, [kpis]);
 
@@ -183,7 +180,7 @@ export default function ModelPerformancePage() {
   if (generatedAt) metaParts.push(`generated ${generatedAt}`);
   const metaLine = metaParts.join(" · ");
 
-  /* ───────── Dérivations graphiques ───────── */
+  /* ───────── Dérivations graphiques (h actif) ───────── */
   const liftCurve: Partial<Plotly.PlotData> | null = useMemo(() => {
     const pts = lift?.points ?? [];
     if (!pts.length) return null;
@@ -191,8 +188,16 @@ export default function ModelPerformancePage() {
     const y = pts.map((p) =>
       Number.isFinite(Number(p.lift_vs_baseline)) ? Number(p.lift_vs_baseline) * 100 : null
     );
-    return { x, y, type: "scatter", mode: "lines", name: "Lift (%)", connectgaps: false, hovertemplate: "%{x} — %{y:.1f}%<extra></extra>" };
-  }, [lift]);
+    return {
+      x,
+      y,
+      type: "scatter",
+      mode: "lines",
+      name: `Lift (%) h=${h}`,
+      connectgaps: false,
+      hovertemplate: "%{x} — %{y:.1f}%<extra></extra>",
+    };
+  }, [lift, h]);
 
   const dailyBars: Partial<Plotly.PlotData>[] = useMemo(() => {
     const rows = daily?.rows ?? [];
@@ -231,14 +236,6 @@ export default function ModelPerformancePage() {
     ];
   }, [byDow]);
 
-  const histData: Partial<Plotly.PlotData>[] = useMemo(() => {
-    const bins = hist?.bins ?? [];
-    const counts = hist?.counts ?? [];
-    if (!bins.length || !counts.length || bins.length !== counts.length + 1) return [];
-    const centers = bins.slice(0, -1).map((b, i) => (b + bins[i + 1]) / 2);
-    return [{ x: centers, y: counts, type: "bar" as const, name: "Résidus (y_true - y_pred)" }];
-  }, [hist]);
-
   // ── Stations Top/Bottom lift ─────────────────────────
   const stationsTopBottom = useMemo(() => {
     const rows = byStation?.rows ?? [];
@@ -259,7 +256,6 @@ export default function ModelPerformancePage() {
           name="description"
           content="Comparatif modèle vs baseline, lift, histogrammes, découpes et stations."
         />
-        {/* Mini styles internes pour les barres de lift station (local à la page) */}
         <style
           dangerouslySetInnerHTML={{
             __html: `
@@ -282,25 +278,32 @@ export default function ModelPerformancePage() {
         {/* ✅ LoadingBar uniforme */}
         <LoadingBar status={barStatus} />
 
-        {/* Toolbar / Controls */}
+        {/* Toolbar / Controls — petit interrupteur */}
         <section className="mt-3">
-          <div className="card" style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-            <div className="small">Horizon</div>
-            <HorizonSelect value={h} options={manifest?.horizons ?? [15]} onChange={(v) => setH(v)} />
-            <div className="small" style={{ marginLeft: 8 }}>
-              fenêtre: {kpis?.window_days ?? manifest?.window_days ?? "—"} j
-            </div>
+          <div
+            className="card"
+            style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}
+          >
+            <HorizonToggle
+              value={h}
+              onChange={(v: number) => setH(v)}
+              leftValue={15}
+              rightValue={60}
+              leftLabel="15 min"
+              rightLabel="60 min"
+              ariaLabel="Choix de l’horizon de prévision"
+            />
           </div>
         </section>
 
-        {/* KPIs via KpiBar */}
+        {/* KPIs */}
         <section className="mt-4">
           <h2>Résumé — KPIs (h={h} min)</h2>
           <KpiBar items={kpiItems} dense />
           {metaLine && <div className="kpi-bar-meta">{metaLine}</div>}
         </section>
 
-        {/* Lift over time */}
+        {/* Lift */}
         <section className="mt-6">
           <h2>Lift quotidien</h2>
           <div className="card plot-card">
@@ -346,9 +349,6 @@ export default function ModelPerformancePage() {
             ) : (
               <div className="empty">Pas de métriques quotidiennes.</div>
             )}
-          </div>
-          <div className="figure-note small">
-            Deux barres par date : baseline vs modèle. MAE = moyenne des erreurs absolues.
           </div>
         </section>
 
@@ -396,18 +396,24 @@ export default function ModelPerformancePage() {
               )}
             </div>
           </div>
-          <div className="figure-note small mt-2">
-            Découpes agrégées : comparaison des MAE par heure locale et par jour (Lun–Dim).
-          </div>
         </section>
 
         {/* Histogramme des résidus */}
         <section className="mt-6">
           <h2>Histogramme des résidus (y_true - y_pred)</h2>
           <div className="card plot-card">
-            {histData.length ? (
+            {hist?.bins?.length &&
+            hist?.counts?.length &&
+            hist.bins.length === hist.counts.length + 1 ? (
               <Plot
-                data={histData as Plotly.Data[]}
+                data={[
+                  {
+                    x: hist.bins.slice(0, -1).map((b, i) => (b + hist.bins[i + 1]) / 2),
+                    y: hist.counts,
+                    type: "bar",
+                    name: "Résidus",
+                  } as Partial<Plotly.PlotData>,
+                ] as Plotly.Data[]}
                 layout={chartLayout({
                   height: 320,
                   margin: { l: 54, r: 10, t: 10, b: 40 },
@@ -421,7 +427,7 @@ export default function ModelPerformancePage() {
               <div className="empty">Pas d’histogramme disponible.</div>
             )}
           </div>
-          {hist?.n != null && <div className="small mt-2">n = {fmtInt(hist.n)} points</div>}
+          {hist?.n != null && <div className="small mt-2">n = {fmtInt(hist.n)}</div>}
         </section>
 
         {/* Top / Bottom stations */}
@@ -454,35 +460,7 @@ export default function ModelPerformancePage() {
   );
 }
 
-/* ───────────────────────── UI widgets ───────────────────────── */
-function HorizonSelect({
-  value,
-  options,
-  onChange,
-}: {
-  value: number;
-  options: number[];
-  onChange: (v: number) => void;
-}) {
-  const opts = Array.isArray(options) && options.length ? options : [15];
-  return (
-    <div className="row" style={{ gap: 8 }}>
-      <select
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="select"
-      >
-        {opts.map((o) => (
-          <option key={o} value={o}>
-            {o} min
-          </option>
-        ))}
-      </select>
-      <span className="small">({opts.length} option{opts.length > 1 ? "s" : ""})</span>
-    </div>
-  );
-}
-
+/* ───────────────────────── UI widget ───────────────────────── */
 function StationList({
   rows,
   kind,
@@ -497,10 +475,9 @@ function StationList({
       <div
         className="table-grid"
         style={{
-          // Station | MAE base | MAE modèle | Lift (plus collées)
           ["--cols" as any]: "minmax(0,1fr) 78px 78px 66px",
           minWidth: 0,
-          gap: "4px", // ⬅️ très serré
+          gap: "4px",
         }}
       >
         <div className="table-head table-head--sticky">Station</div>
@@ -510,13 +487,9 @@ function StationList({
 
         {rows.map((r) => {
           const displayName =
-            (nameIndex && nameIndex[r.station_id]) ||
-            ((r as any).name as string) ||
-            r.station_id;
+            (nameIndex && nameIndex[r.station_id]) || ((r as any).name as string) || r.station_id;
 
-          const lift = Number.isFinite(Number(r.lift_vs_baseline))
-            ? Number(r.lift_vs_baseline)
-            : null;
+          const lift = Number.isFinite(Number(r.lift_vs_baseline)) ? Number(r.lift_vs_baseline) : null;
           const liftPct = lift != null ? lift * 100 : null;
           const maeM = Number(r.mae_model);
           const maeB = Number(r.mae_baseline);
@@ -524,7 +497,7 @@ function StationList({
 
           return (
             <div key={r.station_id} className="table-row">
-              {/* Bloc station + barre + % discret */}
+              {/* Bloc station + barre + % */}
               <div className="table-cell">
                 <div
                   style={{
@@ -568,7 +541,7 @@ function StationList({
                   style={{
                     height: 5,
                     marginTop: 5,
-                    width: "min(75%, 320px)", // ⬅️ barre bien plus longue
+                    width: "min(75%, 320px)",
                   }}
                 >
                   <div
@@ -581,7 +554,7 @@ function StationList({
                 </div>
               </div>
 
-              {/* Colonnes chiffrées bien collées */}
+              {/* Colonnes chiffrées collées */}
               <div className="table-cell table-cell--right" style={{ paddingRight: 2 }}>
                 <div style={{ fontWeight: 700 }}>{fmtNum(maeB, 2)}</div>
               </div>
