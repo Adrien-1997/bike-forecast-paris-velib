@@ -1,6 +1,6 @@
 // ui/pages/monitoring/model/explainability.tsx
 import Head from "next/head";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type { ScatterData } from "plotly.js";
 import type * as Plotly from "plotly.js";
@@ -15,17 +15,22 @@ import {
   getExplainResiduals,
   getExplainCalibration,
   getExplainUncertainty,
+  getExplainFeatureImportance,
   type Overview,
   type ResidualsDoc,
   type CalibrationDoc,
   type UncertaintyDoc,
+  type FeatureImportanceDoc,
 } from "@/lib/services/monitoring/model_explainability";
+
+// ⬇️ Index stations (JSON local: public/data/stations.index.json)
+import { loadStationsIndexFromArrayJson, type StationMeta } from "@/lib/local/stationsIndex";
 
 /* ───────────────── Plotly (client only) ───────────────── */
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ssr: false,
   loading: () => (
-    <div style={{ height: 320, display: "grid", placeItems: "center", opacity: 0.7 }}>
+    <div className="empty" style={{ minHeight: 320 }}>
       Chargement du graphique…
     </div>
   ),
@@ -37,15 +42,14 @@ function ok<T>(r: PromiseSettledResult<T>): T | null {
 }
 const fmtNum = (x?: number | null, d = 2) => (Number.isFinite(Number(x)) ? Number(x).toFixed(d) : "—");
 const fmtInt = (x?: number | null) => (Number.isFinite(Number(x)) ? Number(x).toLocaleString("fr-FR") : "—");
-const fmtDate = (s?: string | null) => (s ? s : "—");
-
-function safeMinMax(arrs: number[][]): { min: number; max: number } {
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+const safeMinMax = (arrs: number[][]) => {
   let min = Number.POSITIVE_INFINITY, max = Number.NEGATIVE_INFINITY;
-  for (const arr of arrs) for (const v of arr) if (Number.isFinite(v)) { if (v < min) min = v; if (v > max) max = v; }
+  for (const a of arrs) for (const v of a) if (Number.isFinite(v)) { if (v < min) min = v; if (v > max) max = v; }
   if (!Number.isFinite(min)) min = 0;
   if (!Number.isFinite(max)) max = 0;
   return { min, max };
-}
+};
 
 /* ───────────────── Horizon (SSR-safe) ───────────────── */
 function useQueryParamH(defaultH = 15): [number, (h: number) => void, boolean] {
@@ -63,14 +67,11 @@ function useQueryParamH(defaultH = 15): [number, (h: number) => void, boolean] {
     if (!mounted) return;
     try {
       const u = new URL(window.location.href);
-      if (u.searchParams.get("h") !== String(h)) {
-        u.searchParams.set("h", String(h));
-        window.history.replaceState({}, "", u.toString());
-      }
+      u.searchParams.set("h", String(h));
+      window.history.replaceState({}, "", u.toString());
     } catch {}
   }, [h, mounted]);
-  const setter = useCallback((next: number) => setH(next), []);
-  return [h, setter, mounted];
+  return [h, (v: number) => setH(v), mounted];
 }
 
 /* ───────────────── Page ───────────────── */
@@ -81,31 +82,49 @@ export default function ModelExplainabilityPage() {
   const [residuals, setResiduals] = useState<ResidualsDoc | null>(null);
   const [calib, setCalib] = useState<CalibrationDoc | null>(null);
   const [unc, setUnc] = useState<UncertaintyDoc | null>(null);
+  const [fiDoc, setFiDoc] = useState<FeatureImportanceDoc | null>(null);
+
+  // Index stations: id → meta
+  const [stationsIdx, setStationsIdx] = useState<Record<string, StationMeta>>({});
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Charge l’index des stations au montage
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const idx = await loadStationsIndexFromArrayJson("/data/stations.index.json").catch(() => ({}));
+        if (!alive) return;
+        setStationsIdx(idx as Record<string, StationMeta>);
+      } catch {}
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // Charge les docs explain pour l’horizon actif
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         setLoading(true);
-        const [rOverview, rResiduals, rCalib, rUnc] = await Promise.allSettled([
+        const res = await Promise.allSettled([
           getExplainOverview(h),
           getExplainResiduals(h),
           getExplainCalibration(h),
           getExplainUncertainty(h),
+          getExplainFeatureImportance(h),
         ]);
         if (!alive) return;
 
-        setOverview(ok(rOverview));
-        setResiduals(ok(rResiduals));
-        setCalib(ok(rCalib));
-        setUnc(ok(rUnc));
+        setOverview(ok(res[0]));
+        setResiduals(ok(res[1]));
+        setCalib(ok(res[2]));
+        setUnc(ok(res[3]));
+        setFiDoc(ok(res[4]));
 
-        const failures = [rOverview, rResiduals, rCalib, rUnc].filter(
-          (r): r is PromiseRejectedResult => r.status === "rejected",
-        );
+        const failures = res.filter((r): r is PromiseRejectedResult => r.status === "rejected");
         setError(failures.length ? "Une ou plusieurs requêtes ont échoué." : null);
       } catch (e: any) {
         if (alive) setError(String(e?.message ?? e));
@@ -117,44 +136,83 @@ export default function ModelExplainabilityPage() {
   }, [h]);
 
   const generatedAt =
-    overview?.generated_at || residuals?.generated_at || calib?.generated_at || unc?.generated_at || undefined;
+    fiDoc?.generated_at ||
+    overview?.generated_at ||
+    residuals?.generated_at ||
+    calib?.generated_at ||
+    unc?.generated_at ||
+    undefined;
 
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
+  // Dictionnaire id → nom (noms non vides, gère ids sans zéros à gauche)
+  const nameIndex = useMemo(() => {
+    const rec: Record<string, string> = {};
+    for (const [id, meta] of Object.entries(stationsIdx)) {
+      const nm = (meta?.name ?? "").trim();
+      if (!nm) continue;
+      rec[id] = nm;
+      const noZeros = id.replace(/^0+/, "");
+      if (!(noZeros in rec)) rec[noZeros] = nm;
+    }
+    return rec;
+  }, [stationsIdx]);
+
   /* ───────── KPI BAR ───────── */
-  const fmtIntSafe = (v: KpiItem["value"]) => (Number.isFinite(Number(v)) ? Number(v).toLocaleString("fr-FR") : "—");
-  const fmtFixed = (d = 3) => (v: KpiItem["value"]) => (Number.isFinite(Number(v)) ? Number(v).toFixed(d) : "—");
-  const fmtYesNo = (v: KpiItem["value"]) => (Number(v) ? "Oui" : "Non");
+  const kpiItems: KpiItem[] = useMemo(() => {
+    const yesNo = (v?: boolean | null) => (v ? "Oui" : "Non");
+    return [
+      { label: "Stations (perf)", value: overview?.perf_stations ?? null, fmt: (v) => fmtInt(Number(v)) },
+      { label: "Lignes (n)", value: overview?.perf_rows ?? null, fmt: (v) => fmtInt(Number(v)) },
+      { label: "Prédictions", value: overview?.has_y_pred ? 1 : 0, fmt: (v) => yesNo(Boolean(v)) },
+      { label: "Incertitude", value: overview?.has_uncertainty ? 1 : 0, fmt: (v) => yesNo(Boolean(v)) },
+      { label: "β global", value: calib?.fit?.beta ?? null, fmt: (v) => fmtNum(Number(v), 3) },
+      { label: "α global", value: calib?.fit?.alpha ?? null, fmt: (v) => fmtNum(Number(v), 3) },
+    ];
+  }, [overview, calib]);
 
-  const kpiItems: KpiItem[] = useMemo(() => [
-    { label: "Stations (perf)", value: overview?.perf_stations ?? null, fmt: fmtIntSafe },
-    { label: "Lignes (n)",      value: overview?.perf_rows ?? null,      fmt: fmtIntSafe },
-    { label: "Prédictions",     value: overview?.has_y_pred ? 1 : 0,     fmt: fmtYesNo },
-    { label: "Incertitude",     value: overview?.has_uncertainty ? 1 : 0,fmt: fmtYesNo },
-    { label: "β global",        value: calib?.fit?.beta ?? null,         fmt: fmtFixed(3) },
-    { label: "α global",        value: calib?.fit?.alpha ?? null,        fmt: fmtFixed(3) },
-  ], [overview, calib]);
+  const subtitleText = useMemo(
+    () => `Importance des features, résidus, QQ, ACF, hétéroscédasticité, calibration & incertitude (h=${mounted ? h : 15} min)`,
+    [h, mounted],
+  );
 
-  const metaParts: string[] = [];
-  if (overview?.schema_version != null) metaParts.push(`Schema v${overview.schema_version}`);
-  if (overview?.ts_min_perf || overview?.ts_max_perf)
-    metaParts.push(`Intervalle: ${fmtDate(overview?.ts_min_perf)} → ${fmtDate(overview?.ts_max_perf)} (UTC)`);
-  if (generatedAt) metaParts.push(`generated ${generatedAt}`);
-  const metaLine = metaParts.join(" · ");
+  /* ───────── Feature importance (barres horizontales) ───────── */
+  const fiBarData: Partial<Plotly.PlotData>[] = useMemo(() => {
+    if (!fiDoc?.rows?.length) return [];
+    const rows = [...fiDoc.rows]
+      .filter((r) => Number.isFinite(Number(r.importance)))
+      .sort((a, b) => Number(b.importance ?? 0) - Number(a.importance ?? 0));
 
-  /* ───────── Graph data ───────── */
+    if (!rows.length) return [];
+
+    const x = rows.map((r) => Number(r.importance));
+    const y = rows.map((r) => r.feature);
+    const err = rows.map((r) => (Number.isFinite(Number(r.std)) ? Number(r.std) : 0));
+
+    return [
+      {
+        x: x.reverse(),
+        y: y.reverse(),
+        type: "bar" as const,
+        orientation: "h",
+        name: "importance",
+        error_x: {
+          type: "data",
+          array: err.reverse(),
+          visible: err.some((v) => v > 0),
+        },
+        hovertemplate: "%{y}<br>importance=%{x:.4f}" + (err.some((v) => v > 0) ? "<br>±%{error_x.array:.4f}" : "") + "<extra></extra>",
+      },
+    ];
+  }, [fiDoc]);
+
+  /* ───────── Graph data (résidus / calib / incertitude) ───────── */
   const histData: Partial<Plotly.PlotData>[] = useMemo(() => {
     const bins = residuals?.hist ?? [];
     if (!bins.length) return [];
-    const centers = bins.map((b) => (b.bin_left + b.bin_right) / 2);
-    const counts = bins.map((b) => b.count);
-    return [{
-      x: centers,
-      y: counts,
-      type: "bar" as const,
-      name: "Résidus",
-      hovertemplate: "x=%{x:.2f}<br>n=%{y}<extra></extra>",
-    }];
+    const x = bins.map((b) => (b.bin_left + b.bin_right) / 2);
+    const y = bins.map((b) => b.count);
+    return [{ x, y, type: "bar" as const, name: "Résidus", hovertemplate: "x=%{x:.2f}<br>n=%{y}<extra></extra>" }];
   }, [residuals]);
 
   const qqData = useMemo<Partial<ScatterData>[]>(() => {
@@ -162,16 +220,17 @@ export default function ModelExplainabilityPage() {
     const emp = residuals?.qq?.emp ?? [];
     if (!th.length || th.length !== emp.length) return [];
     const { min, max } = safeMinMax([th, emp]);
-    const line: Partial<ScatterData> = { x: [min, max], y: [min, max], type: "scatter", mode: "lines", name: "y = x", hoverinfo: "none" };
-    const pts: Partial<ScatterData> = { x: th, y: emp, type: "scatter", mode: "markers", name: "Quantiles", hovertemplate: "th=%{x:.2f}<br>emp=%{y:.2f}<extra></extra>" };
-    return [line, pts];
+    return [
+      { x: [min, max], y: [min, max], type: "scatter", mode: "lines", name: "y = x", hoverinfo: "none" },
+      { x: th, y: emp, type: "scatter", mode: "markers", name: "Quantiles", hovertemplate: "th=%{x:.2f}<br>emp=%{y:.2f}<extra></extra>" },
+    ];
   }, [residuals]);
 
   const acfData: Partial<Plotly.PlotData>[] = useMemo(() => {
-    const acf = residuals?.acf ?? [];
-    if (!acf.length) return [];
-    const x = Array.from({ length: acf.length }, (_, i) => i);
-    return [{ x, y: acf, type: "bar" as const, name: "ACF", hovertemplate: "lag=%{x}<br>ρ=%{y:.2f}<extra></extra>" }];
+    const a = residuals?.acf ?? [];
+    if (!a.length) return [];
+    const x = Array.from({ length: a.length }, (_, i) => i);
+    return [{ x, y: a, type: "bar" as const, name: "ACF", hovertemplate: "lag=%{x}<br>ρ=%{y:.2f}<extra></extra>" }];
   }, [residuals]);
 
   const heteroData: Partial<Plotly.PlotData>[] = useMemo(() => {
@@ -182,7 +241,7 @@ export default function ModelExplainabilityPage() {
       y: rows.map((r) => r.mae),
       type: "bar" as const,
       name: "MAE",
-      hovertemplate: "quantile=%{x}<br>MAE=%{y:.2f}<extra></extra>",
+      hovertemplate: "q=%{x}<br>MAE=%{y:.2f}<extra></extra>",
     }];
   }, [residuals]);
 
@@ -192,9 +251,10 @@ export default function ModelExplainabilityPage() {
     const xp = rows.map((r) => r.y_pred_mean);
     const yt = rows.map((r) => r.y_true_mean);
     const { min, max } = safeMinMax([xp, yt]);
-    const line: Partial<ScatterData> = { x: [min, max], y: [min, max], type: "scatter", mode: "lines", name: "y = x", hoverinfo: "none" };
-    const pts: Partial<ScatterData> = { x: xp, y: yt, type: "scatter", mode: "markers", name: "Binned means", hovertemplate: "E[ŷ]=%{x:.2f}<br>E[y]=%{y:.2f}<extra></extra>" };
-    return [line, pts];
+    return [
+      { x: [min, max], y: [min, max], type: "scatter", mode: "lines", name: "y = x", hoverinfo: "none" },
+      { x: xp, y: yt, type: "scatter", mode: "markers", name: "Binned means", hovertemplate: "E[ŷ]=%{x:.2f}<br>E[y]=%{y:.2f}<extra></extra>" },
+    ];
   }, [calib]);
 
   const betaByHour = useMemo<Partial<ScatterData>[]>(() => {
@@ -205,7 +265,7 @@ export default function ModelExplainabilityPage() {
       y: rows.map((r) => (Number.isFinite(Number(r.beta)) ? Number(r.beta) : null)),
       type: "scatter",
       mode: "lines+markers",
-      name: "β (pente) vs heure",
+      name: "β vs heure",
       hovertemplate: "h=%{x}<br>β=%{y:.3f}<extra></extra>",
     }];
   }, [calib]);
@@ -218,50 +278,31 @@ export default function ModelExplainabilityPage() {
       y: rows.map((r) => r.mape_like * 100),
       type: "bar" as const,
       name: "MAPE-like (%)",
-      hovertemplate: "niveau=%{x}<br>% err.=%{y:.1f}%<extra></extra>",
+      hovertemplate: "niveau=%{x}<br>%=%{y:.1f}<extra></extra>",
     }];
   }, [calib]);
 
-  const stationBias = useMemo(() => {
+  /* ───────── Tri stations |biais| ───────── */
+  const biasRows = useMemo(() => {
     const rows = calib?.bias_by_station ?? [];
-    if (!rows.length) return { tops: [], bots: [] as CalibrationDoc["bias_by_station"] };
-    const withN = rows.filter((r) => Number(r.n) >= 30);
-    const sorted = [...withN].sort((a, b) => Math.abs(Number(b.bias ?? 0)) - Math.abs(Number(a.bias ?? 0)));
-    return { tops: sorted.slice(0, 20), bots: sorted.slice(-20).reverse() };
+    if (!rows.length) return [];
+    const filtered = rows.filter((r) => Number(r.n) >= 30);
+    return [...filtered].sort((a, b) => Math.abs(Number(b.bias ?? 0)) - Math.abs(Number(a.bias ?? 0))).slice(0, 30);
   }, [calib]);
 
-  const subtitleText = useMemo(
-    () => `Résidus, QQ, ACF, hétéroscédasticité, calibration & incertitude (h=${mounted ? h : 15} min)`,
-    [h, mounted],
-  );
-
-  /* ───────────────── Render ───────────────── */
+  /* ───────── RENDER ───────── */
   return (
     <div className="monitoring">
       <Head>
         <title>Monitoring — Model / Explainability</title>
-        <meta name="description" content="Résidus, QQ, ACF, hétéroscédasticité, calibration et incertitude." />
+        <meta name="description" content="Importance des features, résidus, QQ, ACF, hétéroscédasticité, calibration et incertitude." />
+        {/* Styles barre si non globaux */}
         <style
           dangerouslySetInnerHTML={{
             __html: `
-            /* Utilitaires visuels partagés */
-            .monitoring .bar{height:6px;border-radius:999px;background:#111827;position:relative;overflow:hidden}
-            .monitoring .bar__fill{height:100%;background:var(--ok)}
-            .monitoring .bar__fill--danger{background:#ef4444}
-            .monitoring .figure-note{opacity:.75;margin-top:6px}
-
-            /* Tableaux à la "overview" */
-            .monitoring .table-grid{display:grid;grid-template-columns:var(--cols, 1fr);align-items:center}
-            .monitoring .table-head{
-              padding:8px 6px;font-size:12px;text-transform:uppercase;color:var(--text-dim);
-              border-bottom:1px solid color-mix(in srgb, var(--text) 35%, transparent);
-              background:color-mix(in srgb, var(--panel) 88%, transparent);
-              backdrop-filter:saturate(140%) blur(6px);-webkit-backdrop-filter:saturate(140%) blur(6px)
-            }
-            .monitoring .table-head--sticky{position:sticky;top:0;z-index:1}
-            .monitoring .table-row{display:contents}
-            .monitoring .table-cell{padding:10px 6px;border-bottom:1px solid color-mix(in srgb, var(--text) 20%, transparent)}
-            .monitoring .table-cell--right{text-align:right}
+              .monitoring .bar{height:6px;border-radius:999px;background:#111827;position:relative;overflow:hidden}
+              .monitoring .bar__fill{height:100%;background:var(--ok)}
+              .monitoring .bar__fill--danger{background:#ef4444}
             `,
           }}
         />
@@ -277,7 +318,7 @@ export default function ModelExplainabilityPage() {
 
         <LoadingBar status={barStatus} />
 
-        {/* Toolbar / Controls */}
+        {/* Toolbar */}
         <section className="mt-3">
           <div className="card" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
             <HorizonToggle
@@ -292,20 +333,60 @@ export default function ModelExplainabilityPage() {
           </div>
         </section>
 
-        {/* KPIs + meta */}
+        {/* ───────────────── Feature Importance (en premier) ───────────────── */}
         <section className="mt-4">
-          <h2>Résumé — KPIs (h={h} min)</h2>
-          <KpiBar items={kpiItems} dense />
-          {metaLine && <div className="kpi-bar-meta">{metaLine}</div>}
+          <h2>Importance des features</h2>
+          <div className="card plot-card">
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div className="small muted">
+                {fiDoc
+                  ? `Méthode: ${fiDoc.method} · h=${fiDoc.horizon_min} min · n_rows=${fiDoc.n_rows} · n_features=${fiDoc.n_features}`
+                  : "Aucune donnée disponible"}
+              </div>
+            </div>
+
+            {fiBarData.length ? (
+              <Plot
+                data={fiBarData as Plotly.Data[]}
+                layout={chartLayout({
+                  height: 420,
+                  margin: { l: 220, r: 10, t: 10, b: 36 },
+                  xaxis: { title: { text: "importance (ΔMAE, + grand = + important)" } },
+                  yaxis: { automargin: true },
+                  hovermode: "closest",
+                })}
+                config={chartConfig}
+                className="plot plot--lg"
+              />
+            ) : (
+              <div className="empty">—</div>
+            )}
+          </div>
+          {!!fiDoc?.notes?.length && (
+            <div className="figure-note small">
+              {fiDoc.notes.join(" · ")}
+            </div>
+          )}
         </section>
 
-        {/* ───────── Bloc 1 : Résidus (graphiques) ───────── */}
+        {/* KPIs */}
+        <section className="mt-6">
+          <h2>Résumé — KPIs</h2>
+          <KpiBar items={kpiItems} dense />
+          {(() => {
+            const parts: string[] = [];
+            if (overview?.schema_version != null) parts.push(`Schema v${overview.schema_version}`);
+            if (overview?.ts_min_perf || overview?.ts_max_perf)
+              parts.push(`Intervalle: ${overview?.ts_min_perf ?? "—"} → ${overview?.ts_max_perf ?? "—"} (UTC)`);
+            if (typeof (overview as any)?.horizon_min === "number") parts.push(`h=${(overview as any).horizon_min} min`);
+            if ((overview as any)?.window_days) parts.push(`fenêtre=${(overview as any).window_days} j`);
+            return parts.length ? <div className="kpi-bar-meta">{parts.join(" · ")}</div> : null;
+          })()}
+        </section>
+
+        {/* Résidus */}
         <section className="mt-6">
           <h2>Résidus</h2>
-          <p className="muted small" style={{ marginTop: -6 }}>
-            Distribution, normalité et mémoire des erreurs. Idéalement : centré, faible ACF, QQ proche de la diagonale.
-          </p>
-
           <div className="grid-2">
             <div className="card plot-card">
               <h3>Histogramme</h3>
@@ -321,11 +402,13 @@ export default function ModelExplainabilityPage() {
                   config={chartConfig}
                   className="plot plot--sm"
                 />
-              ) : <div className="empty">—</div>}
+              ) : (
+                <div className="empty">—</div>
+              )}
             </div>
 
             <div className="card plot-card">
-              <h3>QQ-plot (normalisé)</h3>
+              <h3>QQ-plot</h3>
               {qqData.length ? (
                 <Plot
                   data={qqData as Plotly.Data[]}
@@ -339,22 +422,19 @@ export default function ModelExplainabilityPage() {
                   config={chartConfig}
                   className="plot plot--sm"
                 />
-              ) : <div className="empty">—</div>}
+              ) : (
+                <div className="empty">—</div>
+              )}
             </div>
           </div>
-
-          {/* ⬇️ Petites lignes (hors cartes) */}
-          <div className="figure-note small">Histogramme : centres de bacs vs fréquence des résidus.</div>
-          <div className="figure-note small">QQ-plot : une bonne calibration suit la diagonale y=x ; écarts = queues lourdes / biais.</div>
+          <div className="figure-note small">
+            Lecture : histogramme des résidus sur la fenêtre courante ; QQ-plot pour vérifier la normalité (la droite y=x indique une gaussienne idéale).
+          </div>
         </section>
 
-        {/* ───────── Bloc 2 : ACF & Hétéro (graphiques) ───────── */}
+        {/* ACF / Hétéroscédasticité */}
         <section className="mt-6">
           <h2>Structure des erreurs</h2>
-          <p className="muted small" style={{ marginTop: -6 }}>
-            Autocorrélations et variabilité par niveau de charge.
-          </p>
-
           <div className="grid-2">
             <div className="card plot-card">
               <h3>ACF du résidu (lag 5 min)</h3>
@@ -370,7 +450,9 @@ export default function ModelExplainabilityPage() {
                   config={chartConfig}
                   className="plot plot--sm"
                 />
-              ) : <div className="empty">—</div>}
+              ) : (
+                <div className="empty">—</div>
+              )}
             </div>
 
             <div className="card plot-card">
@@ -387,78 +469,79 @@ export default function ModelExplainabilityPage() {
                   config={chartConfig}
                   className="plot plot--sm"
                 />
-              ) : <div className="empty">—</div>}
+              ) : (
+                <div className="empty">—</div>
+              )}
             </div>
           </div>
-
-          {/* ⬇️ Petites lignes */}
-          <div className="figure-note small">ACF : les autocorrélations résiduelles devraient être proches de 0.</div>
-          <div className="figure-note small">Hétéroscédasticité : variabilité de l’erreur selon le niveau de charge.</div>
+          <div className="figure-note small">
+            Lecture : l’ACF montre la dépendance temporelle résiduelle ; l’hétéroscédasticité trace la MAE selon des tranches de y_true.
+          </div>
         </section>
 
-        {/* ───────── Bloc 3 : Tableau — Épisodes d’erreurs (seul, pas à côté d’un graphe) ───────── */}
+        {/* Tableau 1 — Épisodes d’erreurs */}
         <section className="mt-6">
           <h2>Épisodes d’erreurs (|résidu| ≥ 4)</h2>
-          <div className="card plot-card">
+          <div className="card">
             {residuals?.episodes?.length ? (
-              <div className="table-scroll" style={{ overflowX: "hidden" }}>
-                <div className="table-grid" style={{ ["--cols" as any]: "minmax(0,1fr)", minWidth: 0 }}>
-                  <div className="table-head table-head--sticky">Station</div>
-                  {residuals.episodes.slice(0, 80).map((r) => {
-                    const widthPct = Math.min(100, Number(r.max_run) * 4);
-                    return (
-                      <div className="table-row" key={r.station_id}>
-                        <div className="table-cell">
-                          <div
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "minmax(0,1fr) auto",
-                              alignItems: "baseline",
-                              gap: 8,
-                            }}
-                          >
-                            <div>
-                              <div
-                                style={{
-                                  fontWeight: 600,
-                                  whiteSpace: "nowrap",
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                }}
-                                title={`#${r.station_id}`}
-                              >
-                                #{r.station_id}
-                              </div>
-                              <div className="mono" style={{ fontSize: 12, opacity: 0.7 }}>
-                                n={fmtInt(r.n)} · max run={fmtInt(r.max_run)}
-                              </div>
-                            </div>
-                            <div className="small" style={{ fontWeight: 700 }}>
-                              {fmtInt(r.max_run)}
-                            </div>
-                          </div>
+              <>
+                <div className="table-scroll">
+                  <div className="table-grid" style={{ ["--cols" as any]: "minmax(0,1fr) 1fr 78px" }}>
+                    <div className="table-head table-head--sticky">Station</div>
+                    <div className="table-head table-head--sticky">Durée max (pas)</div>
+                    <div className="table-head table-head--sticky">n épisodes</div>
 
-                          <div className="bar" style={{ height: 5, marginTop: 6, width: "min(52%, 240px)" }}>
-                            <div className="bar__fill bar__fill--danger" style={{ width: `${widthPct}%` }} aria-hidden />
+                    {(() => {
+                      const rows = residuals.episodes.slice(0, 80);
+                      const maxRun = Math.max(...rows.map((r) => Number(r.max_run ?? 0)), 1);
+
+                      return rows.map((r) => {
+                        const val = Number(r.max_run ?? 0);
+                        const widthPct = clamp((val / maxRun) * 100, 0, 100);
+                        const nm = nameIndex[r.station_id] ?? `#${r.station_id}`;
+                        return (
+                          <div className="table-row" key={r.station_id}>
+                            {/* col 1: Station (nom + id) */}
+                            <div className="table-cell">
+                              <div className="table-cell--ellipsis" style={{ fontWeight: 600 }} title={nm}>
+                                {nm}
+                              </div>
+                              <div className="mono" style={{ fontSize: 12, opacity: 0.7 }}>#{r.station_id} · max run={fmtInt(r.max_run)}</div>
+                            </div>
+
+                            {/* col 2: Durée — barre + valeur alignée à droite */}
+                            <div className="table-cell">
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 64px", alignItems: "center", gap: 10 }}>
+                                <div className="bar">
+                                  <div className="bar__fill bar__fill--danger" style={{ width: `${widthPct}%` }} aria-hidden />
+                                </div>
+                                <div className="table-cell--right" style={{ fontWeight: 700 }}>{fmtInt(val)}</div>
+                              </div>
+                            </div>
+
+                            {/* col 3: n épisodes */}
+                            <div className="table-cell table-cell--right" style={{ fontWeight: 700 }}>
+                              {fmtInt(r.n)}
+                            </div>
                           </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                        );
+                      });
+                    })()}
+                  </div>
                 </div>
-              </div>
-            ) : <div className="empty">—</div>}
+                <div className="figure-note small">
+                  Lecture : pour chaque station, on affiche la plus longue séquence consécutive où |résidu| ≥ 4, normalisée par le maximum du tableau.
+                </div>
+              </>
+            ) : (
+              <div className="empty">Aucun épisode détecté.</div>
+            )}
           </div>
-          {/* ⬇️ Petite ligne hors carte/tableau */}
-          <div className="figure-note small">Un épisode = séquence continue d’erreurs élevées pour une station.</div>
         </section>
 
-        {/* ───────── Bloc 4 : Calibration (graphiques) ───────── */}
+        {/* Calibration (graphiques) */}
         <section className="mt-6">
           <h2>Calibration</h2>
-          <p className="muted small" style={{ marginTop: -6 }}>
-            Conformité moyenne ŷ → y, stabilité par heure et profils d’erreur relatifs.
-          </p>
 
           <div className="card plot-card">
             <h3>Binned means (y_pred → y_true)</h3>
@@ -468,16 +551,18 @@ export default function ModelExplainabilityPage() {
                 layout={chartLayout({
                   height: 320,
                   margin: { l: 54, r: 10, t: 10, b: 40 },
-                  xaxis: { title: { text: "E[y_pred]" } },
-                  yaxis: { title: { text: "E[y_true]" } },
+                  xaxis: { title: { text: "E[ŷ]" } },
+                  yaxis: { title: { text: "E[y]" } },
                 })}
                 config={chartConfig}
                 className="plot plot--sm"
               />
-            ) : <div className="empty">—</div>}
+            ) : (
+              <div className="empty">—</div>
+            )}
           </div>
           <div className="figure-note small">
-            y ≈ α + β·ŷ — α={fmtNum(calib?.fit?.alpha, 3)}, β={fmtNum(calib?.fit?.beta, 3)} · n={fmtInt(calib?.fit?.n ?? null)}
+            Lecture : comparaison des moyennes binned E[ŷ] vs E[y] ; la diagonale indique une calibration parfaite.
           </div>
 
           <div className="grid-2 mt-4">
@@ -495,7 +580,9 @@ export default function ModelExplainabilityPage() {
                   config={chartConfig}
                   className="plot plot--sm"
                 />
-              ) : <div className="empty">—</div>}
+              ) : (
+                <div className="empty">—</div>
+              )}
             </div>
 
             <div className="card plot-card">
@@ -512,102 +599,102 @@ export default function ModelExplainabilityPage() {
                   config={chartConfig}
                   className="plot plot--sm"
                 />
-              ) : <div className="empty">—</div>}
+              ) : (
+                <div className="empty">—</div>
+              )}
             </div>
           </div>
-
-          <div className="figure-note small">Variations de β par heure : indices de biais systématiques horaires.</div>
-          <div className="figure-note small">MAPE-like : erreur relative moyenne par tranche de y_true.</div>
+          <div className="figure-note small">
+            Lecture : β reflète un éventuel biais multiplicatif selon l’heure ; l’erreur relative est agrégée par niveaux (quantiles) de y_true.
+          </div>
         </section>
 
-        {/* ───────── Bloc 5 : Tableau — Biais par station (seul) ───────── */}
-        <section className="mt-6">
+        {/* Tableau 2 — Stations |biais| */}
+        <section className="mt-6" style={{ marginBottom: 40 }}>
           <h2>Stations — biais moyen</h2>
-          <div className="card plot-card">
-            {calib?.bias_by_station?.length ? (
-              <div className="table-scroll" style={{ overflowX: "hidden" }}>
-                <div className="table-grid" style={{ ["--cols" as any]: "minmax(0,1fr)", minWidth: 0 }}>
-                  <div className="table-head table-head--sticky">Station</div>
-                  {stationBias.tops.slice(0, 30).map((r) => {
-                    const absBias = Math.abs(Number(r.bias ?? 0));
-                    const widthPct = Math.min(100, absBias * 5);
-                    return (
-                      <div className="table-row" key={r.station_id}>
-                        <div className="table-cell">
-                          <div
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "minmax(0,1fr) auto auto",
-                              alignItems: "baseline",
-                              gap: 8,
-                            }}
-                          >
-                            <div>
-                              <div
-                                style={{
-                                  fontWeight: 600,
-                                  whiteSpace: "nowrap",
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                }}
-                                title={r.name ?? `#${r.station_id}`}
-                              >
-                                {r.name ?? `#${r.station_id}`}
+          <div className="card">
+            {biasRows.length ? (
+              <>
+                <div className="table-scroll">
+                  <div className="table-grid" style={{ ["--cols" as any]: "minmax(0,1fr) 1fr 78px" }}>
+                    <div className="table-head table-head--sticky">Station</div>
+                    <div className="table-head table-head--sticky">|biais|</div>
+                    <div className="table-head table-head--sticky">n</div>
+
+                    {(() => {
+                      const maxAbs = Math.max(...biasRows.map((r) => Math.abs(Number(r.bias ?? 0))), 1);
+                      return biasRows.map((r) => {
+                        const absBias = Math.abs(Number(r.bias ?? 0));
+                        const widthPct = clamp((absBias / maxAbs) * 100, 0, 100);
+                        const nm = nameIndex[r.station_id] ?? r.name ?? `#${r.station_id}`;
+                        return (
+                          <div className="table-row" key={r.station_id}>
+                            {/* col 1: Station */}
+                            <div className="table-cell">
+                              <div className="table-cell--ellipsis" style={{ fontWeight: 600 }} title={nm}>
+                                {nm}
                               </div>
-                              <div className="mono" style={{ fontSize: 12, opacity: 0.7 }}>
-                                #{r.station_id} · n={fmtInt(r.n)}
+                              <div className="mono" style={{ fontSize: 12, opacity: 0.7 }}>#{r.station_id}</div>
+                            </div>
+
+                            {/* col 2: |biais| — barre + valeur */}
+                            <div className="table-cell">
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 64px", alignItems: "center", gap: 10 }}>
+                                <div className="bar">
+                                  <div className="bar__fill bar__fill--danger" style={{ width: `${widthPct}%` }} aria-hidden />
+                                </div>
+                                <div className="table-cell--right" style={{ fontWeight: 700 }}>{fmtNum(absBias, 2)}</div>
                               </div>
                             </div>
-                            <div className="small" style={{ fontWeight: 700 }}>{fmtNum(r.bias, 2)}</div>
-                            <div className="small" style={{ fontWeight: 700, opacity: .85 }}>|b|</div>
-                          </div>
 
-                          <div className="bar" style={{ height: 5, marginTop: 6, width: "min(52%, 240px)" }}>
-                            <div className="bar__fill bar__fill--danger" style={{ width: `${widthPct}%` }} aria-hidden />
+                            {/* col 3: n */}
+                            <div className="table-cell table-cell--right">{fmtInt(r.n)}</div>
                           </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                        );
+                      });
+                    })()}
+                  </div>
                 </div>
-              </div>
-            ) : <div className="empty">—</div>}
+                <div className="figure-note small">
+                  Lecture : |biais| = |E[y_true − y_pred]| par station (filtrées avec n ≥ 30) ; barres normalisées par le |biais| max du tableau.
+                </div>
+              </>
+            ) : (
+              <div className="empty">Aucune station à afficher.</div>
+            )}
           </div>
-          <div className="figure-note small">Tri sur |biais| ; filtre n ≥ 30 pour réduire le bruit.</div>
         </section>
 
-        {/* ───────── Bloc 6 : Incertitude (carte + note) ───────── */}
+        {/* Incertitude */}
         <section className="mt-6" style={{ marginBottom: 40 }}>
           <h2>Incertitude</h2>
-          <p className="muted small" style={{ marginTop: -6 }}>
-            Cohérence des intervalles prédictifs (couverture empirique vs nominal).
-          </p>
-
-          <div className="card plot-card">
+          <div className="card">
             {unc?.coverage ? (
-              <div className="row" style={{ alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-                <div className="kpi">
-                  <div className="kpi__label small muted">Coverage empirique</div>
-                  <div className="kpi__value" style={{ fontWeight: 700 }}>
-                    {Number.isFinite(Number(unc.coverage.empirical)) ? `${(Number(unc.coverage.empirical) * 100).toFixed(1)}%` : "—"}
+              <>
+                <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
+                  <div className="kpi">
+                    <div className="kpi__label small">Coverage empirique</div>
+                    <div className="kpi__value" style={{ fontWeight: 700 }}>
+                      {Number.isFinite(Number(unc.coverage.empirical))
+                        ? `${(Number(unc.coverage.empirical) * 100).toFixed(1)}%`
+                        : "—"}
+                    </div>
+                  </div>
+                  <div className="kpi">
+                    <div className="kpi__label small">Échantillon</div>
+                    <div className="kpi__value" style={{ fontWeight: 700 }}>{fmtInt(unc.coverage.n)}</div>
+                  </div>
+                  <div className="small muted" style={{ alignSelf: "center" }}>
+                    {unc.method ? `Méthode: ${unc.method}` : ""}{Number.isFinite(Number(unc.nominal)) ? ` · nominal=${(Number(unc.nominal) * 100).toFixed(0)}%` : ""}
                   </div>
                 </div>
-                <div className="kpi">
-                  <div className="kpi__label small muted">Échantillon</div>
-                  <div className="kpi__value" style={{ fontWeight: 700 }}>{fmtInt(unc.coverage.n)}</div>
+                <div className="figure-note small">
+                  Lecture : proportion observée des y_true dans l’intervalle prédictif. La valeur “nominal” est la cible théorique.
                 </div>
-                {(unc.method || Number.isFinite(Number(unc.nominal))) && (
-                  <div className="small muted">
-                    {unc.method ? `Méthode: ${unc.method}` : ""}
-                    {Number.isFinite(Number(unc.nominal)) ? ` · nominal=${(Number(unc.nominal) * 100).toFixed(0)}%` : ""}
-                  </div>
-                )}
-              </div>
-            ) : <div className="empty">Aucune borne d’incertitude détectée (colonnes yhat_lo / yhat_hi).</div>}
-          </div>
-
-          <div className="figure-note small">
-            Couverture = part(y_true ∈ [yhat_lo, yhat_hi]). Attendue ≈ 90–95% selon l’intervalle.
+              </>
+            ) : (
+              <div className="empty">Aucune borne d’incertitude détectée.</div>
+            )}
           </div>
         </section>
       </main>

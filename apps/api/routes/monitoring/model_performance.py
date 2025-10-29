@@ -84,6 +84,7 @@ DocNamePerf = Literal[
     "by_cluster",       # présent si tu fournis le CSV de clusters
     "lift_curve",
     "hist_residuals",
+    "station_timeseries",  # ⬅️ NEW
 ]
 
 _TTL_BY_DOC = {
@@ -95,6 +96,7 @@ _TTL_BY_DOC = {
     "by_cluster": 300,
     "lift_curve": 180,
     "hist_residuals": 600,
+    "station_timeseries": 300,  # ⬅️ NEW
 }
 
 @router.get("/available")
@@ -109,12 +111,14 @@ def model_perf_available():
             "by_cluster",
             "lift_curve",
             "hist_residuals",
+            "station_timeseries",  # ⬅️ NEW
         ],
         "horizons": "utiliser ?h=<minutes> (ex: 15, 60)",
         "time_travel": "latest uniquement (param ?at=… ignoré si non valide)",
         "examples": [
             "/monitoring/model/performance/kpis?h=15",
             "/monitoring/model/performance/by_hour?h=60",
+            "/monitoring/model/performance/station_timeseries?h=15",  # ⬅️ NEW
             "/monitoring/model/performance/manifest",
         ],
     }

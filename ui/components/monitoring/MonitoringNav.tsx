@@ -7,25 +7,25 @@ type Group = { label: string; items: Action[] };
 
 const GROUPS: Group[] = [
   {
-    label: "Network",
+    label: "Réseau",
     items: [
-      { label: "Overview", href: "/monitoring/network/overview" },
+      { label: "Aperçu", href: "/monitoring/network/overview" },
       { label: "Stations", href: "/monitoring/network/stations" },
-      { label: "Dynamics", href: "/monitoring/network/dynamics" },
+      { label: "Dynamique", href: "/monitoring/network/dynamics" },
     ],
   },
   {
-    label: "Data",
+    label: "Données",
     items: [
-      { label: "Drift", href: "/monitoring/data/drift" },
-      { label: "Health", href: "/monitoring/data/health" },
+      { label: "Dérive", href: "/monitoring/data/drift" },
+      { label: "Qualité", href: "/monitoring/data/health" },
     ],
   },
   {
-    label: "Model",
+    label: "Modèle",
     items: [
       { label: "Performance", href: "/monitoring/model/performance" },
-      { label: "Explainability", href: "/monitoring/model/explainability" },
+      { label: "Explicabilité", href: "/monitoring/model/explainability" },
     ],
   },
 ];
@@ -55,14 +55,14 @@ export default function MonitoringNav({
     const ts = new Date(generatedAt).getTime();
     if (Number.isNaN(ts)) return null;
     const ageMs = Date.now() - ts;
-    const fresh = ageMs <= 24 * 60 * 60 * 1000;
+    const frais = ageMs <= 24 * 60 * 60 * 1000;
     const label = new Date(ts).toLocaleString("fr-FR");
-    return { label, fresh };
+    return { label, frais };
   }, [generatedAt]);
 
   return (
     <header className="mn-header">
-      {/* ───────────── Title bar ───────────── */}
+      {/* ───────────── Barre de titre ───────────── */}
       <div className="mn-titlebar">
         <div className="title">
           <h1>{title}</h1>
@@ -70,17 +70,17 @@ export default function MonitoringNav({
           {genInfo && (
             <span className="mn-meta inline">
               <span
-                className={`dot ${genInfo.fresh ? "dot--ok" : "dot--stale"}`}
+                className={`dot ${genInfo.frais ? "dot--ok" : "dot--stale"}`}
                 aria-hidden="true"
               />
-              Généré : {genInfo.label}
+              Généré le : {genInfo.label}
             </span>
           )}
         </div>
       </div>
 
-      {/* ───────────── Toolbar ───────────── */}
-      <div className="toolbar-wrap" role="menubar" aria-label="Monitoring sections">
+      {/* ───────────── Barre de navigation ───────────── */}
+      <div className="toolbar-wrap" role="menubar" aria-label="Sections du monitoring">
         <div className="groups">
           {GROUPS.map((group) => {
             const groupActive = isGroupActive(pathname, group);
@@ -92,7 +92,11 @@ export default function MonitoringNav({
               >
                 <button
                   type="button"
-                  className={groupActive ? "btn btn--primary nav-trigger" : "btn btn--ghost nav-trigger"}
+                  className={
+                    groupActive
+                      ? "btn btn--primary nav-trigger"
+                      : "btn btn--ghost nav-trigger"
+                  }
                   aria-controls={`dropdown-${group.label}`}
                   aria-haspopup="true"
                   aria-expanded={undefined} // ouverture gérée par CSS (pas de persistance)
@@ -105,7 +109,7 @@ export default function MonitoringNav({
                   id={`dropdown-${group.label}`}
                   className="dropdown"
                   role="menu"
-                  aria-label={`${group.label} pages`}
+                  aria-label={`Pages de ${group.label}`}
                 >
                   {group.items.map((item) => {
                     const active = isActive(pathname, item.href);
@@ -126,7 +130,7 @@ export default function MonitoringNav({
           })}
         </div>
 
-        {/* Extra actions (sans persistance au clic) */}
+        {/* Actions supplémentaires (sans focus persistant) */}
         {extraActions.length > 0 && (
           <div className="extras">
             {extraActions.map((a) => {

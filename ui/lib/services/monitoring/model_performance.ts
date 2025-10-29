@@ -43,10 +43,22 @@ export type DailyRow = {
 };
 export type DailyMetrics = { schema_version: string; horizon_min: number; rows: DailyRow[] };
 
-export type HourRow = { hour: number; mae_model: number | null; mae_baseline: number | null; coverage_pred_pct: number | null; n: number; };
+export type HourRow = {
+  hour: number;
+  mae_model: number | null;
+  mae_baseline: number | null;
+  coverage_pred_pct: number | null;
+  n: number;
+};
 export type ByHour = { schema_version: string; horizon_min: number; rows: HourRow[] };
 
-export type DOWRow = { dow: number; mae_model: number | null; mae_baseline: number | null; coverage_pred_pct: number | null; n: number; };
+export type DOWRow = {
+  dow: number;
+  mae_model: number | null;
+  mae_baseline: number | null;
+  coverage_pred_pct: number | null;
+  n: number;
+};
 export type ByDow = { schema_version: string; horizon_min: number; rows: DOWRow[] };
 
 export type StationRow = {
@@ -59,8 +71,32 @@ export type StationRow = {
 };
 export type ByStation = { schema_version: string; horizon_min: number; rows: StationRow[] };
 
-export type LiftCurve = { schema_version: string; horizon_min?: number; points: Array<{ date: string; lift_vs_baseline: number | null }>; };
-export type HistResiduals = { schema_version: string; horizon_min?: number; bins: number[]; counts: number[]; n: number; };
+export type LiftCurve = {
+  schema_version: string;
+  horizon_min?: number;
+  points: Array<{ date: string; lift_vs_baseline: number | null }>;
+};
+export type HistResiduals = {
+  schema_version: string;
+  horizon_min?: number;
+  bins: number[];
+  counts: number[];
+  n: number;
+};
+
+/* ⬇️ NEW — Série 24 h Observé / Modèle / Baseline pour une station */
+export type StationTimeseries = {
+  schema_version: string;
+  generated_at: string;
+  h: number;
+  station_id: string;
+  name?: string | null;
+  tz?: string;
+  ts: string[];       // ISO8601 UTC
+  y_true: number[];   // Observé
+  y_pred: number[];   // Modèle
+  y_base: number[];   // Baseline
+};
 
 /* ── Helpers ───────────────────────────────────────────── */
 const path = (s: string) => `/monitoring/model/performance${s}`;
@@ -89,3 +125,10 @@ export const getPerformanceLiftCurve = (h: number) =>
 
 export const getPerformanceHistResiduals = (h: number) =>
   fetchJsonWithEtag<HistResiduals>(path(`/hist_residuals?h=${encodeURIComponent(h)}`));
+
+/* ⬇️ NEW */
+export const getPerformanceStationTimeseries = (h: number, at?: string | null) => {
+  const q = new URLSearchParams({ h: String(h) });
+  if (at) q.set("at", at);
+  return fetchJsonWithEtag<StationTimeseries>(path(`/station_timeseries?${q.toString()}`));
+};

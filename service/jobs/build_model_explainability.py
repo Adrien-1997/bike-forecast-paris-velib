@@ -1,681 +1,896 @@
-# service/jobs/build_model_performance.py
-# -----------------------------------------------------------------------------
-# Build "Model Performance" monitoring artifacts from perf_YYYY-MM-DD.parquet
-# ➜ VERSION "LATEST ONLY" (no timestamped versioned folders)
-#
-# Inputs  (GCS):
-#   GCS_EXPORTS_PREFIX/perf_YYYY-MM-DD.parquet
-#
-# Outputs (GCS JSON — LATEST ONLY):
-#   <MONITORING_BASE>/model/performance/latest/manifest.json
-#   <MONITORING_BASE>/model/performance/latest/h{H}/kpis.json
-#   <MONITORING_BASE>/model/performance/latest/h{H}/daily_metrics.json
-#   <MONITORING_BASE>/model/performance/latest/h{H}/by_hour.json
-#   <MONITORING_BASE>/model/performance/latest/h{H}/by_dow.json
-#   <MONITORING_BASE>/model/performance/latest/h{H}/by_station.json
-#   <MONITORING_BASE>/model/performance/latest/h{H}/by_cluster.json  (optional)
-#   <MONITORING_BASE>/model/performance/latest/h{H}/lift_curve.json
-#   <MONITORING_BASE>/model/performance/latest/h{H}/hist_residuals.json
-#
-# ENV (required):
-#   GCS_EXPORTS_PREFIX     = gs://<bucket>/velib/exports
-#   GCS_MONITORING_PREFIX  = gs://<bucket>/velib
-#
-# ENV (optional):
-#   PERF_TZ               = Europe/Paris
-#   EXPLAIN_WINDOW_DAYS   = 14          # ← unified lookback (same as explainability)
-#   PERF_LAST_DAYS        = 14          # ← fallback for backward-compat
-#   PERF_HORIZONS         = "15"        # CSV like "15,60"
-#   PERF_RESID_BINS       = 40
-#   PERF_TOP_STATIONS     = 10          # (reserved; not used in this script)
-#   PERF_CLUSTERS_CSV     = gs://.../station_clusters.csv  (mapping station_id,cluster)
-#
-# Run:
-#   python -m service.jobs.build_model_performance
-# -----------------------------------------------------------------------------
-
+# service/jobs/build_model_explainability.py
 from __future__ import annotations
-import os, re, json, sys
+import os, re, sys, json, math, random
 from io import BytesIO
-from typing import List, Dict, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from datetime import datetime, timezone, timedelta
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import (
+    is_numeric_dtype,
+    is_bool_dtype,
+    is_datetime64_any_dtype,
+)
 
 try:
     import pyarrow.parquet as pq  # type: ignore
 except Exception as e:
-    raise RuntimeError("pyarrow required") from e
+    raise RuntimeError("pyarrow requis") from e
 
 try:
     from google.cloud import storage  # type: ignore
 except Exception as e:
-    raise RuntimeError("google-cloud-storage required") from e
+    raise RuntimeError("google-cloud-storage requis") from e
 
-
-SCHEMA_VERSION = "1.0"  # initial schema for model/performance JSONs
-BIN_MIN = 5             # 5-minute cadence (pipeline invariant)
+# sklearn pour FI
+_SK_OK = True
+try:
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.impute import SimpleImputer
+    from sklearn.pipeline import Pipeline
+    from sklearn.inspection import permutation_importance
+except Exception:
+    _SK_OK = False
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# GCS helpers
+# Constantes & version de schéma
 # ──────────────────────────────────────────────────────────────────────────────
+SCHEMA_VERSION = "1.4"   # 1.3 + feature importance (surrogate RF + permutation)
+BIN_MIN = 5              # cadence 5 minutes (invariant du pipeline)
+
+# Allègement des artefacts "residuals" (contrôlable via env)
+RESID_QQ_POINTS     = int(os.environ.get("EXPLAIN_QQ_POINTS", "512"))    # nb points QQ
+RESID_HIST_BINS     = int(os.environ.get("EXPLAIN_HIST_BINS", "60"))     # bins histogramme
+RESID_ACF_NLAGS     = int(os.environ.get("EXPLAIN_ACF_NLAGS", "144"))    # lags ACF
+RESID_EPISODES_TOPK = int(os.environ.get("EXPLAIN_EPISODES_TOPK", "64")) # top-K épisodes
+
+# Fenêtre glissante (jours) — 0 = pas de fenêtre
+WINDOW_DAYS = int(os.environ.get("EXPLAIN_WINDOW_DAYS", "0"))
+
+# Feature Importance (FI) — surrogate + permutation
+FI_ENABLED         = os.environ.get("EXPLAIN_FI_ENABLED", "1").strip() not in {"0", "false", "False", ""}
+FI_MAX_FEATURES    = int(os.environ.get("EXPLAIN_FI_MAX_FEATURES", "40"))
+FI_SAMPLE_ROWS     = int(os.environ.get("EXPLAIN_FI_SAMPLE_ROWS", "80000"))  # échantillon max pour fit/permutation
+FI_N_REPEATS       = int(os.environ.get("EXPLAIN_FI_N_REPEATS", "5"))
+FI_RANDOM_STATE    = int(os.environ.get("EXPLAIN_FI_RANDOM_STATE", "42"))
+FI_MIN_NON_NA_PCT  = float(os.environ.get("EXPLAIN_FI_MIN_NON_NA_PCT", "0.6"))  # >= 60% observés
+FI_TOPK_TO_PUBLISH = int(os.environ.get("EXPLAIN_FI_TOPK_TO_PUBLISH", "60"))     # limiter la taille du JSON
+
+
+# ───────────────────────── GCS helpers ─────────────────────────
 
 def _split(gs: str) -> Tuple[str, str]:
     assert gs.startswith("gs://"), f"bad GCS uri: {gs}"
     b, k = gs[5:].split("/", 1)
     return b, k.rstrip("/")
 
+def _exists(gs: str) -> bool:
+    b, k = _split(gs)
+    return storage.Client().bucket(b).blob(k).exists()
+
+def _list_under(prefix_gs: str, regex: Optional[re.Pattern]=None) -> List["storage.Blob"]:
+    bkt, key = _split(prefix_gs)
+    cli = storage.Client()
+    blobs = list(cli.list_blobs(bkt, prefix=key.strip("/") + "/"))
+    if regex is not None:
+        blobs = [b for b in blobs if regex.search(b.name)]
+    return blobs
+
 def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
     buf = BytesIO()
     blob.download_to_file(buf)
     buf.seek(0)
-    tbl = pq.read_table(buf)
-    return tbl.to_pandas()
+    return pq.read_table(buf).to_pandas()
 
-def _list_perf_blobs(exports_prefix: str, start_date: datetime, end_date: datetime) -> List["storage.Blob"]:
-    """List perf_YYYY-MM-DD.parquet blobs between start_date and end_date (UTC day)."""
-    bkt, key_prefix = _split(exports_prefix)
-    client = storage.Client()
-    bucket = client.bucket(bkt)
-    blobs = list(client.list_blobs(bucket, prefix=key_prefix.strip("/") + "/"))
-    pat = re.compile(r"perf_(\d{4}-\d{2}-\d{2})\.parquet$")
-    out = []
-    for bl in blobs:
-        m = pat.search(bl.name)
-        if not m:
-            continue
-        d = datetime.strptime(m.group(1), "%Y-%m-%d").date()
-        if start_date.date() <= d <= end_date.date():
-            out.append(bl)
-    out.sort(key=lambda b: b.name)
-    return out
-
-def _upload_json_gs(obj: dict, gs_uri: str):
-    """Upload JSON with NaN/Inf sanitized to null."""
+def _upload_json_gs(obj: object, gs_uri: str):
+    # JSON "safe": NaN/±Inf → null
     def _san(o):
-        if isinstance(o, dict):
-            return {k: _san(v) for k, v in o.items()}
-        if isinstance(o, list):
-            return [_san(v) for v in o]
-        if isinstance(o, float):
-            return float(o) if np.isfinite(o) else None
+        if isinstance(o, dict):  return {k: _san(v) for k, v in o.items()}
+        if isinstance(o, list):  return [_san(v) for v in o]
+        if isinstance(o, float): return float(o) if np.isfinite(o) else None
         return o
-
     safe = _san(obj)
-    bkt, key = _split(gs_uri)
+    b, k = _split(gs_uri)
     data = json.dumps(safe, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    storage.Client().bucket(bkt).blob(key).upload_from_string(data, content_type="application/json")
-    print(f"[model.performance] wrote → {gs_uri} ({len(data):,} bytes)")
+    storage.Client().bucket(b).blob(k).upload_from_string(data, content_type="application/json")
+    print(f"[model.explain] wrote → {gs_uri} ({len(data):,} bytes)")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Time & base path helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── Readers ─────────────────────────
 
-def _compute_window(now_utc: datetime, last_days: int) -> Tuple[datetime, datetime]:
-    """Inclusive window: from 00:00 UTC of (now - last_days + 1) to now."""
-    start = (now_utc - timedelta(days=last_days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    return start, now_utc
+def _read_latest_perf(exports_prefix: str) -> Tuple[pd.DataFrame, Optional[str]]:
+    """
+    Lit le parquet 'perf.parquet' si présent, sinon prend le dernier 'perf_YYYY-MM-DD.parquet'.
+    Retourne (df, anchor_day).
+    """
+    base = exports_prefix.rstrip("/")
+    main = f"{base}/perf.parquet"
+    pat = re.compile(r"/perf_(\d{4}-\d{2}-\d{2})\.parquet$")
 
-def _ensure_mon_base(mon_prefix: str) -> str:
-    """Ensure path ends with '/monitoring' once."""
-    base = mon_prefix.rstrip("/")
-    if not base.endswith("/monitoring"):
-        base = base + "/monitoring"
-    return base
+    if _exists(main):
+        bkt, key = _split(main)
+        df = _read_parquet_blob_to_df(storage.Client().bucket(bkt).blob(key))
+        day = None
+        for tcol in ("tbin_utc","ts","ts_utc","timestamp","datetime"):
+            if tcol in df.columns:
+                ts = pd.to_datetime(df[tcol], utc=True, errors="coerce")
+                if ts.notna().any():
+                    day = ts.max().date().isoformat()
+                    break
+        return df, day
 
-def _to_local(utc_series: pd.Series, tzname: str) -> pd.Series:
-    s = pd.to_datetime(utc_series, utc=True, errors="coerce")
-    return s.dt.tz_convert(tzname)
+    blobs = _list_under(base, regex=pat)
+    if not blobs:
+        raise FileNotFoundError(f"no perf parquet under {base}")
+    blobs.sort(key=lambda b: b.name)
+    last = blobs[-1]
+    m = pat.search(last.name)
+    day = m.group(1) if m else None
+    df = _read_parquet_blob_to_df(last)
+    return df, day
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Schema detection & normalization
-# ──────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── Colonnes & horizons ─────────────────────────
 
-def _detect_perf_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
-    """Auto-detect key columns with robust fallbacks."""
-    lower = {c.lower(): c for c in df.columns}
+def _pick_cols(perf: pd.DataFrame) -> Dict[str, Optional[str]]:
+    cols = set(perf.columns)
 
-    def any_of(*cands):
+    def pick(cands):
         for c in cands:
-            if c.lower() in lower:
-                return lower[c.lower()]
+            if c in cols:
+                return c
         return None
 
-    tbin = any_of("tbin_utc", "ts", "timestamp", "datetime")
-    sid = any_of("station_id", "stationcode", "id", "station")
-    ytrue = any_of("y_true", "y", "target", "bikes_true", "nb_velos_bin")
-    ypred_int = any_of("y_pred_int", "bikes_pred_int")
-    # float fallback if int missing
-    ypred_float = any_of("y_pred", "bikes_pred", "yhat", "prediction", "pred")
-    ybase = any_of("y_baseline_persist", "y_pred_baseline", "baseline", "persist")
-    cap = any_of("capacity", "cap", "num_docks_total", "dock_count")
-    hb = any_of("horizon_bins",)
-    hmin = any_of("horizon_min",)
-
-    if not tbin or not sid or not ytrue or not ybase:
-        raise KeyError(f"[model.performance] Missing minimal columns (tbin={tbin}, station={sid}, y_true={ytrue}, baseline={ybase})")
-
-    return dict(
-        tbin=tbin, station=sid, y_true=ytrue, y_pred_int=ypred_int,
-        y_pred_float=ypred_float, y_baseline=ybase, capacity=cap,
-        horizon_bins=hb, horizon_min=hmin
-    )
-
-def _normalize_types(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.DataFrame:
-    out = df.copy()
-    out[cols["tbin"]] = pd.to_datetime(out[cols["tbin"]], utc=True, errors="coerce")
-    out[cols["station"]] = out[cols["station"]].astype("string")
-    out[cols["y_true"]] = pd.to_numeric(out[cols["y_true"]], errors="coerce")
-    out[cols["y_baseline"]] = pd.to_numeric(out[cols["y_baseline"]], errors="coerce")
-    if cols["y_pred_int"] and cols["y_pred_int"] in out.columns:
-        out[cols["y_pred_int"]] = pd.to_numeric(out[cols["y_pred_int"]], errors="coerce")
-    if cols["y_pred_float"] and cols["y_pred_float"] in out.columns:
-        out[cols["y_pred_float"]] = pd.to_numeric(out[cols["y_pred_float"]], errors="coerce")
-    if cols["capacity"] and cols["capacity"] in out.columns:
-        out[cols["capacity"]] = pd.to_numeric(out[cols["capacity"]], errors="coerce")
+    ts      = pick(["tbin_utc","ts","ts_utc","timestamp","datetime"])
+    sid     = pick(["station_id","stationcode","stationCode","id","station"])
+    y_true  = "y_true" if "y_true" in cols else None
+    y_pred  = pick(["y_pred_int","y_pred","yhat","prediction","pred"])
+    lat     = pick(["lat","latitude"])
+    lon     = pick(["lon","lng","longitude"])
+    # incertitude (variantes usuelles)
+    ylo     = pick(["yhat_lo","y_pred_lo","y_pred_lower","pred_lo","pi_lo","lo","lower"])
+    yhi     = pick(["yhat_hi","y_pred_hi","y_pred_upper","pred_hi","pi_hi","hi","upper"])
+    sigma   = pick(["yhat_std","pred_std","sigma","std_pred"])
+    # nom station
+    name    = pick(["name","station_name","nom","StationName","stationNom"])
     # horizons
-    if cols["horizon_bins"] and cols["horizon_bins"] in out.columns:
-        out[cols["horizon_bins"]] = pd.to_numeric(out[cols["horizon_bins"]], errors="coerce")
-    if cols["horizon_min"] and cols["horizon_min"] in out.columns:
-        out[cols["horizon_min"]] = pd.to_numeric(out[cols["horizon_min"]], errors="coerce")
-    return out
+    hbins   = pick(["horizon_bins","hbin","h_bins"])
+    hmin    = pick(["horizon_min","hmin","h_min","horizonMin"])
 
-def _select_pred_series(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.Series:
-    """Return the best available prediction series (Int preferred, else float)."""
-    if cols["y_pred_int"] and cols["y_pred_int"] in df.columns:
-        return pd.to_numeric(df[cols["y_pred_int"]], errors="coerce")
-    if cols["y_pred_float"] and cols["y_pred_float"] in df.columns:
-        return pd.to_numeric(df[cols["y_pred_float"]], errors="coerce")
-    # no predictions → NaNs
-    return pd.Series([np.nan] * len(df), index=df.index, dtype="float64")
+    if not (ts and sid and y_true):
+        raise KeyError(f"[explain] Colonnes minimales manquantes (ts={ts}, station={sid}, y_true={y_true})")
 
-def _normalize_horizon_bin(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.Series:
-    """Return a Series 'hbin' of integer horizon bins."""
-    if cols["horizon_bins"] and cols["horizon_bins"] in df.columns:
-        s = pd.to_numeric(df[cols["horizon_bins"]], errors="coerce")
-        s = s.round().astype("Int64")
-        return s
-    if cols["horizon_min"] and cols["horizon_min"] in df.columns:
-        m = pd.to_numeric(df[cols["horizon_min"]], errors="coerce")
-        s = (m / BIN_MIN).round().astype("Int64")
-        return s
-    # fallback unknown
+    return dict(ts=ts, station=sid, y_true=y_true, y_pred=y_pred,
+                lat=lat, lon=lon, ylo=ylo, yhi=yhi, sigma=sigma, name=name,
+                hbins=hbins, hmin=hmin)
+
+def _normalize_types(perf: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.DataFrame:
+    df = perf.copy()
+    df[cols["ts"]] = pd.to_datetime(df[cols["ts"]], utc=True, errors="coerce")
+    df[cols["station"]] = df[cols["station"]].astype("string")
+    df[cols["y_true"]] = pd.to_numeric(df[cols["y_true"]], errors="coerce")
+    if cols["y_pred"]:
+        df[cols["y_pred"]] = pd.to_numeric(df[cols["y_pred"]], errors="coerce")
+    if cols["ylo"]:
+        df[cols["ylo"]] = pd.to_numeric(df[cols["ylo"]], errors="coerce")
+    if cols["yhi"]:
+        df[cols["yhi"]] = pd.to_numeric(df[cols["yhi"]], errors="coerce")
+    if cols["sigma"]:
+        df[cols["sigma"]] = pd.to_numeric(df[cols["sigma"]], errors="coerce")
+    if cols["hbins"]:
+        df[cols["hbins"]] = pd.to_numeric(df[cols["hbins"]], errors="coerce")
+    if cols["hmin"]:
+        df[cols["hmin"]] = pd.to_numeric(df[cols["hmin"]], errors="coerce")
+    return df
+
+def _normalize_hbin_series(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.Series:
+    if cols.get("hbins") and cols["hbins"] in df.columns:
+        s = pd.to_numeric(df[cols["hbins"]], errors="coerce")
+        return s.round().astype("Int64")
+    if cols.get("hmin") and cols["hmin"] in df.columns:
+        m = pd.to_numeric(df[cols["hmin"]], errors="coerce")
+        return (m / BIN_MIN).round().astype("Int64")
     return pd.Series([pd.NA] * len(df), index=df.index, dtype="Int64")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Metrics
-# ──────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── Utils (temps, stats) ─────────────────────────
+
+def _to_local(s_utc_like: pd.Series, tzname: str) -> pd.Series:
+    s = pd.to_datetime(s_utc_like, utc=True, errors="coerce")
+    return s.dt.tz_convert(tzname)
 
 def _metrics(y_true: pd.Series, y_hat: pd.Series) -> Dict[str, float]:
-    err = y_true.astype("float64") - y_hat.astype("float64")
-    mae = float(np.nanmean(np.abs(err))) if len(err) else float("nan")
-    rmse = float(np.sqrt(np.nanmean(np.square(err)))) if len(err) else float("nan")
-    me = float(np.nanmean(err)) if len(err) else float("nan")
-    return {"mae": mae, "rmse": rmse, "me": me}
-
-def _lift(mae_base: float, mae_model: float) -> float:
-    if mae_base is None or np.isnan(mae_base) or mae_base == 0 or mae_model is None or np.isnan(mae_model):
-        return float("nan")
-    return float((mae_base - mae_model) / mae_base)
-
-def _coverage_pct(pred: pd.Series) -> float:
-    return float((pred.notna().mean() * 100.0).round(2)) if len(pred) else float("nan")
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Computations (global/daily/segments/hist)
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _compute_global(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, window_days: int, horizon_min: Optional[int]) -> dict:
-    y_true = pd.to_numeric(df[cols["y_true"]], errors="coerce")
-    y_base = pd.to_numeric(df[cols["y_baseline"]], errors="coerce")
-    y_pred = _select_pred_series(df, cols)
-
-    m_model = _metrics(y_true, y_pred)
-    m_base = _metrics(y_true, y_base)
-    cov = _coverage_pct(y_pred)
-
-    g = {
-        "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
-        "window_days": int(window_days),
-        "horizon_min": int(horizon_min) if horizon_min is not None else None,
-        "coverage_pred_pct": cov,
-        "mae_model": m_model["mae"], "rmse_model": m_model["rmse"], "me_model": m_model["me"],
-        "mae_baseline": m_base["mae"], "rmse_baseline": m_base["rmse"], "me_baseline": m_base["me"],
-        "lift_vs_baseline": _lift(m_base["mae"], m_model["mae"]),
-        "n_rows": int(len(df)),
-        "n_stations": int(df[cols["station"]].nunique()),
-        "ts_min_utc": pd.to_datetime(df[cols["tbin"]], utc=True, errors="coerce").min().isoformat().replace("+00:00","Z") if len(df) else None,
-        "ts_max_utc": pd.to_datetime(df[cols["tbin"]], utc=True, errors="coerce").max().isoformat().replace("+00:00","Z") if len(df) else None,
+    e = (y_true - y_hat).astype(float)
+    return {
+        "mae": float(np.nanmean(np.abs(e))) if len(e) else float("nan"),
+        "rmse": float(np.sqrt(np.nanmean(e**2))) if len(e) else float("nan"),
+        "me": float(np.nanmean(e)) if len(e) else float("nan"),
     }
-    return g
 
-def _compute_daily(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, last_days: int) -> List[dict]:
-    tloc = _to_local(df[cols["tbin"]], tzname)
+def _group_apply(gb, func):
+    try:
+        return gb.apply(func, include_groups=False)
+    except TypeError:
+        return gb.apply(func)
+
+# Aides arrondis pour compacter les JSON
+def _round_float(x: float, nd: int = 6) -> float:
+    try:
+        if not np.isfinite(x): return float("nan")
+        return float(np.round(x, nd))
+    except Exception:
+        return float("nan")
+
+def _round_list(xs, nd: int = 6):
+    out = []
+    for v in xs:
+        if isinstance(v, (int, float, np.floating)):
+            out.append(_round_float(float(v), nd))
+        else:
+            out.append(v)
+    return out
+
+# QQ points — version échantillonnée (m << N)
+def _qq_points(x: np.ndarray, m: int = RESID_QQ_POINTS) -> Tuple[List[float], List[float]]:
+    """
+    Renvoie m points pour le QQ plot (quantiles empiriques + quantiles théoriques)
+    au lieu d'un point par observation (réduction massive du poids du JSON).
+    """
+    x = x[np.isfinite(x)]
+    if x.size == 0 or m <= 1:
+        return [], []
+    mu = np.mean(x)
+    sd = np.std(x)
+    if not np.isfinite(sd) or sd == 0.0:
+        sd = 1.0
+    z = (x - mu) / sd
+
+    # grille de probabilités (évite 0/1)
+    p = np.linspace(0.5 / m, 1.0 - 0.5 / m, m)
+
+    # quantiles empiriques
+    emp = np.quantile(z, p).astype(float)
+
+    # approx. des quantiles N(0,1)
+    a = 0.147
+    t = 2 * p - 1.0
+    t = np.clip(t, -0.999999, 0.999999)
+    ln = np.log(1 - t * t)
+    inner = (2 / (np.pi * a) + ln / 2.0)
+    th = np.sign(t) * np.sqrt(np.sqrt(inner**2 - (ln / a)) - inner)
+
+    return _round_list(th.tolist()), _round_list(emp.tolist())
+
+# Autorégression (ACF) avec nlags paramétrable
+def _acf(values: pd.Series, nlags: int = RESID_ACF_NLAGS) -> List[float]:
+    x = pd.Series(values).astype(float)
+    x = x - x.mean()
+    acf = np.zeros(nlags + 1)
+    denom = (x**2).sum()
+    if denom == 0 or len(x) == 0:
+        return acf.tolist()
+    for k in range(nlags + 1):
+        num = (x.iloc[:-k or None] * x.shift(k).iloc[:-k or None]).sum() if k > 0 else denom
+        acf[k] = num / denom
+    return _round_list(acf.tolist())
+
+
+# ───────────────────────── Residuals (LIGHT) ─────────────────────────
+
+def build_residuals_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], tz: str) -> Dict[str, object]:
+    df = perf.copy()
+    df["ts"] = pd.to_datetime(df[cols["ts"]], utc=True, errors="coerce")
+    df["station_id"] = df[cols["station"]].astype("string")
     y_true = pd.to_numeric(df[cols["y_true"]], errors="coerce")
-    y_base = pd.to_numeric(df[cols["y_baseline"]], errors="coerce")
-    y_pred = _select_pred_series(df, cols)
+    y_pred = pd.to_numeric(df[cols["y_pred"]], errors="coerce") if cols["y_pred"] else pd.Series(np.nan, index=df.index)
 
-    tmp = pd.DataFrame({
-        "_date": tloc.dt.date,
-        "_y": y_true,
-        "_b": y_base,
-        "_p": y_pred
-    })
-    grp = tmp.groupby("_date", dropna=False)
-    rows = []
-    for d, g in grp:
-        mm = _metrics(g["_y"], g["_p"])
-        mb = _metrics(g["_y"], g["_b"])
-        cov = _coverage_pct(g["_p"])
-        rows.append({
-            "date": str(d),
-            "mae_model": mm["mae"],
-            "mae_baseline": mb["mae"],
-            "rmse_model": mm["rmse"],
-            "rmse_baseline": mb["rmse"],
-            "coverage_pred_pct": cov,
-            "lift_vs_baseline": _lift(mb["mae"], mm["mae"]),
-            "n": int(len(g)),
-        })
-    rows = sorted(rows, key=lambda r: r["date"])
-    if last_days and last_days > 0:
-        rows = rows[-last_days:]
-    return rows
+    used = df.assign(y_true=y_true, y_pred=y_pred).dropna(subset=["y_true", "y_pred"]).copy()
+    base_doc = {"schema_version": SCHEMA_VERSION, "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z")}
+    if used.empty:
+        return {**base_doc, "hist": [], "qq": {"th": [], "emp": []}, "acf": [], "hetero": [], "episodes": []}
 
-def _compute_by_hour(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str) -> List[dict]:
-    tloc = _to_local(df[cols["tbin"]], tzname)
-    y_true = pd.to_numeric(df[cols["y_true"]], errors="coerce")
-    y_base = pd.to_numeric(df[cols["y_baseline"]], errors="coerce")
-    y_pred = _select_pred_series(df, cols)
+    # Résidus + filtrage valeurs finies
+    used["resid"] = (used["y_true"] - used["y_pred"]).astype(float)
+    used = used[np.isfinite(used["resid"])].copy()
+    if used.empty:
+        return {**base_doc, "hist": [], "qq": {"th": [], "emp": []}, "acf": [], "hetero": [], "episodes": []}
 
-    tmp = pd.DataFrame({
-        "_hour": tloc.dt.hour,
-        "_y": y_true,
-        "_b": y_base,
-        "_p": y_pred
-    })
-    grp = tmp.groupby("_hour", dropna=False)
-    rows = []
-    for h, g in grp:
-        mm = _metrics(g["_y"], g["_p"])
-        mb = _metrics(g["_y"], g["_b"])
-        cov = _coverage_pct(g["_p"])
-        rows.append({
-            "hour": int(h),
-            "mae_model": mm["mae"],
-            "mae_baseline": mb["mae"],
-            "coverage_pred_pct": cov,
-            "n": int(len(g)),
-        })
-    rows = sorted(rows, key=lambda r: r["hour"])
-    return rows
-
-def _compute_by_dow(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str) -> List[dict]:
-    tloc = _to_local(df[cols["tbin"]], tzname)
-    y_true = pd.to_numeric(df[cols["y_true"]], errors="coerce")
-    y_base = pd.to_numeric(df[cols["y_baseline"]], errors="coerce")
-    y_pred = _select_pred_series(df, cols)
-
-    tmp = pd.DataFrame({
-        "_dow": tloc.dt.dayofweek,
-        "_y": y_true,
-        "_b": y_base,
-        "_p": y_pred
-    })
-    grp = tmp.groupby("_dow", dropna=False)
-    rows = []
-    for d, g in grp:
-        mm = _metrics(g["_y"], g["_p"])
-        mb = _metrics(g["_y"], g["_b"])
-        cov = _coverage_pct(g["_p"])
-        rows.append({
-            "dow": int(d),
-            "mae_model": mm["mae"],
-            "mae_baseline": mb["mae"],
-            "coverage_pred_pct": cov,
-            "n": int(len(g)),
-        })
-    rows = sorted(rows, key=lambda r: r["dow"])
-    return rows
-
-def _compute_by_station(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> List[dict]:
-    y_true = pd.to_numeric(df[cols["y_true"]], errors="coerce")
-    y_base = pd.to_numeric(df[cols["y_baseline"]], errors="coerce")
-    y_pred = _select_pred_series(df, cols)
-
-    tmp = pd.DataFrame({
-        "_sid": df[cols["station"]].astype("string"),
-        "_y": y_true,
-        "_b": y_base,
-        "_p": y_pred
-    })
-    grp = tmp.groupby("_sid", dropna=False)
-    rows = []
-    for sid, g in grp:
-        mm = _metrics(g["_y"], g["_p"])
-        mb = _metrics(g["_y"], g["_b"])
-        cov = _coverage_pct(g["_p"])
-        rows.append({
-            "station_id": str(sid),
-            "mae_model": mm["mae"],
-            "mae_baseline": mb["mae"],
-            "coverage_pred_pct": cov,
-            "n": int(len(g)),
-            "lift_vs_baseline": _lift(mb["mae"], mm["mae"]),
-        })
-    rows = sorted(rows, key=lambda r: r["station_id"])
-    return rows
-
-def _compute_by_cluster(df: pd.DataFrame, cols: Dict[str, Optional[str]], clusters_df: Optional[pd.DataFrame]) -> Optional[List[dict]]:
-    if clusters_df is None or clusters_df.empty:
-        return None
-    m = df.copy()
-    m[cols["station"]] = m[cols["station"]].astype("string")
-    clusters_df = clusters_df.copy()
-    if "station_id" not in clusters_df.columns or "cluster" not in clusters_df.columns:
-        return None
-    clusters_df["station_id"] = clusters_df["station_id"].astype("string")
-    m = m.merge(clusters_df[["station_id", "cluster"]], left_on=cols["station"], right_on="station_id", how="left")
-    if m["cluster"].notna().sum() == 0:
-        return None
-
-    y_true = pd.to_numeric(m[cols["y_true"]], errors="coerce")
-    y_base = pd.to_numeric(m[cols["y_baseline"]], errors="coerce")
-    y_pred = _select_pred_series(m, cols)
-
-    tmp = pd.DataFrame({
-        "_cluster": m["cluster"],
-        "_y": y_true, "_b": y_base, "_p": y_pred
-    }).dropna(subset=["_cluster"])
-    grp = tmp.groupby("_cluster", dropna=False)
-    rows = []
-    for cl, g in grp:
-        mm = _metrics(g["_y"], g["_p"])
-        mb = _metrics(g["_y"], g["_b"])
-        cov = _coverage_pct(g["_p"])
-        rows.append({
-            "cluster": cl,
-            "mae_model": mm["mae"],
-            "mae_baseline": mb["mae"],
-            "coverage_pred_pct": cov,
-            "n": int(len(g)),
-            "lift_vs_baseline": _lift(mb["mae"], mm["mae"]),
-        })
-    rows = sorted(rows, key=lambda r: (str(r["cluster"])))
-    return rows
-
-def _build_lift_curve(daily_rows: List[dict]) -> dict:
-    pts = [{"date": r["date"], "lift_vs_baseline": r.get("lift_vs_baseline", None)} for r in daily_rows]
-    return {"schema_version": SCHEMA_VERSION, "points": pts}
-
-def _build_residual_hist(df: pd.DataFrame, cols: Dict[str, Optional[str]], bins: int) -> dict:
-    y_true = pd.to_numeric(df[cols["y_true"]], errors="coerce")
-    y_pred = _select_pred_series(df, cols)
-    mask = y_pred.notna() & y_true.notna()
-    if not mask.any():
-        return {"schema_version": SCHEMA_VERSION, "bins": [], "counts": [], "n": 0}
-    err = (y_true[mask] - y_pred[mask]).astype("float64").to_numpy()
-
-    # symmetric range around 0 using 99th percentile of |err| to avoid heavy tails
-    max_abs = float(np.nanpercentile(np.abs(err), 99)) if err.size else 1.0
+    # Histogramme robuste (symétrique autour de 0, 99e pct |resid|) — bins paramétrables
+    vals = used["resid"].to_numpy(dtype=float)
+    max_abs = float(np.nanpercentile(np.abs(vals), 99)) if vals.size else 1.0
     if not np.isfinite(max_abs) or max_abs == 0:
         max_abs = 1.0
-    hist_counts, bin_edges = np.histogram(err, bins=bins, range=(-max_abs, max_abs))
+    hist_counts, bin_edges = np.histogram(vals, bins=RESID_HIST_BINS, range=(-max_abs, max_abs))
+    hist = [{
+        "bin_left": _round_float(float(bin_edges[i])),
+        "bin_right": _round_float(float(bin_edges[i+1])),
+        "count": int(hist_counts[i])
+    } for i in range(len(hist_counts))]
+
+    # QQ plot — version échantillonnée (m points)
+    th, emp = _qq_points(vals, m=RESID_QQ_POINTS)
+
+    # ACF sur la moyenne temporelle des résidus — lags paramétrables
+    mean_by_ts = used.groupby("ts")["resid"].mean()
+    acf_vals = _acf(mean_by_ts, nlags=RESID_ACF_NLAGS)
+
+    # Hétéroscédasticité (quantiles de y_true) — 20 bins (légers)
+    q = pd.qcut(used["y_true"], q=20, duplicates="drop")
+    het = (_group_apply(
+        used.assign(bin=q).groupby("bin", observed=False),
+        lambda g: pd.Series({"mae": float(np.nanmean(np.abs(g["resid"]))), "n": int(len(g))})
+    ).reset_index()).rename(columns={"bin":"quantile"})
+    # Compacter l’étiquette (évite les Interval longs)
+    hetero = []
+    for i, (_, r) in enumerate(het.iterrows(), start=1):
+        hetero.append({
+            "quantile": f"q{i}",
+            "mae": _round_float(float(r["mae"])),
+            "n": int(r["n"])
+        })
+
+    # Épisodes (séquences de |resid| >= TH) — ne garder que le top-K > 0
+    TH = 4.0
+    def _episodes(g: pd.DataFrame) -> pd.Series:
+        x = (np.abs(g["resid"].values) >= TH).astype(int)
+        best = cur = 0
+        for v in x:
+            if v: cur += 1; best = max(best, cur)
+            else: cur = 0
+        return pd.Series({"max_run": int(best), "n": int(len(g))})
+
+    episodes_df = (_group_apply(used.sort_values(["station_id","ts"]).groupby("station_id"), _episodes)
+                   .reset_index().sort_values("max_run", ascending=False))
+
+    episodes_df = episodes_df.loc[episodes_df["max_run"] > 0]
+    if RESID_EPISODES_TOPK > 0:
+        episodes_df = episodes_df.head(RESID_EPISODES_TOPK)
+
+    episodes = [{"station_id": str(r["station_id"]),
+                 "max_run": int(r["max_run"]), "n": int(r["n"])}
+                for _, r in episodes_df.iterrows()]
+
     return {
-        "schema_version": SCHEMA_VERSION,
-        "bins": [float(x) for x in bin_edges.tolist()],
-        "counts": [int(c) for c in hist_counts.tolist()],
-        "n": int(len(err))
+        **base_doc,
+        "hist": hist,
+        "qq": {"th": th, "emp": emp},
+        "acf": acf_vals,
+        "hetero": hetero,
+        "episodes": episodes
     }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Clusters CSV (optional)
-# ──────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── Calibration ─────────────────────────
 
-def _read_clusters_csv(gs_uri: Optional[str]) -> Optional[pd.DataFrame]:
-    if not gs_uri or not gs_uri.startswith("gs://"):
-        return None
-    bkt, key = _split(gs_uri)
-    cli = storage.Client()
-    bl = cli.bucket(bkt).blob(key)
-    if not bl.exists():
-        print(f"[model.performance] clusters csv not found: {gs_uri}")
-        return None
-    data = bl.download_as_bytes()
+def build_calibration_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], tz: str) -> Dict[str, object]:
+    df = perf.copy()
+    df["ts"] = pd.to_datetime(df[cols["ts"]], utc=True, errors="coerce")
+    lts = _to_local(df["ts"], tz)
+    df["hour"] = lts.dt.hour
+    y = pd.to_numeric(df[cols["y_true"]], errors="coerce")
+    yp = pd.to_numeric(df[cols["y_pred"]], errors="coerce") if cols["y_pred"] else pd.Series(np.nan, index=df.index)
+
+    name_col = cols.get("name")
+    used = df.assign(y_true=y, y_pred=yp).dropna(subset=["y_pred"]).copy()
+
+    out = {"schema_version": SCHEMA_VERSION, "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z")}
+    if used.empty:
+        out.update({"fit": {"alpha": None, "beta": None, "n": 0}, "binned": [], "by_hour": [], "rel_error_levels": [], "bias_by_station": []})
+        return out
+
+    x = used["y_pred"].astype(float).values
+    yy = used["y_true"].astype(float).values
+    if np.isfinite(x).all() and np.isfinite(yy).all() and x.size > 1:
+        b, a = np.polyfit(x, yy, 1)
+        alpha, beta = float(a), float(b)
+    else:
+        alpha = beta = float("nan")
+
+    q = pd.qcut(used["y_pred"], q=20, duplicates="drop")
+    cal_bin = (_group_apply(
+        used.groupby(q, observed=False),
+        lambda g: pd.Series({"y_pred_mean": float(np.nanmean(g["y_pred"])),
+                             "y_true_mean": float(np.nanmean(g["y_true"])),
+                             "n": int(len(g))})
+    ).reset_index(names=["bin"])).rename(columns={"bin":"quantile"})
+    binned = [{"quantile": str(r["quantile"]), "y_pred_mean": float(r["y_pred_mean"]),
+               "y_true_mean": float(r["y_true_mean"]), "n": int(r["n"])} for _, r in cal_bin.iterrows()]
+
+    def _beta(g: pd.DataFrame) -> pd.Series:
+        if len(g) < 2 or g["y_pred"].isna().all(): return pd.Series({"alpha": np.nan, "beta": np.nan, "n": len(g)})
+        b, a = np.polyfit(g["y_pred"].astype(float), g["y_true"].astype(float), 1)
+        return pd.Series({"alpha": float(a), "beta": float(b), "n": int(len(g))})
+    by_hour = (_group_apply(used.groupby("hour"), _beta).reset_index())
+    by_hour_doc = [{"hour": int(r["hour"]), "alpha": (None if not np.isfinite(r["alpha"]) else float(r["alpha"])),
+                    "beta": (None if not np.isfinite(r["beta"]) else float(r["beta"])), "n": int(r["n"])} for _, r in by_hour.iterrows()]
+
+    tert = pd.qcut(used["y_true"], q=3, duplicates="drop", labels=["Bas","Moyen","Haut"])
+    rel = (_group_apply(
+        used.assign(level=tert).groupby("level", observed=False),
+        lambda g: pd.Series({"mape_like": float(np.nanmean(np.abs(g["y_true"]-g["y_pred"]) / np.maximum(1.0, g["y_true"]))), "n": int(len(g))})
+    ).reset_index())
+    rel_doc = [{"level": str(r["level"]), "mape_like": float(r["mape_like"]), "n": int(r["n"])} for _, r in rel.iterrows()]
+
+    # ——— Ajout du nom de station
+    bias_station = (
+        used.assign(resid=(used["y_true"] - used["y_pred"]))
+            .groupby(cols["station"])
+            .agg(
+                bias=("resid","mean"),
+                n=("resid","size"),
+                lat=(cols["lat"] if cols["lat"] else cols["station"], "last"),
+                lon=(cols["lon"] if cols["lon"] else cols["station"], "last"),
+                name=((name_col if name_col else cols["station"]), "last"),
+            )
+            .reset_index()
+            .rename(columns={cols["station"]: "station_id"})
+    )
+
+    def _to_float_or_none(v):
+        try:
+            f = float(v)
+            return f if np.isfinite(f) else None
+        except Exception:
+            return None
+
+    bias_doc = [{
+        "station_id": str(r["station_id"]),
+        "name": (None if pd.isna(r["name"]) else str(r["name"])),
+        "bias": (None if not np.isfinite(r["bias"]) else float(r["bias"])),
+        "lat": _to_float_or_none(r["lat"]),
+        "lon": _to_float_or_none(r["lon"]),
+        "n": int(r["n"]),
+    } for _, r in bias_station.iterrows()]
+
+    out.update({
+        "fit": {"alpha": (None if not np.isfinite(alpha) else alpha),
+                "beta":  (None if not np.isfinite(beta)  else beta),
+                "n": int(len(used))},
+        "binned": binned,
+        "by_hour": by_hour_doc,
+        "rel_error_levels": rel_doc,
+        "bias_by_station": bias_doc,
+    })
+    return out
+
+
+# ───────────────────────── Feature Importance ─────────────────────────
+# Approche “surrogate” rapide: RandomForestRegressor + permutation_importance
+# On NE réentraîne pas le modèle prod; on estime les features qui expliquent y_true.
+
+def _as_numeric_series(s: pd.Series) -> pd.Series:
+    """Retourne une série float sûre (bool→float, numeric→float, object→to_numeric)."""
+    if is_bool_dtype(s):
+        return s.astype("float64")
+    if is_numeric_dtype(s):
+        return pd.to_numeric(s, errors="coerce").astype("float64")
+    return pd.to_numeric(s, errors="coerce").astype("float64")
+
+def _select_candidate_features(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> List[str]:
+    """
+    Sélectionne des features numériques (incluant bool) en excluant:
+    - colonnes cible/pred/identifiants/temps/horizons/incertitude/lat/lon
+    - colonnes entièrement NaN
+    - colonnes avec < FI_MIN_NON_NA_PCT de valeurs observées
+    """
+    banned = {
+        c for c in [
+            cols.get("ts"),
+            cols.get("station"),
+            cols.get("y_true"),
+            cols.get("y_pred"),
+            cols.get("ylo"),
+            cols.get("yhi"),
+            cols.get("sigma"),
+            cols.get("hbins"),
+            cols.get("hmin"),
+            cols.get("lat"),
+            cols.get("lon"),
+            "ts", "station_id", "__hbin",
+        ] if c
+    }
+
+    feats: List[str] = []
+    for c in df.columns:
+        if c in banned:
+            continue
+        s = df[c]
+        # Skip datetime-like
+        if is_datetime64_any_dtype(s):
+            continue
+        # Numérique / Bool direct
+        if is_numeric_dtype(s) or is_bool_dtype(s):
+            if s.notna().sum() == 0:
+                continue
+            if s.notna().mean() < FI_MIN_NON_NA_PCT:
+                continue
+            feats.append(c)
+            continue
+        # Essai conversion object -> numeric
+        if s.dtype == "object":
+            sv = pd.to_numeric(s, errors="coerce")
+            if sv.notna().mean() >= FI_MIN_NON_NA_PCT:
+                feats.append(c)
+    return feats
+
+def _downsample_df(df: pd.DataFrame, max_rows: int, random_state: int) -> pd.DataFrame:
+    if max_rows <= 0 or len(df) <= max_rows:
+        return df
+    return df.sample(n=max_rows, random_state=random_state)
+
+def build_feature_importance_doc(perf: pd.DataFrame, cols: Dict[str, Optional[str]], hmin: int) -> Dict[str, object]:
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
+    base_doc = {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": now,
+        "horizon_min": int(hmin),
+        "method": None,
+        "rows": [],
+        "n_features": 0,
+        "n_rows": 0,
+        "notes": [],
+    }
+
+    if not FI_ENABLED:
+        return {**base_doc, "method": "disabled"}
+
+    if not _SK_OK:
+        return {**base_doc, "method": "unavailable_sklearn"}
+
+    # Préparer données
+    df = perf.copy()
+    y = pd.to_numeric(df[cols["y_true"]], errors="coerce")
+    used = df.assign(y_true=y).dropna(subset=["y_true"]).copy()
+    if used.empty:
+        return {**base_doc, "method": "no_data"}
+
+    feats = _select_candidate_features(used, cols)
+    if not feats:
+        return {**base_doc, "method": "no_features"}
+
+    # Limiter le nombre de features (top variance non-na)
+    if len(feats) > FI_MAX_FEATURES:
+        # on garde les colonnes avec le plus de non-na et de variance
+        cand = []
+        for c in feats:
+            s = _as_numeric_series(used[c])
+            cand.append((c, float(s.notna().mean()), float(np.nanvar(s))))
+        cand.sort(key=lambda t: (t[1], t[2]), reverse=True)
+        feats = [c for c, _, _ in cand[:FI_MAX_FEATURES]]
+
+    # Échantillonnage pour vitesse
+    used = used[["y_true"] + feats]
+    used = _downsample_df(used, FI_SAMPLE_ROWS, FI_RANDOM_STATE)
+
+    # Pipeline simple: imputation médiane -> RF
+    X = used[feats].copy()
+    for c in feats:
+        X[c] = _as_numeric_series(X[c])
+    yv = used["y_true"].astype(float)
+
+    pipe = Pipeline(steps=[
+        ("imp", SimpleImputer(strategy="median")),
+        ("rf", RandomForestRegressor(
+            n_estimators=120,
+            max_depth=12,
+            n_jobs=-1,
+            random_state=FI_RANDOM_STATE,
+        )),
+    ])
+
     try:
-        df = pd.read_csv(BytesIO(data), dtype={"station_id": "string"})
-        if "station_id" in df.columns and "cluster" in df.columns:
-            return df[["station_id", "cluster"]].drop_duplicates()
-        print(f"[model.performance][warn] clusters csv missing required columns: {list(df.columns)}")
-        return None
+        pipe.fit(X, yv)
     except Exception as e:
-        print(f"[model.performance][warn] failed to read clusters csv: {e}")
-        return None
+        return {**base_doc, "method": "fit_error", "notes": [str(e)]}
+
+    # Permutation importance (MAE)
+    try:
+        pi = permutation_importance(
+            pipe, X, yv,
+            n_repeats=FI_N_REPEATS,
+            random_state=FI_RANDOM_STATE,
+            scoring="neg_mean_absolute_error",  # maximize
+            n_jobs=-1,
+        )
+        # permutation_importance renvoie importances (gain de score)
+        # On convertit en delta MAE positif (importance)
+        # score = neg_MAE -> plus haut = mieux ; importance = mean(importances)
+        # Pour lisibilité, on plaque sur un "importance" >= 0
+        rows = []
+        for i, c in enumerate(feats):
+            imp_mean = float(pi.importances_mean[i])
+            imp_std  = float(pi.importances_std[i])
+            # importance en delta_MAE ≈ +(-mean) => on prend abs
+            imp = abs(imp_mean)
+            rows.append({
+                "feature": c,
+                "importance": _round_float(imp, 6),
+                "std": _round_float(abs(imp_std), 6),
+            })
+        rows.sort(key=lambda r: r["importance"], reverse=True)
+        if FI_TOPK_TO_PUBLISH > 0:
+            rows = rows[:FI_TOPK_TO_PUBLISH]
+
+        return {
+            **base_doc,
+            "method": "surrogate_rf_permutation",
+            "rows": rows,
+            "n_features": len(feats),
+            "n_rows": int(len(used)),
+            "notes": [],
+        }
+    except Exception as e:
+        return {**base_doc, "method": "permutation_error", "notes": [str(e)]}
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Publishing (LATEST ONLY)
-# ──────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── Uncertainty ─────────────────────────
+def build_uncertainty_doc(perf: pd.DataFrame, cols: Dict[str, Optional[str]]) -> Dict[str, object]:
+    """
+    1) si ylo/yhi fournis → coverage direct
+    2) sinon si sigma + y_pred → bornes paramétriques (Normal)
+    3) sinon → bandes par quantiles de résidus (par heure locale si possible, sinon global)
+    """
+    out = {"schema_version": SCHEMA_VERSION,
+           "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z")}
+    NOM = float(os.environ.get("EXPLAIN_PI_NOMINAL", "0.90"))
+
+    def _z_for_nominal(p: float) -> float:
+        lut = {0.80:1.28155, 0.85:1.43953, 0.90:1.64485, 0.95:1.95996, 0.98:2.32635, 0.99:2.57583}
+        if p in lut: return lut[p]
+        keys = sorted(lut.keys())
+        for i in range(len(keys)-1):
+            a,b = keys[i], keys[i+1]
+            if a <= p <= b:
+                za, zb = lut[a], lut[b]
+                t = (p-a)/(b-a)
+                return za + t*(zb-za)
+        return lut[0.90]
+
+    df = perf.copy()
+    y = pd.to_numeric(df[cols["y_true"]], errors="coerce")
+    yp = pd.to_numeric(df[cols["y_pred"]], errors="coerce") if cols.get("y_pred") else pd.Series(np.nan, index=df.index)
+    df = df.assign(y_true=y, y_pred=yp)
+    df["ts"] = pd.to_datetime(df[cols["ts"]], utc=True, errors="coerce")
+
+    # 1) bornes déjà présentes
+    if cols.get("ylo") and cols.get("yhi"):
+        lo = pd.to_numeric(df[cols["ylo"]], errors="coerce")
+        hi = pd.to_numeric(df[cols["yhi"]], errors="coerce")
+        used = df.assign(yhat_lo=lo, yhat_hi=hi).dropna(subset=["y_pred","yhat_lo","yhat_hi","y_true"])
+        if used.empty:
+            out.update({"method": "provided_bands", "nominal": None, "coverage": None})
+            return out
+        inside = ((used["y_true"] >= used["yhat_lo"]) & (used["y_true"] <= used["yhat_hi"])).astype(int)
+        out.update({"method": "provided_bands", "nominal": None,
+                    "coverage": {"empirical": float(inside.mean()), "n": int(len(used))}})
+        return out
+
+    # 2) sigma paramétrique
+    if cols.get("sigma") and cols.get("y_pred"):
+        sd = pd.to_numeric(perf[cols["sigma"]], errors="coerce")
+        used = df.assign(sigma=sd).dropna(subset=["y_pred","sigma","y_true"])
+        if not used.empty:
+            z = _z_for_nominal(NOM)
+            used["yhat_lo"] = used["y_pred"] - z*used["sigma"]
+            used["yhat_hi"] = used["y_pred"] + z*used["sigma"]
+            inside = ((used["y_true"] >= used["yhat_lo"]) & (used["y_true"] <= used["yhat_hi"])).astype(int)
+            out.update({"method": "parametric_sigma", "nominal": NOM,
+                        "coverage": {"empirical": float(inside.mean()), "n": int(len(used))}})
+            return out
+
+    # 3) bandes par quantiles de résidu (par heure locale si possible)
+    if cols.get("y_pred"):
+        resid = (df["y_true"] - df["y_pred"]).astype(float)
+        used = df.assign(resid=resid).dropna(subset=["y_pred","resid","y_true"])
+        if used.empty:
+            out.update({"method": "residual_quantiles", "nominal": NOM, "coverage": None})
+            return out
+
+        qlo = (1.0 - NOM) / 2.0
+        qhi = 1.0 - qlo
+
+        tz = os.environ.get("EXPLAIN_TZ", "Europe/Paris")
+        used["hour"] = used["ts"].dt.tz_convert(tz).dt.hour
+
+        try:
+            grp = used.groupby("hour")
+            qtab = grp["resid"].quantile([qlo, qhi]).unstack(level=1).rename(columns={qlo:"qlo", qhi:"qhi"})
+            used = used.join(qtab, on="hour")
+            method = "residual_quantiles/by_hour"
+        except Exception:
+            # fallback global
+            qlo_v = float(np.nanquantile(used["resid"].values, qlo))
+            qhi_v = float(np.nanquantile(used["resid"].values, qhi))
+            used["qlo"] = qlo_v
+            used["qhi"] = qhi_v
+            method = "residual_quantiles/global"
+
+        used["yhat_lo"] = used["y_pred"] + used["qlo"]
+        used["yhat_hi"] = used["y_pred"] + used["qhi"]
+        inside = ((used["y_true"] >= used["yhat_lo"]) & (used["y_true"] <= used["yhat_hi"])).astype(int)
+        out.update({"method": method, "nominal": NOM,
+                    "coverage": {"empirical": float(inside.mean()), "n": int(len(used))}})
+        return out
+
+    # 4) rien à faire (pas de y_pred)
+    out.update({"method": "none", "nominal": None, "coverage": None})
+    return out
+
+
+# ───────────────────────── Publication (LATEST ONLY) ─────────────────────────
 
 def _publish_latest(base_alias: str, horizon_min: int, payloads: Dict[str, dict]) -> None:
-    """Publish artifacts for a given horizon under latest/h{H} only."""
+    """Publie les artefacts d'un horizon sous latest/h{H}/."""
     hdir = f"h{int(horizon_min)}"
     for name, obj in payloads.items():
         _upload_json_gs(obj, f"{base_alias}/{hdir}/{name}.json")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Main
-# ──────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── Main ─────────────────────────
 
 def main() -> int:
-    EXPORTS_PREFIX = os.environ.get("GCS_EXPORTS_PREFIX")     # gs://.../velib/exports
-    MON_PREFIX     = os.environ.get("GCS_MONITORING_PREFIX")  # gs://.../velib (or .../monitoring)
+    EXPORTS_PREFIX = os.environ.get("GCS_EXPORTS_PREFIX")    # gs://.../exports
+    MON_PREFIX     = os.environ.get("GCS_MONITORING_PREFIX") # gs://.../velib (ou .../monitoring)
     if not (EXPORTS_PREFIX and EXPORTS_PREFIX.startswith("gs://")):
-        raise RuntimeError("GCS_EXPORTS_PREFIX missing or invalid")
+        raise RuntimeError("GCS_EXPORTS_PREFIX manquant ou invalide")
     if not (MON_PREFIX and MON_PREFIX.startswith("gs://")):
-        raise RuntimeError("GCS_MONITORING_PREFIX missing or invalid")
+        raise RuntimeError("GCS_MONITORING_PREFIX manquant ou invalide")
 
-    TZNAME       = os.environ.get("PERF_TZ", "Europe/Paris")
-    # Unified lookback env (same as explainability), with fallback to old name
-    WINDOW_DAYS  = int(os.environ.get("EXPLAIN_WINDOW_DAYS", os.environ.get("PERF_LAST_DAYS", "14")))
-    RESID_BINS   = int(os.environ.get("PERF_RESID_BINS", "40"))
-    HORIZONS     = [int(x.strip()) for x in os.environ.get("PERF_HORIZONS", "15").split(",") if x.strip()]
-    CLUSTERS_URI = os.environ.get("PERF_CLUSTERS_CSV", None)
+    TZNAME     = os.environ.get("EXPLAIN_TZ", "Europe/Paris")
+    # CSV d'horizons en minutes (ex: "15,60")
+    HORIZONS   = [int(x.strip()) for x in os.environ.get("EXPLAIN_HORIZONS", "15").split(",") if x.strip()]
 
     now = datetime.now(timezone.utc)
-    start, end = _compute_window(now, WINDOW_DAYS)
-    print(f"[model.performance] window UTC: {start.date()} → {end.date()} (days={WINDOW_DAYS}) | horizons={HORIZONS}")
 
-    # Read perf blobs in window
-    blobs = _list_perf_blobs(EXPORTS_PREFIX, start, end)
-    if not blobs:
-        print("[model.performance] no perf_* blobs in window — nothing to do")
-        # still publish an empty manifest so the UI has a predictable endpoint
-        mon_base = _ensure_mon_base(MON_PREFIX)
-        base_alias = f"{mon_base}/model/performance/latest"
-        manifest = {
-            "schema_version": SCHEMA_VERSION,
-            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
-            "window_days": int(WINDOW_DAYS),
-            "latest_prefix": base_alias,
-            "horizons": [],
-            "horizons_info": []
-        }
-        _upload_json_gs(manifest, f"{base_alias}/manifest.json")
-        return 0
+    # Sortie: latest/ seulement
+    mon_base = MON_PREFIX.rstrip("/")
+    if not mon_base.endswith("/monitoring"):
+        mon_base = mon_base + "/monitoring"
+    base_alias = f"{mon_base}/model/explainability/latest"
 
-    frames: List[pd.DataFrame] = []
-    for bl in blobs:
-        print(f"[read] {bl.name}")
-        try:
-            df = _read_parquet_blob_to_df(bl)
-            frames.append(df)
-        except Exception as e:
-            print(f"[warn] failed to read {bl.name}: {e}")
-
-    if not frames:
-        print("[model.performance] no readable data — nothing to do")
-        return 0
-
-    perf = pd.concat(frames, ignore_index=True)
+    # Lecture perf
+    print(f"[model.explain] reading perf from {EXPORTS_PREFIX}")
+    perf, perf_day = _read_latest_perf(EXPORTS_PREFIX)
     if perf.empty:
-        print("[model.performance] perf empty — nothing to do")
+        print("[model.explain] perf is empty — nothing to do")
         return 0
 
-    # Detect & normalize columns / types
-    cols = _detect_perf_columns(perf)
+    # Colonnes minimales + typage
+    cols = _pick_cols(perf)
     perf = _normalize_types(perf, cols)
-    # Explicit working columns
-    tbin_col = cols["tbin"]; sid_col = cols["station"]
-    y_col = cols["y_true"]; b_col = cols["y_baseline"]
-    pred_series = _select_pred_series(perf, cols)
-    hbin_series = _normalize_horizon_bin(perf, cols)
 
-    # Add normalized columns for processing
-    perf = perf.assign(
-        __tbin=perf[tbin_col],
-        __sid=perf[sid_col].astype("string"),
-        __y=pd.to_numeric(perf[y_col], errors="coerce"),
-        __b=pd.to_numeric(perf[b_col], errors="coerce"),
-        __p=pred_series,
-        __hbin=hbin_series
-    ).dropna(subset=["__tbin", "__sid"])
+    # Option: fenêtre glissante (jours)
+    if WINDOW_DAYS and WINDOW_DAYS > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=WINDOW_DAYS)
+        ts_all = pd.to_datetime(perf[cols["ts"]], utc=True, errors="coerce")
+        before = len(perf)
+        perf = perf.loc[ts_all >= cutoff].copy()
+        after = len(perf)
+        print(f"[model.explain] window_days={WINDOW_DAYS} → kept {after:,}/{before:,} rows since {cutoff.isoformat()}")
 
-    # Optional clusters
-    clusters_df = _read_clusters_csv(CLUSTERS_URI)
+    # Horizons normalisés
+    perf["__hbin"] = _normalize_hbin_series(perf, cols)
 
-    # Output base (LATEST ONLY)
-    mon_base = _ensure_mon_base(MON_PREFIX)
-    base_alias = f"{mon_base}/model/performance/latest"
+    # Bornes temporelles (après filtrage éventuel)
+    ts = pd.to_datetime(perf[cols["ts"]], utc=True, errors="coerce")
+    ts_min = ts.min(); ts_max = ts.max()
+    n_rows = int(len(perf))
+    n_stations = int(perf[cols["station"]].nunique())
 
-    # Determine available horizons in data
+    # Déterminer horizons disponibles vs demandés
     available_hbins = sorted([int(x) for x in pd.Series(perf["__hbin"].dropna().unique()).tolist() if pd.notna(x)])
     requested_hbins = sorted(list(set([max(1, int(round(h / BIN_MIN))) for h in HORIZONS])))
-    target_hbins = [hb for hb in requested_hbins if hb in available_hbins]
-    if not target_hbins:
-        print(f"[model.performance] no matching horizons in data. available_hbins={available_hbins}, requested={requested_hbins}")
-        # publish a minimal manifest for latest
-        manifest = {
-            "schema_version": SCHEMA_VERSION,
-            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
-            "window_days": int(WINDOW_DAYS),
-            "latest_prefix": base_alias,
-            "horizons": [],
-            "horizons_info": []
-        }
-        _upload_json_gs(manifest, f"{base_alias}/manifest.json")
-        return 0
+    target_hbins = [hb for hb in requested_hbins if hb in available_hbins] if available_hbins else ([] if requested_hbins else [])
 
     manifests_items = []
-    for hb in target_hbins:
-        hmin = hb * BIN_MIN
-        sub = perf.loc[perf["__hbin"] == hb].copy()
-        if sub.empty:
-            print(f"[model.performance] skip h={hmin} (empty after filter)")
-            continue
 
-        # Compute artifacts
-        kpis = _compute_global(sub, cols={
-            "tbin": "__tbin", "station": "__sid",
-            "y_true": "__y", "y_baseline": "__b",
-            "y_pred_int": "__p", "y_pred_float": "__p",
-            "capacity": cols.get("capacity")
-        }, tzname=TZNAME, window_days=WINDOW_DAYS, horizon_min=hmin)
+    # Si on a des horizons détectables dans les données
+    do_segment_by_h = bool(len(available_hbins) > 0)
 
-        daily_rows = _compute_daily(sub, cols={
-            "tbin": "__tbin", "station": "__sid",
-            "y_true": "__y", "y_baseline": "__b",
-            "y_pred_int": "__p", "y_pred_float": "__p",
-        }, tzname=TZNAME, last_days=WINDOW_DAYS)
+    if do_segment_by_h and target_hbins:
+        print(f"[model.explain] horizons disponibles={available_hbins} | demandés={requested_hbins} | ciblés={target_hbins}")
+        for hb in target_hbins:
+            hmin = int(hb * BIN_MIN)
+            sub = perf.loc[perf["__hbin"] == hb].copy()
+            if sub.empty:
+                print(f"[model.explain] skip h={hmin} (empty after filter)")
+                continue
 
-        by_hour_rows = _compute_by_hour(sub, cols={
-            "tbin": "__tbin", "station": "__sid",
-            "y_true": "__y", "y_baseline": "__b",
-            "y_pred_int": "__p", "y_pred_float": "__p",
-        }, tzname=TZNAME)
+            # Aperçu par horizon
+            ts_h = pd.to_datetime(sub[cols["ts"]], utc=True, errors="coerce")
+            overview = {
+                "schema_version": SCHEMA_VERSION,
+                "generated_at": now.isoformat().replace("+00:00","Z"),
+                "tz": TZNAME,
+                "anchor_day_perf": perf_day,
+                "perf_rows": int(len(sub)),
+                "perf_stations": int(sub[cols["station"]].nunique()),
+                "ts_min_perf": (ts_h.min().isoformat().replace("+00:00","Z") if pd.notna(ts_h.min()) else None),
+                "ts_max_perf": (ts_h.max().isoformat().replace("+00:00","Z") if pd.notna(ts_h.max()) else None),
+                "has_y_pred": bool(cols["y_pred"]),
+                "has_uncertainty": bool(cols["ylo"] and cols["yhi"] or cols.get("sigma")),
+                "horizon_min": hmin,
+                "window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None),
+            }
 
-        by_dow_rows = _compute_by_dow(sub, cols={
-            "tbin": "__tbin", "station": "__sid",
-            "y_true": "__y", "y_baseline": "__b",
-            "y_pred_int": "__p", "y_pred_float": "__p",
-        }, tzname=TZNAME)
+            # Calculs
+            residuals_doc   = build_residuals_docs(sub, cols, TZNAME) | {"horizon_min": hmin, "window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None)}
+            calibration_doc = build_calibration_docs(sub, cols, TZNAME) | {"horizon_min": hmin, "window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None)}
+            uncertainty_doc = build_uncertainty_doc(sub, cols)         | {"horizon_min": hmin, "window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None)}
+            fi_doc          = build_feature_importance_doc(sub, cols, hmin)
 
-        by_station_rows = _compute_by_station(sub, cols={
-            "tbin": "__tbin", "station": "__sid",
-            "y_true": "__y", "y_baseline": "__b",
-            "y_pred_int": "__p", "y_pred_float": "__p",
-        })
+            payloads: Dict[str, dict] = {
+                "overview": overview,
+                "residuals": residuals_doc,
+                "calibration": calibration_doc,
+                "uncertainty": uncertainty_doc,
+                "feature_importance": fi_doc,
+            }
 
-        by_cluster_rows = _compute_by_cluster(sub, cols={
-            "tbin": "__tbin", "station": "__sid",
-            "y_true": "__y", "y_baseline": "__b",
-            "y_pred_int": "__p", "y_pred_float": "__p",
-        }, clusters_df=clusters_df)
+            _publish_latest(base_alias, horizon_min=hmin, payloads=payloads)
 
-        lift_curve = _build_lift_curve(daily_rows)
-        hist_res = _build_residual_hist(sub, cols={
-            "tbin": "__tbin", "station": "__sid",
-            "y_true": "__y", "y_baseline": "__b",
-            "y_pred_int": "__p", "y_pred_float": "__p",
-        }, bins=RESID_BINS)
+            manifests_items.append({
+                "horizon_min": int(hmin),
+                "prefix_latest": f"{base_alias}/h{int(hmin)}",
+                "artifacts": list(payloads.keys())
+            })
 
-        # Assemble payloads per horizon
-        payloads: Dict[str, dict] = {
-            "kpis": kpis,
-            "daily_metrics": {"schema_version": SCHEMA_VERSION, "horizon_min": int(hmin), "rows": daily_rows},
-            "by_hour": {"schema_version": SCHEMA_VERSION, "horizon_min": int(hmin), "rows": by_hour_rows},
-            "by_dow": {"schema_version": SCHEMA_VERSION, "horizon_min": int(hmin), "rows": by_dow_rows},
-            "by_station": {"schema_version": SCHEMA_VERSION, "horizon_min": int(hmin), "rows": by_station_rows},
-            "lift_curve": dict(lift_curve, **{"horizon_min": int(hmin)}),
-            "hist_residuals": dict(hist_res, **{"horizon_min": int(hmin)}),
-        }
-        if by_cluster_rows is not None:
-            payloads["by_cluster"] = {"schema_version": SCHEMA_VERSION, "horizon_min": int(hmin), "rows": by_cluster_rows}
+    else:
+        # Fallback "global" (aucun champ d'horizon exploitable)
+        fallback_targets = (HORIZONS if HORIZONS else [15])
+        print(f"[model.explain] aucun horizon exploitable — publication fallback sous h{{H}} pour H={fallback_targets}")
 
-        # Publish LATEST ONLY under h{H}
-        _publish_latest(base_alias, horizon_min=hmin, payloads=payloads)
-
-        manifests_items.append({
-            "horizon_min": int(hmin),
-            "prefix_latest": f"{base_alias}/h{int(hmin)}",
-            "artifacts": list(payloads.keys())
-        })
-
-    if not manifests_items:
-        print("[model.performance] nothing published — all horizons empty")
-        # manifest minimal
-        manifest = {
+        # Aperçu global
+        overview_global = {
             "schema_version": SCHEMA_VERSION,
-            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
-            "window_days": int(WINDOW_DAYS),
-            "latest_prefix": base_alias,
-            "horizons": [],
-            "horizons_info": []
+            "generated_at": now.isoformat().replace("+00:00","Z"),
+            "tz": TZNAME,
+            "anchor_day_perf": perf_day,
+            "perf_rows": n_rows,
+            "perf_stations": n_stations,
+            "ts_min_perf": (ts_min.isoformat().replace("+00:00","Z") if pd.notna(ts_min) else None),
+            "ts_max_perf": (ts_max.isoformat().replace("+00:00","Z") if pd.notna(ts_max) else None),
+            "has_y_pred": bool(cols["y_pred"]),
+            "has_uncertainty": bool(cols["ylo"] and cols["yhi"] or cols.get("sigma")),
+            "window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None),
         }
-        _upload_json_gs(manifest, f"{base_alias}/manifest.json")
-        return 0
 
-    # Top-level manifest (LATEST ONLY)
+        residuals_doc   = build_residuals_docs(perf, cols, TZNAME) | {"window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None)}
+        calibration_doc = build_calibration_docs(perf, cols, TZNAME) | {"window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None)}
+        uncertainty_doc = build_uncertainty_doc(perf, cols)         | {"window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None)}
+        # pour FI fallback, choisir un H arbitraire (on duplique sous chaque H demandé)
+        fi_any          = build_feature_importance_doc(perf, cols, hmin=fallback_targets[0] if fallback_targets else 15)
+
+        for H in fallback_targets:
+            hmin = int(H)
+            payloads: Dict[str, dict] = {
+                "overview": overview_global | {"horizon_min": hmin},
+                "residuals": residuals_doc  | {"horizon_min": hmin},
+                "calibration": calibration_doc | {"horizon_min": hmin},
+                "uncertainty": uncertainty_doc | {"horizon_min": hmin},
+                "feature_importance": fi_any if fi_any.get("horizon_min") == hmin else (fi_any | {"horizon_min": hmin}),
+            }
+            _publish_latest(base_alias, horizon_min=hmin, payloads=payloads)
+            manifests_items.append({
+                "horizon_min": int(hmin),
+                "prefix_latest": f"{base_alias}/h{int(hmin)}",
+                "artifacts": list(payloads.keys())
+            })
+
+    # Manifest top-level (LATEST ONLY)
     manifest = {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
-        "window_days": int(WINDOW_DAYS),
+        "generated_at": now.isoformat().replace("+00:00","Z"),
         "latest_prefix": base_alias,
+        "window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None),
         "horizons": [int(it["horizon_min"]) for it in manifests_items],
         "horizons_info": manifests_items
     }
     _upload_json_gs(manifest, f"{base_alias}/manifest.json")
 
-    print("[model.performance] done (latest only)")
+    print("[model.explain] done (latest only)")
     return 0
 
 

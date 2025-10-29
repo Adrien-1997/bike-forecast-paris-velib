@@ -16,6 +16,7 @@
 #   <MONITORING_BASE>/model/performance/latest/h{H}/by_cluster.json  (optional)
 #   <MONITORING_BASE>/model/performance/latest/h{H}/lift_curve.json
 #   <MONITORING_BASE>/model/performance/latest/h{H}/hist_residuals.json
+#   <MONITORING_BASE>/model/performance/latest/h{H}/station_timeseries.json   # NEW
 #
 # ENV (required):
 #   GCS_EXPORTS_PREFIX     = gs://<bucket>/velib/exports
@@ -28,13 +29,14 @@
 #   PERF_RESID_BINS      = 40
 #   PERF_TOP_STATIONS    = 10
 #   PERF_CLUSTERS_CSV    = gs://.../station_clusters.csv  (mapping station_id,cluster)
+#   PERF_TS_MIN_POINTS   = 24            # NEW: min points required within 24h window
 #
 # Run:
 #   python -m service.jobs.build_model_performance
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
-import os, re, json, sys
+import os, re, json, sys, random
 from io import BytesIO
 from typing import List, Dict, Tuple, Optional
 from datetime import datetime, timezone, timedelta
@@ -434,6 +436,72 @@ def _build_residual_hist(df: pd.DataFrame, cols: Dict[str, Optional[str]], bins:
         "n": int(len(err))
     }
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Station 24h timeseries (random eligible)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _build_station_timeseries_24h(df: pd.DataFrame, min_points: int, tzname: str, horizon_min: int) -> dict:
+    """
+    df: must contain normalized columns __tbin, __sid, __y, __b, __p (as in 'sub').
+    Pick a random station among those having >= min_points within the last 24h window.
+    """
+    if df.empty:
+        return {
+            "schema_version": SCHEMA_VERSION, "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "h": int(horizon_min), "station_id": None, "name": None, "tz": tzname,
+            "ts": [], "y_true": [], "y_pred": [], "y_base": []
+        }
+
+    ts_max = pd.to_datetime(df["__tbin"], utc=True, errors="coerce").max()
+    if pd.isna(ts_max):
+        ts_max = datetime.now(timezone.utc)
+    end_utc = ts_max.replace(minute=0, second=0, microsecond=0)  # align to hour
+    start_utc = end_utc - timedelta(hours=24)
+
+    w = (pd.to_datetime(df["__tbin"], utc=True, errors="coerce") >= start_utc) & \
+        (pd.to_datetime(df["__tbin"], utc=True, errors="coerce") < end_utc)
+    sub = df.loc[w, ["__tbin", "__sid", "__y", "__p", "__b"]].dropna(subset=["__tbin", "__sid"])
+    if sub.empty:
+        return {
+            "schema_version": SCHEMA_VERSION, "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "h": int(horizon_min), "station_id": None, "name": None, "tz": tzname,
+            "ts": [], "y_true": [], "y_pred": [], "y_base": []
+        }
+
+    counts = sub.groupby("__sid")["__tbin"].count().reset_index(name="n")
+    eligible = counts[counts["n"] >= int(min_points)]
+    if eligible.empty:
+        # take the one with max points
+        sid = counts.sort_values("n", ascending=False).iloc[0]["__sid"]
+    else:
+        sid = random.choice(eligible["__sid"].tolist())
+
+    s = sub[sub["__sid"] == sid].sort_values("__tbin")
+
+    # ── conversions robustes ────────────────────────────────────────────────
+    ts = pd.to_datetime(s["__tbin"], utc=True, errors="coerce")
+
+    def _series_to_num_list(x: pd.Series) -> list[Optional[float]]:
+        arr = pd.to_numeric(x, errors="coerce").to_numpy(dtype="float64")
+        return [float(v) if np.isfinite(v) else None for v in arr]
+
+    y_true = _series_to_num_list(s["__y"])
+    y_pred = _series_to_num_list(s["__p"])
+    y_base = _series_to_num_list(s["__b"])
+
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "h": int(horizon_min),
+        "station_id": str(sid),
+        "name": None,           # optionnel si tu veux enrichir plus tard
+        "tz": tzname,
+        "ts": [t.strftime("%Y-%m-%dT%H:%M:%SZ") for t in ts if pd.notna(t)],
+        "y_true": y_true,
+        "y_pred": y_pred,
+        "y_base": y_base,
+    }
+    return payload
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Clusters CSV (optional)
@@ -488,6 +556,7 @@ def main() -> int:
     RESID_BINS     = int(os.environ.get("PERF_RESID_BINS", "40"))
     HORIZONS       = [int(x.strip()) for x in os.environ.get("PERF_HORIZONS", "15").split(",") if x.strip()]
     CLUSTERS_URI   = os.environ.get("PERF_CLUSTERS_CSV", None)
+    TS_MIN_POINTS  = int(os.environ.get("PERF_TS_MIN_POINTS", "24"))  # NEW
 
     now = datetime.now(timezone.utc)
     start, end = _compute_window(now, LAST_DAYS)
@@ -549,7 +618,7 @@ def main() -> int:
     target_hbins = [hb for hb in requested_hbins if hb in available_hbins]
     if not target_hbins:
         print(f"[model.performance] no matching horizons in data. available_hbins={available_hbins}, requested={requested_hbins}")
-        # on publie tout de même un manifest minimal pour latest
+        # publish minimal manifest for latest
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
@@ -614,6 +683,9 @@ def main() -> int:
             "y_pred_int": "__p", "y_pred_float": "__p",
         }, bins=RESID_BINS)
 
+        # NEW — 24h timeseries for a random eligible station
+        station_ts = _build_station_timeseries_24h(sub, min_points=int(TS_MIN_POINTS), tzname=TZNAME, horizon_min=hmin)
+
         # Assemble payloads per horizon
         payloads: Dict[str, dict] = {
             "kpis": kpis,
@@ -623,6 +695,7 @@ def main() -> int:
             "by_station": {"schema_version": SCHEMA_VERSION, "horizon_min": int(hmin), "rows": by_station_rows},
             "lift_curve": dict(lift_curve, **{"horizon_min": int(hmin)}),
             "hist_residuals": dict(hist_res, **{"horizon_min": int(hmin)}),
+            "station_timeseries": station_ts,  # NEW
         }
         if by_cluster_rows is not None:
             payloads["by_cluster"] = {"schema_version": SCHEMA_VERSION, "horizon_min": int(hmin), "rows": by_cluster_rows}

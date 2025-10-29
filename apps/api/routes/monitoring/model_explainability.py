@@ -75,19 +75,20 @@ def _proxy_json(gs_uri: str, request: Request, ttl: int = 120) -> JSONResponse:
     return resp
 
 # ── Endpoints EXPLAINABILITY (latest only, multi-horizon) ─────────────────────
-DocNameExplain = Literal["overview", "residuals", "calibration", "uncertainty"]
+DocNameExplain = Literal["overview", "residuals", "calibration", "uncertainty", "feature_importance"]
 
 _TTL_BY_DOC = {
     "overview": 60,
-    "residuals": 600,     # hist/qq/acf peu volatiles
-    "calibration": 300,   # binning/heure
-    "uncertainty": 300,   # couverture
+    "residuals": 600,            # hist/qq/acf peu volatiles
+    "calibration": 300,          # binning/heure
+    "uncertainty": 300,          # couverture
+    "feature_importance": 600,   # SHAP / gain XGB relativement stable
 }
 
 @router.get("/available")
 def model_explain_available():
     return {
-        "docs": ["overview", "residuals", "calibration", "uncertainty"],
+        "docs": ["overview", "residuals", "calibration", "uncertainty", "feature_importance"],
         "horizons": "utiliser ?h=<minutes> (ex: 15, 60)",
         "time_travel": "latest uniquement (param ?at=… ignoré si non valide)",
         "examples": [
@@ -95,6 +96,7 @@ def model_explain_available():
             "/monitoring/model/explainability/residuals?h=60",
             "/monitoring/model/explainability/calibration?h=15",
             "/monitoring/model/explainability/uncertainty?h=60",
+            "/monitoring/model/explainability/feature_importance?h=15",
             "/monitoring/model/explainability/manifest?h=15",
         ],
     }
@@ -110,7 +112,7 @@ def model_explain_manifest(
     mon = _mon_prefix_or_500()
     folder = _sanitize_at(at)  # 'latest'
     base = f"{mon}/monitoring" if not mon.endswith("/monitoring") else mon
-    # Pas de manifest dédié côté job explain → on renvoie overview.json comme "manifest", mais par horizon
+    # Pas de manifest dédié côté job explain → on renvoie overview.json comme "manifest", par horizon
     gs_uri = f"{base}/model/explainability/{folder}/h{int(h)}/overview.json"
     return _proxy_json(gs_uri, request, ttl=60)
 

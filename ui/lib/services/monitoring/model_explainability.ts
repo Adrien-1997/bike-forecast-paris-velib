@@ -15,6 +15,9 @@ export type Overview = {
   ts_max_perf: string | null;
   has_y_pred: boolean;
   has_uncertainty: boolean;
+  // Nouveau (backend >= 1.3)
+  horizon_min?: number;
+  window_days?: number | null;
 };
 
 export type ResidHistBin = { bin_left: number; bin_right: number; count: number };
@@ -27,6 +30,9 @@ export type ResidualsDoc = {
   acf: number[];
   hetero: Array<{ quantile: string; mae: number; n: number }>;
   episodes: Array<{ station_id: string; max_run: number; n: number }>;
+  // Nouveau
+  horizon_min?: number;
+  window_days?: number | null;
 };
 
 export type CalibrationDoc = {
@@ -44,6 +50,9 @@ export type CalibrationDoc = {
     lon: number | null;
     n: number;
   }>;
+  // Nouveau
+  horizon_min?: number;
+  window_days?: number | null;
 };
 
 export type UncertaintyDoc = {
@@ -51,7 +60,28 @@ export type UncertaintyDoc = {
   generated_at: string;
   coverage: { empirical: number; n: number } | null;
   method?: string;
-  nominal?: number;
+  nominal?: number | null;
+  // Nouveau
+  horizon_min?: number;
+  window_days?: number | null;
+};
+
+/* ── Feature Importance (surrogate RF + permutation) ───── */
+export type FeatureImportanceRow = {
+  feature: string;
+  importance: number; // delta MAE (valeurs positives)
+  std: number;        // écart-type sur permutations
+};
+
+export type FeatureImportanceDoc = {
+  schema_version: string;
+  generated_at: string;
+  horizon_min: number;
+  method: string;      // "surrogate_rf_permutation" | "disabled" | "unavailable_sklearn" | ...
+  rows: FeatureImportanceRow[];
+  n_features: number;
+  n_rows: number;
+  notes: string[];
 };
 
 /* ── Helpers ───────────────────────────────────────────── */
@@ -69,3 +99,6 @@ export const getExplainCalibration = (h: number) =>
 
 export const getExplainUncertainty = (h: number) =>
   fetchJsonWithEtag<UncertaintyDoc>(path(`/uncertainty?h=${encodeURIComponent(h)}`));
+
+export const getExplainFeatureImportance = (h: number) =>
+  fetchJsonWithEtag<FeatureImportanceDoc>(path(`/feature_importance?h=${encodeURIComponent(h)}`));

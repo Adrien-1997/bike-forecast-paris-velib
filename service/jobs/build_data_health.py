@@ -1,4 +1,49 @@
+# =============================================================================
 # service/jobs/build_data_health.py
+# =============================================================================
+# Vélib’ Forecast — Data Health (v1.5 “files-aware”)
+#
+# Objectifs
+# ---------
+# - Lire les exports “events_YYYY-MM-DD.parquet” réellement présents sur GCS
+# - Calculer des KPIs de santé de données sur une fenêtre glissante :
+#     • Fraîcheur (p50/p95)
+#     • Complétude globale (files-aware) et presence-aware (actives)
+#     • Couverture par heure (presence-aware par station)
+#     • Latence (p50/p95)
+#     • Doublons, séquences plates, bins manquants
+# - Produire des JSON normalisés pour l’UI monitoring :
+#     • kpis.json, station_health.json, coverage_by_hour.json, alerts.json
+#     • anomalies/{flat,duplicates,missing}.json + manifest.json
+#
+# Principes clés (v1.5)
+# ---------------------
+# ✅ Files-aware: l’“attendu global” par station = (#jours de FICHIERS présents) * (bins/jour)
+#    → cohérence entre KPI global, table stations et “missing bins”
+# ✅ Presence-aware heure: attendu_i(h, station) = (#jours où la station est VUE) * (bins/heure)
+# ✅ Merge des noms défensif et typage station_id en string
+#
+# Env attendues
+# -------------
+# - GCS_EXPORTS_PREFIX        gs://.../velib/exports
+# - GCS_MONITORING_PREFIX     gs://.../velib        (alias /monitoring sera ajouté si absent)
+# - DATA_HEALTH_CURRENT_DAYS  (def=7)   fenêtre d’analyse
+# - DATA_HEALTH_BIN_MIN       (def=5)   taille de pas (min)
+# - DATA_HEALTH_FRESH_SLO_MIN (def=5)   SLO fraicheur p95 (min)
+# - DATA_HEALTH_DUP_ALERT_PCT (def=1.0) seuil alerte duplication (% des lignes)
+# - DATA_HEALTH_FLAT_STEPS    (def=6)   longueur min d’une séquence plate (en steps)
+# - DATA_HEALTH_COMPL_ALERT_PCT (def=98.0) seuil OK couverture globale (%)
+# - DATA_HEALTH_LAT_MAX_MIN   (def=72h) cap latence pour robustesse
+# - DATA_HEALTH_ACTIVE_MIN_FRAC (optionnel) filtre actives presence-aware (0..1)
+# - DATA_HEALTH_WEIGHTED        (0/1) pondérer moyenne presence-aware par expected_i
+# - DATA_HEALTH_ANOM_TOPK       (def=200) 0=illimité
+# - DATA_HEALTH_ANOM_SAMPLE     (def=0)   0..1, sous-échantillonnage
+# - DATA_HEALTH_ROUND           (def=3)   arrondi flottants JSON
+# - DATA_HEALTH_ANOM_INCLUDE_NAMES (def=true)
+#
+# Auth GCP: utiliser ADC (gcloud auth application-default login) ou var GOOGLE_APPLICATION_CREDENTIALS
+# =============================================================================
+
 from __future__ import annotations
 import os, re, json, sys, math
 from io import BytesIO
@@ -18,7 +63,7 @@ try:
 except Exception as e:
     raise RuntimeError("google-cloud-storage requis") from e
 
-SCHEMA_VERSION = "1.1"  # 1.0 + allègement/sharding anomalies + en-tête params
+SCHEMA_VERSION = "1.5"  # files-aware global expected + robust name merge + hourly PA
 
 # ─────────────────────────── Helpers GCS ───────────────────────────
 
@@ -33,7 +78,7 @@ def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datet
     bucket = client.bucket(bkt)
     blobs = list(client.list_blobs(bucket, prefix=key_prefix.strip("/") + "/"))
     pat = re.compile(r"events_(\d{4}-\d{2}-\d{2})\.parquet$")
-    out = []
+    out: List["storage.Blob"] = []
     for bl in blobs:
         m = pat.search(bl.name)
         if not m:
@@ -52,7 +97,6 @@ def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
     return tbl.to_pandas()
 
 def _upload_json_gs(obj: object, gs_uri: str) -> None:
-    # JSON safe: remplace NaN/±Inf par null, cast numpy types
     def san(o):
         if isinstance(o, dict):  return {k: san(v) for k, v in o.items()}
         if isinstance(o, list):  return [san(v) for v in o]
@@ -71,7 +115,7 @@ def _upload_json_gs(obj: object, gs_uri: str) -> None:
     storage.Client().bucket(bkt).blob(key).upload_from_string(data, content_type="application/json")
     print(f"[data.health] wrote → {gs_uri} ({len(data):,} bytes)")
 
-# ───────────────────── Allègement helpers ─────────────────────
+# ─────────────────────────── Small helpers ───────────────────────────
 
 def _r(x: float, nd: int) -> Optional[float]:
     try:
@@ -79,17 +123,6 @@ def _r(x: float, nd: int) -> Optional[float]:
         return float(np.round(float(x), nd))
     except Exception:
         return None
-
-def _rl(vals, nd: int):
-    out = []
-    for v in vals:
-        if isinstance(v, (int, float, np.floating)):
-            out.append(_r(float(v), nd))
-        else:
-            out.append(v)
-    return out
-
-# ───────────────────── Détection colonnes & utils ─────────────────────
 
 def _detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
     lower = {c.lower(): c for c in df.columns}
@@ -104,18 +137,21 @@ def _detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
     docks = any_of("docks_avail","nb_docks_bin","num_docks_available","free_docks","places_disponibles")
     cap   = any_of("capacity","num_docks_total","dock_count","cap")
     ing   = any_of("ingested_at","ingest_ts","ingest_time","received_at","etl_ts","load_ts","created_at")
-    lat   = any_of("lat","latitude"); lon = any_of("lon","lng","longitude"); name = any_of("name","station_name","nom")
+    name  = any_of("name","station_name","nom")
     if not ts or not sid or not bikes:
         raise KeyError(f"[data.health] Colonnes minimales absentes (ts={ts}, station={sid}, bikes={bikes})")
-    return dict(ts=ts, station=sid, bikes=bikes, docks=docks, capacity=cap, ingested_at=ing, lat=lat, lon=lon, name=name)
+    return dict(ts=ts, station=sid, bikes=bikes, docks=docks, capacity=cap, ingested_at=ing, name=name)
 
 def _now_floor_utc(bin_min: int) -> pd.Timestamp:
     return pd.Timestamp.now(tz="UTC").floor(f"{int(bin_min)}min").tz_convert(None)
 
-def _expected_bins(tmin: pd.Timestamp, tmax: pd.Timestamp, bin_min: int) -> int:
-    return max(1, math.ceil((tmax - tmin).total_seconds() / 60.0 / bin_min) + 1)
+def _bins_between(a: pd.Timestamp, b: pd.Timestamp, bin_min: int) -> int:
+    """Nb de bins (strict à gauche, inclusif à droite) alignés sur bin_min pour l’intervalle (a, b]."""
+    if pd.isna(a) or pd.isna(b) or b <= a:
+        return 1
+    return int(math.floor((b - a).total_seconds() / 60.0 / max(1, int(bin_min))) + 1)
 
-# ─────────────────────────── Calculs KPI ───────────────────────────
+# ─────────────────────────── KPI builders ───────────────────────────
 
 def kpi_freshness(df: pd.DataFrame, sid_col: str, ts_col: str, slo_min: int, bin_min: int) -> dict:
     now = _now_floor_utc(bin_min)
@@ -129,72 +165,159 @@ def kpi_freshness(df: pd.DataFrame, sid_col: str, ts_col: str, slo_min: int, bin
         "freshness_age_p50_min": _r(p50, 2),
         "freshness_age_p95_min": _r(p95, 2),
         "freshness_slo_min": float(slo_min),
-        "bin_min": int(bin_min),
         "freshness_p95_ok": (p95 <= slo_min) if np.isfinite(p95) else None,
     }
 
-def kpi_completeness(df: pd.DataFrame, sid_col: str, ts_col: str, current_days: int, bin_min: int, tz: Optional[str]) -> Tuple[dict, pd.DataFrame, pd.DataFrame]:
+def kpi_completeness_files_aware(
+    df: pd.DataFrame,
+    sid_col: str,
+    ts_col: str,
+    current_days: int,
+    bin_min: int,
+    tz: Optional[str],
+    *,
+    active_min_frac: Optional[float] = None,
+    weighted: bool = False,
+) -> Tuple[dict, pd.DataFrame, pd.DataFrame, pd.DataFrame, int, int]:
+    """
+    Renvoie:
+      - kpis dict (coverage_global_pct, coverage_active_pct, ...)
+      - by_station_pa : presence-aware par station (obs, expected_i, coverage_pct)
+      - cov_by_hour   : moyenne par heure locale (presence-aware par station)
+      - by_station_global_filesaware : station_id, obs, expected_global, coverage_pct_global
+      - days_present_all, bins_per_day (pour audit/JSON)
+    Règles:
+      • Global (files-aware): expected_global = (#jours de FICHIERS présents) * (bins/jour)
+      • Presence-aware heure: expected_i(h, station) = (#jours où la station apparaît) * (bins/heure)
+    """
     if current_days <= 0 or df.empty:
-        return {"coverage_global_pct": np.nan}, pd.DataFrame(), pd.DataFrame()
+        empty = pd.DataFrame()
+        return {"coverage_global_pct": np.nan, "coverage_active_pct": np.nan}, empty, empty, empty, 0, (60 // max(1,int(bin_min))) * 24
+
+    # Fenêtre courante (basée sur tmax) — on ne filtre *pas* par jours “théoriques”,
+    # puisque la liste des blobs lus est déjà files-aware.
     tmax = df[ts_col].max()
     tmin = tmax - pd.Timedelta(days=current_days)
     win = df[(df[ts_col] > tmin) & (df[ts_col] <= tmax)].copy()
     if win.empty:
-        return {"coverage_global_pct": np.nan}, pd.DataFrame(), pd.DataFrame()
+        empty = pd.DataFrame()
+        return {"coverage_global_pct": np.nan, "coverage_active_pct": np.nan}, empty, empty, empty, 0, (60 // max(1,int(bin_min))) * 24
 
-    exp = _expected_bins(tmin, tmax, bin_min)
+    # Jours de FICHIERS réellement présents dans la fenêtre (global, pas par station)
+    days_present_all = int(win[ts_col].dt.normalize().nunique())
+    bins_per_hour = (60 // max(1, int(bin_min)))
+    bins_per_day = bins_per_hour * 24
+    expected_global = int(days_present_all * bins_per_day)
 
-    # par station (>=1 point dans la fenêtre)
-    per_station = (win.groupby(sid_col)[ts_col].nunique().clip(upper=exp)
-                     .rename_axis(sid_col).reset_index(name="obs"))
-    per_station["expected"] = int(exp)
-    per_station["coverage_pct"] = per_station["obs"] / per_station["expected"] * 100.0
-    coverage_global = float(per_station["coverage_pct"].mean()) if len(per_station) else np.nan
+    # Observé par station (bins uniques sur la fenêtre)
+    per_station_obs = win.groupby(sid_col)[ts_col].nunique().rename_axis(sid_col).reset_index(name="obs")
+    per_station_obs["obs"] = per_station_obs["obs"].clip(upper=expected_global)
 
-    # coverage by hour (pour la page)
+    # Table “global files-aware”
+    by_station_global = (
+        per_station_obs.assign(expected_global=expected_global)
+        .assign(coverage_pct_global=lambda d: d["obs"] / d["expected_global"] * 100.0)
+        .rename(columns={sid_col: "station_id"})
+        [["station_id", "obs", "expected_global", "coverage_pct_global"]]
+        .copy()
+    )
+    coverage_global = float(by_station_global["coverage_pct_global"].mean()) if len(by_station_global) else np.nan
+
+    # Presence-aware par station (expected_i station-spécifique)
+    pres = win.groupby(sid_col)[ts_col].agg(first="min", last="max").reset_index()
+    pres["expected_i"] = pres.apply(
+        lambda r: _bins_between(max(tmin, r["first"]), min(tmax, r["last"]), bin_min),
+        axis=1,
+    )
+    pa = per_station_obs.merge(pres[[sid_col, "expected_i"]], on=sid_col, how="left")
+    pa["expected_i"] = pa["expected_i"].fillna(1).astype(int)
+    pa["obs_clamped"] = pa.apply(lambda r: min(int(r["obs"]), int(r["expected_i"])), axis=1)
+    pa["coverage_pct_i"] = pa["obs_clamped"] / pa["expected_i"] * 100.0
+
+    # Filtre actives (optionnel)
+    if active_min_frac is not None and 0 < active_min_frac <= 1:
+        pa_active = pa[pa["obs_clamped"] >= (active_min_frac * pa["expected_i"])].copy()
+    else:
+        pa_active = pa.copy()
+
+    # Moyenne presence-aware (pondérée ou non)
+    if len(pa_active):
+        if weighted:
+            w = pa_active["expected_i"].astype(float).replace(0, np.nan)
+            coverage_active = float(np.nansum(pa_active["coverage_pct_i"] * w) / np.nansum(w))
+        else:
+            coverage_active = float(pa_active["coverage_pct_i"].mean())
+    else:
+        coverage_active = np.nan
+
+    # Coverage par heure (presence-aware PAR STATION, attendu_i = jours vus pour la station * bins/heure)
     if tz:
         win["_hour"] = pd.to_datetime(win[ts_col]).dt.tz_localize("UTC").dt.tz_convert(tz).dt.hour
+        win["_day"]  = pd.to_datetime(win[ts_col]).dt.tz_localize("UTC").dt.tz_convert(tz).dt.normalize()
     else:
         win["_hour"] = pd.to_datetime(win[ts_col]).dt.hour
-    per_hour = (win.groupby(["_hour", sid_col])[ts_col].nunique().rename("obs").reset_index())
-    exp_hour = current_days * (60 // max(1, int(bin_min)))
-    per_hour["coverage_pct"] = per_hour["obs"].clip(upper=exp_hour) / float(exp_hour) * 100.0
-    cov_by_hour = (per_hour.groupby("_hour")["coverage_pct"].mean()
-                           .rename_axis("hour").reset_index())
+        win["_day"]  = pd.to_datetime(win[ts_col]).dt.normalize()
 
-    return {"coverage_global_pct": _r(coverage_global, 2)}, per_station, cov_by_hour
+    days_by_station = win.groupby(sid_col)["_day"].nunique().rename("days_present_i").reset_index()
+
+    per_hour_obs = (
+        win.groupby(["_hour", sid_col])[ts_col]
+           .nunique()
+           .rename("obs")
+           .reset_index()
+    )
+
+    per_hour = per_hour_obs.merge(days_by_station, on=sid_col, how="left")
+    per_hour["expected_i"] = (per_hour["days_present_i"].fillna(0).astype(int) * int(bins_per_hour)).astype(int)
+    per_hour["coverage_pct_i"] = np.where(
+        per_hour["expected_i"] > 0,
+        per_hour["obs"].clip(upper=per_hour["expected_i"]) / per_hour["expected_i"] * 100.0,
+        np.nan,
+    )
+
+    cov_by_hour = (
+        per_hour.groupby("_hour")["coverage_pct_i"]
+                .mean()
+                .rename("coverage_pct")
+                .rename_axis("hour")
+                .reset_index()
+    )
+
+    # Table PA (pour UI secondaire)
+    by_station_pa = pa.rename(columns={
+        sid_col: "station_id",
+        "expected_i": "expected",
+        "coverage_pct_i": "coverage_pct"
+    })[["station_id","obs","expected","coverage_pct"]].sort_values("coverage_pct", ascending=True).reset_index(drop=True)
+
+    k = {
+        "coverage_global_pct": _r(coverage_global, 2),
+        "coverage_active_pct": _r(coverage_active, 2),
+        "active_frac": (_r(active_min_frac, 3) if isinstance(active_min_frac, (int, float)) else None),
+        "weighted": bool(weighted),
+    }
+    return k, by_station_pa, cov_by_hour, by_station_global, days_present_all, bins_per_day
 
 def kpi_latency(df: pd.DataFrame, ts_col: str, ing_col: Optional[str], cap_min: Optional[int] = None) -> Tuple[dict, Optional[pd.DataFrame]]:
-    """
-    Calcule la latence = (ingested_at - ts) en minutes.
-    - Ignore valeurs négatives et > cap_min si fourni (outliers).
-    - Si ing_col absent → retourne des métriques NaN.
-    """
-    if not ing_col or ing_col not in df.columns or df[ing_col].isna().all():
+    if not ing_col or not (ing_col in df.columns) or df[ing_col].isna().all():
         return {"latency_p50_min": np.nan, "latency_p95_min": np.nan}, None
-
     lat = df.dropna(subset=[ts_col, ing_col]).copy()
     lat["latency_min"] = (lat[ing_col] - lat[ts_col]).dt.total_seconds() / 60.0
-
-    # filtres de robustesse
-    lat = lat[np.isfinite(lat["latency_min"])]
-    lat = lat[lat["latency_min"] >= 0]
+    lat = lat[np.isfinite(lat["latency_min"]) & (lat["latency_min"] >= 0)]
     if cap_min is not None and np.isfinite(cap_min):
         lat = lat[lat["latency_min"] <= float(cap_min)]
-
     if lat.empty:
         return {"latency_p50_min": np.nan, "latency_p95_min": np.nan}, None
-
     p50 = float(np.nanpercentile(lat["latency_min"], 50))
     p95 = float(np.nanpercentile(lat["latency_min"], 95))
-    return {"latency_p50_min": _r(p50, 2), "latency_p95_min": _r(p95, 2)}, lat[["station_id","latency_min"]] if "station_id" in lat.columns else lat[["latency_min"]]
+    cols_out = ["station_id","latency_min"] if "station_id" in lat.columns else ["latency_min"]
+    return {"latency_p50_min": _r(p50, 2), "latency_p95_min": _r(p95, 2)}, lat[cols_out]
 
 def duplication_stats(df: pd.DataFrame, sid_col: str, ts_col: str) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=[sid_col, "dups"])
     dups = df.duplicated(subset=[ts_col, sid_col]).groupby(df[sid_col]).sum().astype(int)
     out = dups.rename_axis(sid_col).reset_index(name="dups").sort_values("dups", ascending=False)
-    # assure types stables
     out[sid_col] = out[sid_col].astype("string")
     out["dups"] = pd.to_numeric(out["dups"], errors="coerce").fillna(0).astype(int)
     return out
@@ -217,7 +340,6 @@ def flat_sequences(df: pd.DataFrame, sid_col: str, ts_col: str, bikes_col: str, 
     out = agg[agg["steps"] >= min_steps][[sid_col,"steps","start","end"]]
     out["duration_min"] = (out["steps"] * bin_min).astype(int)
     out = out.sort_values("steps", ascending=False).reset_index(drop=True)
-    # types
     out[sid_col] = out[sid_col].astype("string")
     return out
 
@@ -231,7 +353,6 @@ def main() -> int:
     if not (MON_PREFIX and MON_PREFIX.startswith("gs://")):
         raise RuntimeError("GCS_MONITORING_PREFIX manquant ou invalide")
 
-    # Paramètres (fenêtre & seuils)
     TZNAME            = os.environ.get("DATA_HEALTH_TZ", "Europe/Paris")
     CURRENT_DAYS      = int(os.environ.get("DATA_HEALTH_CURRENT_DAYS", "7"))
     BIN_MIN           = int(os.environ.get("DATA_HEALTH_BIN_MIN", "5"))
@@ -239,15 +360,18 @@ def main() -> int:
     DUP_ALERT_PCT     = float(os.environ.get("DATA_HEALTH_DUP_ALERT_PCT", "1.0"))
     FLAT_STEPS        = int(os.environ.get("DATA_HEALTH_FLAT_STEPS", "6"))
     COMPL_ALERT_PCT   = float(os.environ.get("DATA_HEALTH_COMPL_ALERT_PCT", "98.0"))
-    LAT_MAX_MIN       = int(os.environ.get("DATA_HEALTH_LAT_MAX_MIN", str(72*60)))  # ignore latence > 72h
+    LAT_MAX_MIN       = int(os.environ.get("DATA_HEALTH_LAT_MAX_MIN", str(72*60)))
 
-    # Allègement anomalies
-    ANOM_TOPK          = int(os.environ.get("DATA_HEALTH_ANOM_TOPK", "200"))   # 0 = no topK
-    ANOM_SAMPLE        = float(os.environ.get("DATA_HEALTH_ANOM_SAMPLE", "0")) # 0..1 fraction (après tri)
+    _active_frac_env = os.environ.get("DATA_HEALTH_ACTIVE_MIN_FRAC", "").strip()
+    ACTIVE_MIN_FRAC  = float(_active_frac_env) if _active_frac_env not in ("", None) else None
+    WEIGHTED         = os.environ.get("DATA_HEALTH_WEIGHTED", "0").lower() in ("1","true","yes","y")
+
+    ANOM_TOPK          = int(os.environ.get("DATA_HEALTH_ANOM_TOPK", "200"))
+    ANOM_SAMPLE        = float(os.environ.get("DATA_HEALTH_ANOM_SAMPLE", "0"))
     ROUND_ND           = int(os.environ.get("DATA_HEALTH_ROUND", "3"))
     ANOM_INCLUDE_NAMES = os.environ.get("DATA_HEALTH_ANOM_INCLUDE_NAMES", "true").lower() in ("1","true","yes","y")
 
-    # Fenêtre de lecture: au moins CURRENT_DAYS (on ajoute 1 jour de marge)
+    # Fenêtre de lecture : >= CURRENT_DAYS (marge min 7 jours)
     now = datetime.now(timezone.utc)
     start = (now - timedelta(days=max(CURRENT_DAYS, 7))).replace(hour=0, minute=0, second=0, microsecond=0)
     print(f"[data.health] window UTC: {start.date()} → {now.date()} (days≥{CURRENT_DAYS})")
@@ -270,10 +394,10 @@ def main() -> int:
         return 0
 
     df = pd.concat(frames, ignore_index=True)
+
+    # Détection colonnes + typage
     cols = _detect_columns(df)
     ts_col, sid_col, bikes_col = cols["ts"], cols["station"], cols["bikes"]
-
-    # Typage
     df[ts_col] = pd.to_datetime(df[ts_col], utc=True, errors="coerce").dt.tz_convert(None)
     df[sid_col] = df[sid_col].astype("string")
     df[bikes_col] = pd.to_numeric(df[bikes_col], errors="coerce")
@@ -282,84 +406,88 @@ def main() -> int:
     if cols["capacity"] and cols["capacity"] in df.columns:
         df[cols["capacity"]] = pd.to_numeric(df[cols["capacity"]], errors="coerce")
     if cols["ingested_at"] and cols["ingested_at"] in df.columns:
-        df[cols["ingested_at"]] = pd.to_datetime(df[cols["ingested_at"]], utc=True, errors="coerce").dt.tz_convert(None)
+        df[cols["ingested_at"]] = pd.to_datetime(df[ing_col := cols["ingested_at"]], utc=True, errors="coerce").dt.tz_convert(None)
 
     df = df.dropna(subset=[ts_col, sid_col]).copy()
 
-    # KPIs
+    # KPIs principaux — files-aware & presence-aware
     kfresh = kpi_freshness(df, sid_col, ts_col, FRESH_SLO_MIN, BIN_MIN)
-    kcov, by_station_cov, cov_by_hour = kpi_completeness(df, sid_col, ts_col, CURRENT_DAYS, BIN_MIN, TZNAME)
-
-    # Latence (plus robuste)
+    kcov, by_station_pa, cov_by_hour, by_station_global, DAYS_PRESENT_ALL, BINS_PER_DAY = kpi_completeness_files_aware(
+        df, sid_col, ts_col, CURRENT_DAYS, BIN_MIN, TZNAME,
+        active_min_frac=ACTIVE_MIN_FRAC, weighted=WEIGHTED
+    )
     klat, lat_df = kpi_latency(df, ts_col, cols["ingested_at"], cap_min=LAT_MAX_MIN)
 
-    # Duplications / flats
+    # Duplications / séquences plates
     flats = flat_sequences(df, sid_col, ts_col, bikes_col, FLAT_STEPS, CURRENT_DAYS, BIN_MIN)
     dups = duplication_stats(df, sid_col, ts_col)
     dup_total = int(dups["dups"].sum()) if len(dups) else 0
     dups_pct = (dup_total / max(1, len(df))) * 100.0 if len(df) else 0.0
 
-    # Missing bins (fenêtre récente)
-    tmax = df[ts_col].max(); tmin = tmax - pd.Timedelta(days=CURRENT_DAYS)
-    exp = _expected_bins(tmin, tmax, BIN_MIN)
-    got = (df[(df[ts_col] > tmin) & (df[ts_col] <= tmax)]
-             .groupby(sid_col)[ts_col].nunique()
-             .rename_axis(sid_col).reset_index(name="obs"))
-    miss = got.copy()
-    miss["missing"] = (exp - miss["obs"]).clip(lower=0)
-    miss["expected"] = int(exp)
+    # Missing bins (global files-aware): expected_global - obs
+    miss = by_station_global.rename(columns={"expected_global": "expected"})[["station_id","obs","expected"]].copy()
+    miss["missing"] = (miss["expected"] - miss["obs"]).clip(lower=0).astype(int)
     missing_stations = int((miss["missing"] > 0).sum()) if len(miss) else 0
 
-    # ── 1) table station_health (corrigée + noms éventuels)
+    # Table station_health (cohérente avec KPI global & missing)
     station_health_rows = (
-        by_station_cov.merge(miss[[sid_col, "missing"]], on=sid_col, how="left")
-        .rename(columns={sid_col: "station_id"})
+        by_station_global
+        .rename(columns={
+            "expected_global": "expected",
+            "coverage_pct_global": "coverage_pct"
+        })
+        [["station_id","obs","expected","coverage_pct"]]
+        .merge(miss[["station_id","missing"]], on="station_id", how="left")
         .sort_values("coverage_pct", ascending=True)
         .reset_index(drop=True)
     )
-    station_health_rows["expected"] = int(exp)
-    station_health_rows["missing"] = station_health_rows["missing"].where(
-        station_health_rows["missing"].notna(),
-        other=(station_health_rows["expected"] - station_health_rows["obs"]).clip(lower=0)
-    )
+    station_health_rows["expected"] = station_health_rows["expected"].astype(int)
+    station_health_rows["missing"] = station_health_rows["missing"].fillna(
+        (station_health_rows["expected"] - station_health_rows["obs"]).clip(lower=0)
+    ).astype(int)
 
-    # Map 'station_id' → 'name' (dernier nom non nul connu)
+    # Ajout des noms (défensif)
     if ANOM_INCLUDE_NAMES and cols.get("name") and cols["name"] in df.columns:
         name_col = cols["name"]
         name_map_df = (
             df.dropna(subset=[name_col])
-            .sort_values([sid_col, ts_col])
-            .groupby(sid_col, as_index=False)
-            .tail(1)[[sid_col, name_col]]
-            .drop_duplicates(subset=[sid_col])
-            .rename(columns={sid_col: "station_id", name_col: "name"})
+              .sort_values([sid_col, ts_col])
+              .groupby(sid_col, as_index=False)
+              .tail(1)[[sid_col, name_col]]
+              .drop_duplicates(subset=[sid_col])
+              .rename(columns={sid_col: "station_id", name_col: "name"})
         )
         if not name_map_df.empty:
-            station_health_rows = station_health_rows.merge(name_map_df, on="station_id", how="left")
+            name_map_df["station_id"] = name_map_df["station_id"].astype("string")
+            station_health_rows = station_health_rows.merge(
+                name_map_df[["station_id", "name"]],
+                on="station_id",
+                how="left",
+            )
     else:
         station_health_rows["name"] = None
 
+    # Colonnes finales & ordre
     cols_out = ["station_id", "name", "obs", "expected", "coverage_pct", "missing"]
     for c in cols_out:
         if c not in station_health_rows.columns:
             station_health_rows[c] = None
     station_health_rows = station_health_rows[cols_out]
 
-    # ── 2) coverage by hour
-    cov_by_hour_rows = cov_by_hour.rename(columns={"coverage_pct": "coverage_pct"}).to_dict(orient="records")
+    # Coverage by hour → records
+    cov_by_hour_rows = cov_by_hour.to_dict(orient="records")
 
-    # ── 3) Anomalies (shardées & allégées)
-    # nom lookup (optionnel)
+    # ── Anomalies shardées ────────────────────────────────────────────────
     name_lookup: Optional[Dict[str, str]] = None
     if ANOM_INCLUDE_NAMES and cols.get("name") and cols["name"] in df.columns:
         name_col = cols["name"]
         name_lookup_df = (
             df.dropna(subset=[name_col])
-            .sort_values([sid_col, ts_col])
-            .groupby(sid_col, as_index=False)
-            .tail(1)[[sid_col, name_col]]
-            .drop_duplicates(subset=[sid_col])
-            .rename(columns={sid_col: "station_id", name_col: "name"})
+              .sort_values([sid_col, ts_col])
+              .groupby(sid_col, as_index=False)
+              .tail(1)[[sid_col, name_col]]
+              .drop_duplicates(subset=[sid_col])
+              .rename(columns={sid_col: "station_id", name_col: "name"})
         )
         name_lookup = dict(zip(name_lookup_df["station_id"].astype(str), name_lookup_df["name"].astype(str)))
 
@@ -367,15 +495,15 @@ def main() -> int:
         if not name_lookup: return None
         return name_lookup.get(str(sid))
 
-    # 3.a flats
+    # 3.a flat sequences
     an_flat: List[Dict[str, object]] = []
     if len(flats):
         for _, r in flats.iterrows():
-            sid = str(r[sid_col])
+            sidv = str(r["station_id"] if "station_id" in r else r[sid_col])
             an_flat.append({
                 "type": "flat_sequence",
-                "station_id": sid,
-                **({"name": _nm(sid)} if ANOM_INCLUDE_NAMES else {}),
+                "station_id": sidv,
+                **({"name": _nm(sidv)} if name_lookup else {}),
                 "start": r["start"].isoformat(),
                 "end": r["end"].isoformat(),
                 "steps": int(r["steps"]),
@@ -385,51 +513,44 @@ def main() -> int:
     # 3.b duplicates
     an_dups: List[Dict[str, object]] = []
     if len(dups):
-        # garde-fou: tri uniquement si colonne disponible
-        dups_sorted = dups.copy()
-        if "dups" in dups_sorted.columns:
-            dups_sorted = dups_sorted.sort_values("dups", ascending=False)
+        dups_sorted = dups.sort_values("dups", ascending=False)
         for _, r in dups_sorted.iterrows():
-            sid = str(r[sid_col])
-            val = int(r["dups"]) if "dups" in r and pd.notna(r["dups"]) else 0
-            if val <= 0:  # on ne stocke que s'il y a duplication
-                continue
+            val = int(r["dups"]) if pd.notna(r["dups"]) else 0
+            if val <= 0: continue
+            sidv = str(r[sid_col])
             an_dups.append({
                 "type": "duplicates",
-                "station_id": sid,
-                **({"name": _nm(sid)} if ANOM_INCLUDE_NAMES else {}),
+                "station_id": sidv,
+                **({"name": _nm(sidv)} if name_lookup else {}),
                 "dups": val,
             })
 
-    # 3.c missing (top stations les plus manquantes)
+    # 3.c missing (top manquants)
     an_missing: List[Dict[str, object]] = []
     if len(miss):
         worst_miss = miss.sort_values("missing", ascending=False)
         for _, r in worst_miss.iterrows():
-            if r["missing"] > 0:
-                sid = str(r[sid_col])
+            if int(r["missing"]) > 0:
+                sidv = str(r["station_id"])
                 an_missing.append({
                     "type": "missing_bins",
-                    "station_id": sid,
-                    **({"name": _nm(sid)} if ANOM_INCLUDE_NAMES else {}),
+                    "station_id": sidv,
+                    **({"name": _nm(sidv)} if name_lookup else {}),
                     "missing": int(r["missing"]),
                     "expected": int(r["expected"]),
                 })
 
-    # Post-traitement anomalies: topK → sample → round
+    # Post-traitement anomalies
     def _postproc(an_rows: List[Dict[str, object]], sort_key: Optional[str] = None) -> List[Dict[str, object]]:
         rows = list(an_rows)
-        if not rows:
-            return rows
+        if not rows: return rows
         if sort_key and all((sort_key in r) for r in rows):
             rows = sorted(rows, key=lambda r: r.get(sort_key, 0), reverse=True)
         if ANOM_TOPK > 0 and len(rows) > ANOM_TOPK:
             rows = rows[:ANOM_TOPK]
         if 0.0 < ANOM_SAMPLE < 1.0 and len(rows) > 0:
-            # échantillonnage simple et déterministe: on prend un pas régulier
             step = max(1, int(round(1.0 / ANOM_SAMPLE)))
             rows = rows[::step]
-        # arrondis légers
         for r in rows:
             for k, v in list(r.items()):
                 if isinstance(v, (float, np.floating)):
@@ -448,19 +569,25 @@ def main() -> int:
         "flat_sequences_found": bool(len(an_flat)),
     }
 
-    # KPI document principal (avec en-tête params lisible)
+    # En-tête paramètres (audit)
     params_header = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
         "tz": TZNAME or "UTC",
         "bin_min": int(BIN_MIN),
         "current_days": int(CURRENT_DAYS),
+        "files_aware_days": int(DAYS_PRESENT_ALL),
+        "bins_per_day": int(BINS_PER_DAY),
         "thresholds": {
             "fresh_slo_min": FRESH_SLO_MIN,
             "compl_alert_pct": COMPL_ALERT_PCT,
             "dup_alert_pct": DUP_ALERT_PCT,
             "flat_steps": FLAT_STEPS,
             "lat_max_min": LAT_MAX_MIN,
+        },
+        "completeness_options": {
+            "active_min_frac": ACTIVE_MIN_FRAC,
+            "weighted": WEIGHTED,
         },
         "anomaly_params": {
             "topk": ANOM_TOPK,
@@ -487,19 +614,17 @@ def main() -> int:
         "alerts": alerts,
     }
 
-    # ─────────────────────── Uploads ONLY → latest ───────────────────────
+    # ─────────────────────────── Uploads → latest ───────────────────────────
     mon_base = os.environ.get("GCS_MONITORING_PREFIX", "").rstrip("/")
     if not mon_base.endswith("/monitoring"):
         mon_base = mon_base + "/monitoring"
     base_alias = f"{mon_base}/data/health/latest"
 
-    # core KPI + tables
     _upload_json_gs(data_health,                               f"{base_alias}/kpis.json")
     _upload_json_gs(station_health_rows.to_dict("records"),    f"{base_alias}/station_health.json")
     _upload_json_gs(cov_by_hour_rows,                          f"{base_alias}/coverage_by_hour.json")
     _upload_json_gs(alerts,                                    f"{base_alias}/alerts.json")
 
-    # anomalies shardées + manifeste
     anomalies_prefix = f"{base_alias}/anomalies"
     manifest = {
         "schema_version": SCHEMA_VERSION,
