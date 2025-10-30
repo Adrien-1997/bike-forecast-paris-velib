@@ -15,7 +15,7 @@ export type Overview = {
   ts_max_perf: string | null;
   has_y_pred: boolean;
   has_uncertainty: boolean;
-  // Nouveau (backend >= 1.3)
+  // Backend ≥ 1.3
   horizon_min?: number;
   window_days?: number | null;
 };
@@ -30,7 +30,7 @@ export type ResidualsDoc = {
   acf: number[];
   hetero: Array<{ quantile: string; mae: number; n: number }>;
   episodes: Array<{ station_id: string; max_run: number; n: number }>;
-  // Nouveau
+  // Backend ≥ 1.3
   horizon_min?: number;
   window_days?: number | null;
 };
@@ -50,7 +50,7 @@ export type CalibrationDoc = {
     lon: number | null;
     n: number;
   }>;
-  // Nouveau
+  // Backend ≥ 1.3
   horizon_min?: number;
   window_days?: number | null;
 };
@@ -61,23 +61,43 @@ export type UncertaintyDoc = {
   coverage: { empirical: number; n: number } | null;
   method?: string;
   nominal?: number | null;
-  // Nouveau
+  // Backend ≥ 1.3
   horizon_min?: number;
   window_days?: number | null;
 };
 
-/* ── Feature Importance (surrogate RF + permutation) ───── */
+/* ── Feature Importance ───────────────────────────────────
+   Compat:
+   - Ancien (surrogate RF): rows = { feature, importance, std }
+   - Nouveau (XGBoost native): rows = { feature, gain, weight, cover }
+*/
 export type FeatureImportanceRow = {
   feature: string;
-  importance: number; // delta MAE (valeurs positives)
-  std: number;        // écart-type sur permutations
+
+  // Surrogate RF (ancien)
+  importance?: number; // delta MAE (positif)
+  std?: number;        // écart-type permutations
+
+  // XGBoost natif (nouveau)
+  gain?: number;       // moyenne du gain
+  weight?: number;     // nombre de splits
+  cover?: number;      // couverture moyenne
 };
 
 export type FeatureImportanceDoc = {
   schema_version: string;
   generated_at: string;
   horizon_min: number;
-  method: string;      // "surrogate_rf_permutation" | "disabled" | "unavailable_sklearn" | ...
+  // Étend l’union pour couvrir les deux modes
+  method:
+    | "xgboost_native"
+    | "surrogate_rf_permutation"
+    | "disabled"
+    | "unavailable_sklearn"
+    | "fit_error"
+    | "permutation_error"
+    | "no_features"
+    | "no_data";
   rows: FeatureImportanceRow[];
   n_features: number;
   n_rows: number;

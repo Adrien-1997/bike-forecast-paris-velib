@@ -1,8 +1,7 @@
 // ui/pages/monitoring/network/dynamics.tsx
 import Head from "next/head";
-import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/router";
 import type * as Plotly from "plotly.js";
 import MonitoringNav from "@/components/monitoring/MonitoringNav";
@@ -26,11 +25,7 @@ import {
 /* ───────────────── Plotly (client only) ───────────────── */
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ssr: false,
-  loading: () => (
-    <div style={{ height: 320, display: "grid", placeItems: "center", opacity: 0.7 }}>
-      Loading chart…
-    </div>
-  ),
+  loading: () => <div className="empty">Loading chart…</div>,
 });
 
 /* ───────────────── Utils ───────────────── */
@@ -45,7 +40,7 @@ function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-/* ───────────────── Episodes Map (patterns alignés) ───────────────── */
+/* ───────────────── Episodes Map ───────────────── */
 type EpisodePoint = {
   station_id: string;
   name: string;
@@ -99,7 +94,6 @@ const EpisodesMap = dynamic(async () => {
 
     return (
       <div style={{ position: "relative", width: "100%", height: "100%" }}>
-        {/* IMPORTANT: classe leaflet-container → fond & height 100% via monitoring.css */}
         <MapContainer center={[latMed, lonMed]} zoom={12} className="leaflet-container">
           <TileLayer
             url={tileUrl}
@@ -128,12 +122,8 @@ const EpisodesMap = dynamic(async () => {
                     <div>Début : {new Date(r.start_utc).toLocaleString("fr-FR")}</div>
                     <div>Fin : {new Date(r.end_utc).toLocaleString("fr-FR")}</div>
                     <div>Durée : {fmtInt(r.duration_min)}</div>
-                    <a
-                      href={`/monitoring/network/dynamics?station_id=${encodeURIComponent(r.station_id)}`}
-                      style={{ textDecoration: "underline" }}
-                    >
-                      Voir épisodes →
-                    </a>
+                    {/* lien retiré volontairement */}
+                    <div className="small" style={{ opacity: 0.7 }}>Voir épisodes (lien désactivé)</div>
                   </div>
                 </Tooltip>
               </CircleMarker>
@@ -141,7 +131,7 @@ const EpisodesMap = dynamic(async () => {
           })}
         </MapContainer>
 
-        {/* Légende (patterns unifiés) */}
+        {/* Légende */}
         <div className="cluster-legend">
           <div className="cluster-legend__title">Épisodes</div>
           <div className="cluster-legend__row">
@@ -186,7 +176,6 @@ export default function NetworkDynamicsPage() {
     (async () => {
       try {
         setLoading(true);
-
         const [rHeat, rHourly, rEpisodes, rTension] = await Promise.allSettled([
           getDynamicsHeatmapsProfiles(),
           getDynamicsHourlyPenSat(),
@@ -201,18 +190,12 @@ export default function NetworkDynamicsPage() {
         setTension(ok(rTension));
 
         const results = [rHeat, rHourly, rEpisodes, rTension];
-        const failures = results.filter(
-          (r): r is PromiseRejectedResult => r.status === "rejected"
+        const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+        setError(
+          failures.length
+            ? failures.map((f) => String((f.reason && (f.reason.message ?? f.reason)) || "request failed")).join(" | ")
+            : null
         );
-        if (failures.length > 0) {
-          const msg =
-            failures
-              .map((f) => String((f.reason && (f.reason.message ?? f.reason)) || "request failed"))
-              .join(" | ") || "API error";
-          setError(msg);
-        } else {
-          setError(null);
-        }
 
         fetchStationsIndex()
           .then((idx) => { if (alive) setStationsIdx(idx); })
@@ -229,7 +212,7 @@ export default function NetworkDynamicsPage() {
   const generatedAt =
     heat?.generated_at ?? hourly?.generated_at ?? episodes?.generated_at ?? tension?.generated_at;
 
-  // ── KPIs pour KpiBar
+  // KPIs
   const stationsCount = useMemo(() => {
     const n = tension?.rows?.length;
     return Number.isFinite(Number(n)) ? Number(n) : NaN;
@@ -261,20 +244,15 @@ export default function NetworkDynamicsPage() {
   }, [hourly]);
 
   const windowDays =
-    episodes?.last_days ??
-    tension?.last_days ??
-    (heat as any)?.last_days ??
-    (heat as any)?.window_days ??
-    undefined;
+    episodes?.last_days ?? tension?.last_days ?? (heat as any)?.last_days ?? (heat as any)?.window_days ?? undefined;
 
   const schemaVersion =
-    episodes?.schema_version ??
-    tension?.schema_version ??
-    (hourly as any)?.schema_version ??
-    (heat as any)?.schema_version ??
-    undefined;
+    episodes?.schema_version ?? tension?.schema_version ?? (hourly as any)?.schema_version ?? (heat as any)?.schema_version ?? undefined;
 
-  /* ───────────────── Heatmaps 7×24 — empilées ───────────────── */
+  /* ───────────────── Heatmaps 7×24 — compacts ───────────────── */
+  const compactPlotCardStyle = { padding: "8px 8px 6px 8px" } as const;
+  const compactH3Style = { margin: "0 0 6px 0", fontSize: 16, lineHeight: 1.25 } as const;
+
   const heatmap = (title: string, matrix: (number | null)[][], isPct01 = false): JSX.Element => {
     const z =
       matrix?.map((row) =>
@@ -283,8 +261,8 @@ export default function NetworkDynamicsPage() {
     const y = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
     const x = [...Array(24)].map((_, i) => `${String(i).padStart(2, "0")}:00`);
     return (
-      <div className="plot-card">
-        <h3>{title}</h3>
+      <div className="plot-card" style={compactPlotCardStyle}>
+        <h3 style={compactH3Style}>{title}</h3>
         <Plot
           data={
             ([{
@@ -294,7 +272,7 @@ export default function NetworkDynamicsPage() {
           }
           layout={chartLayout({
             height: 300,
-            margin: { l: 60, r: 12, t: 30, b: 40 },
+            margin: { l: 56, r: 8, t: 4, b: 36 },
             xaxis: { title: { text: "Heure (locale)" } },
             yaxis: { title: { text: "Jour" } },
           })}
@@ -422,7 +400,7 @@ export default function NetworkDynamicsPage() {
 
         <LoadingBar status={barStatus} />
 
-        {/* ───────────────── KPIs ───────────────── */}
+        {/* KPIs */}
         <section className="mt-4">
           <h2>Network summary</h2>
           <KpiBar
@@ -439,7 +417,7 @@ export default function NetworkDynamicsPage() {
           </div>
         </section>
 
-        {/* ───────────────── Heatmaps ───────────────── */}
+        {/* Heatmaps */}
         <section className="mt-6">
           <h2>Heatmaps 7×24</h2>
           {heat ? (
@@ -449,14 +427,14 @@ export default function NetworkDynamicsPage() {
                 Lecture : occupation moyenne par pas de 1 h, sur 7 jours (lignes) × 24 h (colonnes).
               </div>
 
-              <div className="mt-4">
+              <div className="mt-3">
                 {heatmap("Pénurie (%)", heat.heatmap?.penury_rate ?? [], true)}
               </div>
               <div className="figure-note small">
                 Part horaire des stations en pénurie (≥ 0 % – 100 %).
               </div>
 
-              <div className="mt-4">
+              <div className="mt-3">
                 {heatmap("Saturation (%)", heat.heatmap?.saturation_rate ?? [], true)}
               </div>
               <div className="figure-note small">
@@ -464,13 +442,13 @@ export default function NetworkDynamicsPage() {
               </div>
             </>
           ) : (
-            <div className="card plot-card">
+            <div className="plot-card" style={{ padding: "8px 8px 6px 8px" }}>
               <div className="empty">—</div>
             </div>
           )}
         </section>
 
-        {/* ───────────────── Profils par jour ───────────────── */}
+        {/* Profils par jour */}
         <section className="mt-6">
           <h2>Profils d’occupation par jour</h2>
           <div className="filters" style={{ marginBottom: 8 }}>
@@ -485,7 +463,7 @@ export default function NetworkDynamicsPage() {
                 <button
                   key={d}
                   onClick={() => setDowSel(val)}
-                  className={`btn ${active ? "btn--primary" : ""}`}
+                  className={`btn ${active ? "btn--primary" : "btn--ghost"}`}
                 >
                   {lbl}
                 </button>
@@ -493,7 +471,7 @@ export default function NetworkDynamicsPage() {
             })}
           </div>
 
-          <div className="card plot-card">
+          <div className="plot-card" style={{ padding: "8px 8px 6px 8px" }}>
             {selectedProfile.length ? (
               <Plot
                 data={
@@ -508,7 +486,8 @@ export default function NetworkDynamicsPage() {
                   }] as unknown) as Plotly.Data[]
                 }
                 layout={chartLayout({
-                  height: 340,
+                  height: 330,
+                  margin: { l: 56, r: 8, t: 4, b: 36 },
                   xaxis: { title: { text: "Heure (locale — jour sélectionné)" } },
                   yaxis: { title: { text: "%" }, range: [0, profileYMax], ticksuffix: "%" },
                 })}
@@ -524,16 +503,17 @@ export default function NetworkDynamicsPage() {
           </div>
         </section>
 
-        {/* ───────────────── Barres horaires pen/sat ───────────────── */}
+        {/* Barres horaires pen/sat */}
         <section className="mt-6">
           <h2>Pénurie & Saturation par heure</h2>
-          <div className="card plot-card">
+          <div className="plot-card" style={{ padding: "8px 8px 6px 8px" }}>
             {hourlyBars?.length ? (
               <Plot
                 data={hourlyBars as Plotly.Data[]}
                 layout={chartLayout({
-                  height: 320,
+                  height: 312,
                   barmode: "group",
+                  margin: { l: 56, r: 8, t: 4, b: 36 },
                   xaxis: { title: { text: "Heure (locale)" } },
                   yaxis: { title: { text: "%" }, range: [0, hourlyYMax], ticksuffix: "%" },
                   legend: { orientation: "h" },
@@ -550,7 +530,7 @@ export default function NetworkDynamicsPage() {
           </div>
         </section>
 
-        {/* ───────────────── Épisodes (fenêtre récente) ───────────────── */}
+        {/* Épisodes */}
         <section className="mt-6">
           <h2>Épisodes (fenêtre récente)</h2>
           <div className="filters">
@@ -566,10 +546,7 @@ export default function NetworkDynamicsPage() {
             <button
               onClick={() =>
                 router.push(
-                  {
-                    pathname: "/monitoring/network/dynamics",
-                    query: stationId ? { station_id: stationId } : {},
-                  },
+                  { pathname: "/monitoring/network/dynamics", query: stationId ? { station_id: stationId } : {} },
                   undefined,
                   { shallow: true }
                 )
@@ -585,58 +562,67 @@ export default function NetworkDynamicsPage() {
             )}
           </div>
 
-          {/* Carte — même fond/hauteur que les autres modules */}
+          {/* Carte */}
           <div className="map-block">
             <div className="map-wrap h-360">
-              {episodePoints.length ? (
-                <EpisodesMap rows={episodePoints} />
-              ) : (
-                <div className="empty">Aucun point à afficher.</div>
-              )}
+              {episodePoints.length ? <EpisodesMap rows={episodePoints} /> : <div className="empty">Aucun point à afficher.</div>}
             </div>
           </div>
           <div className="figure-note small">
             Basemap : Carto Light (no labels). Rouge = pénurie ; Bleu = saturation. Un point par épisode détecté.
           </div>
 
-          {/* Liste des épisodes — même apparence que les autres tableaux */}
+          {/* Liste des épisodes (stations non cliquables) */}
           {episodesFiltered?.length ? (
             <div className="card mt-4">
               <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>Liste des épisodes détectés</h3>
-              <div style={{ overflowX: "auto" }}>
+              <div className="table-scroll">
                 <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "minmax(220px,1.1fr) 120px 1fr 1fr 120px 100px",
-                    gap: 8,
-                    minWidth: 860,
-                  }}
+                  className="table-grid"
+                  style={{ ["--cols" as any]: "minmax(260px,1.2fr) 120px 1fr 1fr 120px 100px" }}
                 >
                   <HeaderCell>Station</HeaderCell>
                   <HeaderCell>Type</HeaderCell>
                   <HeaderCell>Début (UTC)</HeaderCell>
                   <HeaderCell>Fin (UTC)</HeaderCell>
-                  <HeaderCell className="table-head--right">Durée (min)</HeaderCell>
-                  <HeaderCell className="table-head--right">Pas (#)</HeaderCell>
+                  <HeaderCell>Durée (min)</HeaderCell>
+                  <HeaderCell>Pas (#)</HeaderCell>
 
-                  {episodesFiltered.slice(0, 1000).map((r, i) => (
-                    <Row key={`${r.station_id}-${r.start_utc}-${i}`}>
-                      <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        <Link
-                          href={`/monitoring/network/stations?station_id=${encodeURIComponent(r.station_id)}`}
-                          style={{ textDecoration: "underline" }}
-                        >
-                          {stationsIdx[r.station_id]?.name ?? r.station_id}
-                        </Link>{" "}
-                        <span style={{ opacity: 0.6 }}>({r.station_id})</span>
-                      </div>
-                      <div style={{ color: r.type === "penury" ? "#ef4444" : "#3b82f6" }}>{r.type}</div>
-                      <div>{new Date(r.start_utc).toLocaleString("fr-FR")}</div>
-                      <div>{new Date(r.end_utc).toLocaleString("fr-FR")}</div>
-                      <div style={{ fontVariantNumeric: "tabular-nums", textAlign: "right" }}>{fmtInt(r.duration_min)}</div>
-                      <div style={{ fontVariantNumeric: "tabular-nums", textAlign: "right" }}>{fmtInt(r.steps)}</div>
-                    </Row>
-                  ))}
+                  {episodesFiltered.slice(0, 1000).map((r, i) => {
+                    const name = stationsIdx[r.station_id]?.name ?? r.station_id;
+                    return (
+                      <Row key={`${r.station_id}-${r.start_utc}-${i}`}>
+                        {/* Colonne gauche style "performance", sans lien */}
+                        <div style={{ minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontWeight: 600,
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              maxWidth: 380,
+                            }}
+                            title={name}
+                          >
+                            {name}
+                          </div>
+                          <div className="mono" style={{ fontSize: 12, opacity: 0.7 }}>
+                            {r.station_id}
+                          </div>
+                        </div>
+
+                        <div style={{ color: r.type === "penury" ? "#ef4444" : "#3b82f6" }}>{r.type}</div>
+                        <div>{new Date(r.start_utc).toLocaleString("fr-FR")}</div>
+                        <div>{new Date(r.end_utc).toLocaleString("fr-FR")}</div>
+                        <div className="table-cell--right" style={{ fontVariantNumeric: "tabular-nums" }}>
+                          {fmtInt(r.duration_min)}
+                        </div>
+                        <div className="table-cell--right" style={{ fontVariantNumeric: "tabular-nums" }}>
+                          {fmtInt(r.steps)}
+                        </div>
+                      </Row>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -645,7 +631,7 @@ export default function NetworkDynamicsPage() {
           )}
         </section>
 
-        {/* ───────────────── Tension par station ───────────────── */}
+        {/* Tension par station (stations non cliquables) */}
         <section className="mt-6">
           <h2>Tension par station</h2>
           <div className="card">
@@ -665,43 +651,59 @@ export default function NetworkDynamicsPage() {
             </div>
 
             {tensionRows?.length ? (
-              <div style={{ overflowX: "auto" }}>
+              <div className="table-scroll">
                 <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "minmax(260px,1.2fr) 120px 120px 120px 140px 100px",
-                    gap: 8,
-                    minWidth: 920,
-                  }}
+                  className="table-grid"
+                  style={{ ["--cols" as any]: "minmax(260px,1.2fr) 120px 120px 120px 140px 100px" }}
                 >
                   <HeaderCell>Station</HeaderCell>
                   <HeaderCell>Pénurie</HeaderCell>
                   <HeaderCell>Saturation</HeaderCell>
                   <HeaderCell>Occupation</HeaderCell>
                   <HeaderCell>Tension idx</HeaderCell>
-                  <HeaderCell className="table-head--right">Obs</HeaderCell>
+                  <HeaderCell>Obs</HeaderCell>
 
-                  {tensionRows.slice(0, 400).map((r, i) => (
-                    <Row key={`${r.station_id}-${i}`}>
-                      <div
-                        style={{
-                          whiteSpace: "nowrap",
-                          textOverflow: "ellipsis",
-                          overflow: "hidden",
-                          maxWidth: 340,
-                        }}
-                        title={(r as any)._name}
-                      >
-                        <b>{(r as any)._name}</b>{" "}
-                        <span style={{ opacity: 0.6 }}>({r.station_id})</span>
-                      </div>
-                      <div style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPct(Number(r.penury_rate ?? NaN) * 100, 1)}</div>
-                      <div style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPct(Number(r.saturation_rate ?? NaN) * 100, 1)}</div>
-                      <div style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPct(Number(r.occ_mean ?? NaN) * 100, 1)}</div>
-                      <div style={{ fontVariantNumeric: "tabular-nums" }}>{fmtPct(Number(r.tension_index ?? NaN) * 100, 1)}</div>
-                      <div style={{ fontVariantNumeric: "tabular-nums", textAlign: "right" }}>{fmtInt(r.n_obs)}</div>
-                    </Row>
-                  ))}
+                  {tensionRows.slice(0, 400).map((r, i) => {
+                    const displayName = (r as any)._name;
+                    return (
+                      <Row key={`${r.station_id}-${i}`}>
+                        {/* Colonne gauche style "performance", sans lien */}
+                        <div style={{ minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontWeight: 600,
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              maxWidth: 380,
+                            }}
+                            title={displayName}
+                          >
+                            {displayName}
+                          </div>
+                          <div className="mono" style={{ fontSize: 12, opacity: 0.7 }}>
+                            {r.station_id}
+                          </div>
+                        </div>
+
+                        <div style={{ fontVariantNumeric: "tabular-nums" }}>
+                          {fmtPct(Number(r.penury_rate ?? NaN) * 100, 1)}
+                        </div>
+                        <div style={{ fontVariantNumeric: "tabular-nums" }}>
+                          {fmtPct(Number(r.saturation_rate ?? NaN) * 100, 1)}
+                        </div>
+                        <div style={{ fontVariantNumeric: "tabular-nums" }}>
+                          {fmtPct(Number(r.occ_mean ?? NaN) * 100, 1)}
+                        </div>
+                        <div style={{ fontVariantNumeric: "tabular-nums" }}>
+                          {fmtPct(Number(r.tension_index ?? NaN) * 100, 1)}
+                        </div>
+                        <div className="table-cell--right" style={{ fontVariantNumeric: "tabular-nums" }}>
+                          {fmtInt(r.n_obs)}
+                        </div>
+                      </Row>
+                    );
+                  })}
                 </div>
               </div>
             ) : (
@@ -718,20 +720,11 @@ export default function NetworkDynamicsPage() {
 function Row({ children }: { children: ReactNode }) {
   const items = Array.isArray(children) ? children : [children];
   return (
-    <div style={{ display: "contents" }}>
+    <div className="table-row">
       {items.map((child, i) => {
-        // aligner à droite la/les dernières colonnes numériques
         const alignRight = items.length >= 6 && (i === items.length - 1 || i === items.length - 2);
-        const ta: CSSProperties["textAlign"] = alignRight ? "right" : "left";
         return (
-          <div
-            key={i}
-            style={{
-              padding: "8px 6px",
-              borderBottom: "1px dashed rgba(148,163,184,0.25)",
-              textAlign: ta,
-            }}
-          >
+          <div key={i} className={`table-cell ${alignRight ? "table-cell--right" : ""}`}>
             {child}
           </div>
         );
@@ -739,6 +732,6 @@ function Row({ children }: { children: ReactNode }) {
     </div>
   );
 }
-function HeaderCell({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={`table-head table-head--sticky ${className ?? ""}`.trim()}>{children}</div>;
+function HeaderCell({ children }: { children: ReactNode }) {
+  return <div className="table-head table-head--sticky">{children}</div>;
 }

@@ -1,6 +1,6 @@
 // ui/pages/monitoring/model/explainability.tsx
 import Head from "next/head";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import type { ScatterData } from "plotly.js";
 import type * as Plotly from "plotly.js";
@@ -36,6 +36,131 @@ const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ),
 });
 
+/* ───────────────── Map — identique perf mais avec épisodes d’erreurs ───────────────── */
+type MapPoint = {
+  station_id: string;
+  name?: string;
+  lat: number;
+  lon: number;
+  color: string;
+  max_run?: number | null;
+  n?: number | null;
+};
+
+const SnapshotMap = dynamic(async () => {
+  const RL = await import("react-leaflet");
+  const { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } = RL as any;
+  const React = await import("react");
+  const { useEffect, useMemo, useState } = React;
+
+  function FitBounds({ rows }: { rows: Array<{ lat: number; lon: number }> }) {
+    const map = useMap();
+    useEffect(() => {
+      const pts = rows.filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon)));
+      if (!pts.length) return;
+      let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+      for (const r of pts) {
+        const la = Number(r.lat);
+        const lo = Number(r.lon);
+        if (la < minLat) minLat = la;
+        if (la > maxLat) maxLat = la;
+        if (lo < minLon) minLon = lo;
+        if (lo > maxLon) maxLon = lo;
+      }
+      if (minLat <= maxLat && minLon <= maxLon) {
+        map.fitBounds(
+          [
+            [minLat, minLon],
+            [maxLat, maxLon],
+          ],
+          { padding: [20, 20] }
+        );
+      }
+    }, [rows, map]);
+    return null;
+  }
+
+  function MapInner({ rows }: { rows: MapPoint[] }) {
+    const valid = useMemo(
+      () => rows.filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon))),
+      [rows]
+    );
+
+    const latMed = valid.length
+      ? valid.map((r) => Number(r.lat)).sort((a, b) => a - b)[Math.floor(valid.length / 2)]
+      : 48.8566;
+    const lonMed = valid.length
+      ? valid.map((r) => Number(r.lon)).sort((a, b) => a - b)[Math.floor(valid.length / 2)]
+      : 2.3522;
+
+    const [tileUrl, setTileUrl] = useState(
+      "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
+    );
+    useEffect(() => {
+      const img = new Image();
+      img.onerror = () => setTileUrl("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png");
+      img.src = "https://a.basemaps.cartocdn.com/light_nolabels/3/4/2.png";
+    }, []);
+
+    return (
+      <div className="map-wrap h-360">
+        <MapContainer center={[latMed, lonMed]} zoom={12} className="tile-bg" style={{ width: "100%", height: "100%" }}>
+          <TileLayer
+            url={tileUrl}
+            attribution='&copy; OpenStreetMap, &copy; <a href="https://carto.com/">CARTO</a>'
+            detectRetina
+          />
+          <FitBounds rows={valid} />
+          {valid.map((r) => (
+            <CircleMarker
+              key={r.station_id}
+              center={[Number(r.lat), Number(r.lon)]}
+              radius={6}
+              pathOptions={{
+                color: r.color,
+                weight: 0.8,
+                fillColor: r.color,
+                fillOpacity: 0.85,
+              }}
+            >
+              <Tooltip className="tooltip-dark">
+                <div style={{ display: "grid", gap: 4 }}>
+                  <div><b>{r.name ?? r.station_id}</b></div>
+                  {r.n != null && (
+                    <div className="mono" style={{ fontSize: 12, opacity: 0.85 }}>
+                      {r.station_id} · n={r.n.toLocaleString("fr-FR")}
+                    </div>
+                  )}
+                  {Number.isFinite(Number(r.max_run)) && (
+                    <div>
+                      Max run (|résidu|≥4) : <b>{Number(r.max_run).toFixed(0)}</b>
+                    </div>
+                  )}
+                </div>
+              </Tooltip>
+            </CircleMarker>
+          ))}
+        </MapContainer>
+
+        {/* Légende harmonisée CSS (style perf) */}
+        <div className="cluster-legend">
+          <div className="cluster-legend__title">Épisodes d’erreurs</div>
+          <div className="cluster-legend__row">
+            <span className="cluster-legend__dot" style={{ background: "#ef4444" }} />
+            <span>Épisodes longs (max_run élevé)</span>
+          </div>
+          <div className="cluster-legend__row">
+            <span className="cluster-legend__dot" style={{ background: "#10b981" }} />
+            <span>Épisodes courts</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return MapInner;
+}, { ssr: false });
+
 /* ───────────────── Helpers ───────────────── */
 function ok<T>(r: PromiseSettledResult<T>): T | null {
   return r.status === "fulfilled" ? r.value : null;
@@ -50,6 +175,15 @@ const safeMinMax = (arrs: number[][]) => {
   if (!Number.isFinite(max)) max = 0;
   return { min, max };
 };
+
+function getLatLng(meta?: StationMeta | null): [number, number] | null {
+  if (!meta) return null;
+  const lat = (meta as any).lat ?? (meta as any).latitude;
+  const lon = (meta as any).lon ?? (meta as any).lng ?? (meta as any).longitude;
+  const la = Number(lat), lo = Number(lon);
+  if (!Number.isFinite(la) || !Number.isFinite(lo)) return null;
+  return [la, lo];
+}
 
 /* ───────────────── Horizon (SSR-safe) ───────────────── */
 function useQueryParamH(defaultH = 15): [number, (h: number) => void, boolean] {
@@ -71,7 +205,64 @@ function useQueryParamH(defaultH = 15): [number, (h: number) => void, boolean] {
       window.history.replaceState({}, "", u.toString());
     } catch {}
   }, [h, mounted]);
-  return [h, (v: number) => setH(v), mounted];
+  const setter = useCallback((v: number) => setH(v), []);
+  return [h, setter, mounted];
+}
+
+/* ───────── Normalizer FI (gère XGB natif / scikit / custom) ───────── */
+type FIRow = { feature: string; importance: number; std: number | null };
+
+function normalizeFeatureImportance(fi: any): { rows: FIRow[]; method: string | undefined; meta: string[] } {
+  const method = typeof fi?.method === "string" ? fi.method : undefined;
+  const meta: string[] = [];
+  const rows: FIRow[] = [];
+
+  // 0) XGBoost natif
+  if (Array.isArray(fi?.rows) && fi.rows.length && (("gain_share" in fi.rows[0]) || ("gain" in fi.rows[0]))) {
+    for (const r of fi.rows) {
+      const f = String(r?.feature ?? "");
+      const imp = Number.isFinite(Number(r?.gain_share)) ? Number(r.gain_share)
+                : Number.isFinite(Number(r?.gain))       ? Number(r.gain)
+                : null;
+      if (f && imp != null) rows.push({ feature: f, importance: imp, std: null });
+    }
+  }
+  // 1) Schéma “officiel”
+  else if (Array.isArray(fi?.rows) && fi.rows.length) {
+    for (const r of fi.rows) {
+      const f = String(r?.feature ?? "");
+      const imp = Number(r?.importance);
+      const sd = Number.isFinite(Number(r?.std)) ? Number(r.std) : null;
+      if (f && Number.isFinite(imp)) rows.push({ feature: f, importance: imp, std: sd });
+    }
+  }
+  // 2) scikit permutation_importance
+  else if (Array.isArray(fi?.feature_names) && Array.isArray(fi?.importances_mean)) {
+    const names = fi.feature_names as any[];
+    const mean = fi.importances_mean as any[];
+    const stds = Array.isArray(fi?.importances_std) ? (fi.importances_std as any[]) : [];
+    for (let i = 0; i < names.length; i++) {
+      const f = String(names[i] ?? "");
+      const imp = Number(mean[i]);
+      const sd = Number.isFinite(Number(stds[i])) ? Number(stds[i]) : null;
+      if (f && Number.isFinite(imp)) rows.push({ feature: f, importance: imp, std: sd });
+    }
+  }
+  // 3) Plat
+  else if (Array.isArray(fi?.importances) && fi.importances.length) {
+    for (const r of fi.importances) {
+      const f = String(r?.feature ?? "");
+      const imp = Number(r?.importance);
+      const sd = Number.isFinite(Number(r?.std)) ? Number(r.std) : null;
+      if (f && Number.isFinite(imp)) rows.push({ feature: f, importance: imp, std: sd });
+    }
+  }
+
+  if (Number.isFinite(Number(fi?.horizon_min))) meta.push(`h=${Number(fi.horizon_min)} min`);
+  if (Number.isFinite(Number(fi?.n_rows)))      meta.push(`n_rows=${Number(fi.n_rows)}`);
+  if (Number.isFinite(Number(fi?.n_features)))  meta.push(`n_features=${Number(fi.n_features)}`);
+
+  return { rows, method, meta };
 }
 
 /* ───────────────── Page ───────────────── */
@@ -82,7 +273,7 @@ export default function ModelExplainabilityPage() {
   const [residuals, setResiduals] = useState<ResidualsDoc | null>(null);
   const [calib, setCalib] = useState<CalibrationDoc | null>(null);
   const [unc, setUnc] = useState<UncertaintyDoc | null>(null);
-  const [fiDoc, setFiDoc] = useState<FeatureImportanceDoc | null>(null);
+  const [fiDoc, setFiDoc] = useState<FeatureImportanceDoc | any | null>(null);
 
   // Index stations: id → meta
   const [stationsIdx, setStationsIdx] = useState<Record<string, StationMeta>>({});
@@ -90,7 +281,7 @@ export default function ModelExplainabilityPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Charge l’index des stations au montage
+  // Load stations index
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -103,7 +294,7 @@ export default function ModelExplainabilityPage() {
     return () => { alive = false; };
   }, []);
 
-  // Charge les docs explain pour l’horizon actif
+  // Load explain docs for horizon h
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -136,7 +327,7 @@ export default function ModelExplainabilityPage() {
   }, [h]);
 
   const generatedAt =
-    fiDoc?.generated_at ||
+    (fiDoc as any)?.generated_at ||
     overview?.generated_at ||
     residuals?.generated_at ||
     calib?.generated_at ||
@@ -145,7 +336,7 @@ export default function ModelExplainabilityPage() {
 
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
-  // Dictionnaire id → nom (noms non vides, gère ids sans zéros à gauche)
+  // Dictionnaire id → nom
   const nameIndex = useMemo(() => {
     const rec: Record<string, string> = {};
     for (const [id, meta] of Object.entries(stationsIdx)) {
@@ -163,50 +354,20 @@ export default function ModelExplainabilityPage() {
     const yesNo = (v?: boolean | null) => (v ? "Oui" : "Non");
     return [
       { label: "Stations (perf)", value: overview?.perf_stations ?? null, fmt: (v) => fmtInt(Number(v)) },
-      { label: "Lignes (n)", value: overview?.perf_rows ?? null, fmt: (v) => fmtInt(Number(v)) },
-      { label: "Prédictions", value: overview?.has_y_pred ? 1 : 0, fmt: (v) => yesNo(Boolean(v)) },
-      { label: "Incertitude", value: overview?.has_uncertainty ? 1 : 0, fmt: (v) => yesNo(Boolean(v)) },
-      { label: "β global", value: calib?.fit?.beta ?? null, fmt: (v) => fmtNum(Number(v), 3) },
-      { label: "α global", value: calib?.fit?.alpha ?? null, fmt: (v) => fmtNum(Number(v), 3) },
+      { label: "Lignes (n)",      value: overview?.perf_rows ?? null,     fmt: (v) => fmtInt(Number(v)) },
+      { label: "Prédictions",     value: overview?.has_y_pred ? 1 : 0,    fmt: (v) => yesNo(Boolean(v)) },
+      { label: "Incertitude",     value: overview?.has_uncertainty ? 1:0, fmt: (v) => yesNo(Boolean(v)) },
+      { label: "β global",        value: calib?.fit?.beta ?? null,        fmt: (v) => fmtNum(Number(v), 3) },
+      { label: "α global",        value: calib?.fit?.alpha ?? null,       fmt: (v) => fmtNum(Number(v), 3) },
     ];
   }, [overview, calib]);
 
   const subtitleText = useMemo(
-    () => `Importance des features, résidus, QQ, ACF, hétéroscédasticité, calibration & incertitude (h=${mounted ? h : 15} min)`,
+    () => `Résidus, QQ, ACF, hétéroscédasticité, calibration, incertitude & importance des features (h=${mounted ? h : 15} min)`,
     [h, mounted],
   );
 
-  /* ───────── Feature importance (barres horizontales) ───────── */
-  const fiBarData: Partial<Plotly.PlotData>[] = useMemo(() => {
-    if (!fiDoc?.rows?.length) return [];
-    const rows = [...fiDoc.rows]
-      .filter((r) => Number.isFinite(Number(r.importance)))
-      .sort((a, b) => Number(b.importance ?? 0) - Number(a.importance ?? 0));
-
-    if (!rows.length) return [];
-
-    const x = rows.map((r) => Number(r.importance));
-    const y = rows.map((r) => r.feature);
-    const err = rows.map((r) => (Number.isFinite(Number(r.std)) ? Number(r.std) : 0));
-
-    return [
-      {
-        x: x.reverse(),
-        y: y.reverse(),
-        type: "bar" as const,
-        orientation: "h",
-        name: "importance",
-        error_x: {
-          type: "data",
-          array: err.reverse(),
-          visible: err.some((v) => v > 0),
-        },
-        hovertemplate: "%{y}<br>importance=%{x:.4f}" + (err.some((v) => v > 0) ? "<br>±%{error_x.array:.4f}" : "") + "<extra></extra>",
-      },
-    ];
-  }, [fiDoc]);
-
-  /* ───────── Graph data (résidus / calib / incertitude) ───────── */
+  /* ───────── Data: résidus / calib / incertitude ───────── */
   const histData: Partial<Plotly.PlotData>[] = useMemo(() => {
     const bins = residuals?.hist ?? [];
     if (!bins.length) return [];
@@ -282,30 +443,127 @@ export default function ModelExplainabilityPage() {
     }];
   }, [calib]);
 
-  /* ───────── Tri stations |biais| ───────── */
-  const biasRows = useMemo(() => {
-    const rows = calib?.bias_by_station ?? [];
-    if (!rows.length) return [];
-    const filtered = rows.filter((r) => Number(r.n) >= 30);
-    return [...filtered].sort((a, b) => Math.abs(Number(b.bias ?? 0)) - Math.abs(Number(a.bias ?? 0))).slice(0, 30);
-  }, [calib]);
+  /* ───────── Feature Importance (part + cumul) ───────── */
+  const { rows: fiRowsRaw, method: fiMethod, meta: fiMeta } = useMemo(
+    () => normalizeFeatureImportance(fiDoc),
+    [fiDoc]
+  );
+
+  const fiAll = useMemo(() => {
+    const rows = (fiRowsRaw ?? []).filter((r) => Number.isFinite(Number(r.importance)));
+    if (!rows.length) return { rows: [] as Array<FIRow & { share: number; cum: number }>, total: 0 };
+    const total = rows.reduce((s, r) => s + Math.max(0, Number(r.importance)), 0);
+    const sorted = [...rows].sort((a, b) => Number(b.importance) - Number(a.importance));
+    let cum = 0;
+    const withPct = sorted.map((r) => {
+      const share = total > 0 ? (Number(r.importance) / total) * 100 : 0;
+      cum += share;
+      return { ...r, share, cum };
+    });
+    return { rows: withPct, total };
+  }, [fiRowsRaw]);
+
+  const xTitleFI = useMemo(() => {
+    if (fiMethod?.includes("get_score")) return "Part d’importance (gain_share, %)";
+    return "Part d’importance (%)";
+  }, [fiMethod]);
+
+  // Hauteur dynamique (toutes features visibles) + relayout pour éviter coupe
+  const fiHeight = useMemo(() => {
+    const n = fiAll.rows.length;
+    // ~24 px par ligne + marge généreuse pour étiquettes + texte
+    return Math.max(380, Math.min(2000, 24 * n + 160));
+  }, [fiAll.rows.length]);
+
+  const fiBarData: Partial<Plotly.PlotData>[] = useMemo(() => {
+    if (!fiAll.rows.length) return [];
+    const rows = fiAll.rows;
+    const x = rows.map((r) => r.share);
+    const y = rows.map((r) => r.feature);
+    const err = rows.map((r) => (Number.isFinite(Number(r.std)) ? Number(r.std) : 0));
+    const custom = rows.map((r) => [r.share, r.cum]);
+
+    return [
+      {
+        x: x.reverse(),
+        y: y.reverse(),
+        type: "bar" as const,
+        orientation: "h",
+        name: "Part",
+        error_x: {
+          type: "data",
+          array: err.reverse(),
+          visible: err.some((v) => v > 0),
+        },
+        text: custom.reverse().map(([p, c]) => `${(p as number).toFixed(1)}% • cum ${(c as number).toFixed(1)}%`),
+        textposition: "auto",
+        insidetextanchor: "end",
+        hovertemplate: "%{y}<br>part=%{x:.2f}%<br>cumul=%{text.split('cum ')[1]}<extra></extra>",
+        customdata: custom.reverse(),
+      },
+    ];
+  }, [fiAll]);
+
+  // Relayout auto sur resize pour éviter coupure (hauteur recalculée)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onResize = () => {
+      // rien à faire ici : Plotly recalcule via props de layout (height dépend de fiHeight dans React)
+      // mais on force un repaint léger en modifiant un CSS var (astuce sans impact visuel)
+      document.documentElement.style.setProperty("--fi-resize-tick", String(Date.now() % 1000));
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  /* ───────── Données carte (épisodes d’erreurs) ───────── */
+  const mapRows = useMemo<MapPoint[]>(() => {
+    const rows: MapPoint[] = [];
+    const src = residuals?.episodes ?? [];
+    if (!src.length) return rows;
+
+    const aggregated = new Map<string, { station_id: string; max_run: number; n: number }>();
+    // On agrège par station : max_run = max, n = n total (si déjà agrégé côté backend, ça ne change rien)
+    for (const r of src) {
+      const id = String(r.station_id);
+      const cur = aggregated.get(id);
+      const mr = Number(r.max_run ?? 0);
+      const nn = Number(r.n ?? 0);
+      if (!cur) aggregated.set(id, { station_id: id, max_run: mr, n: nn });
+      else aggregated.set(id, { station_id: id, max_run: Math.max(cur.max_run, mr), n: cur.n + nn });
+    }
+
+    const list = Array.from(aggregated.values()).filter((r) => Number(r.n) >= 30);
+    if (!list.length) return rows;
+
+    // Seuil basé sur médiane des max_run
+    const vals = list.map((t) => Number(t.max_run ?? 0)).filter((v) => Number.isFinite(v)) as number[];
+    const median = vals.length ? [...vals].sort((a, b) => a - b)[Math.floor(vals.length / 2)] : 0;
+
+    for (const r of list) {
+      const meta = stationsIdx[r.station_id] as StationMeta | undefined;
+      const ll = getLatLng(meta);
+      if (!ll) continue;
+      const color = (Number(r.max_run) >= median ? "#ef4444" : "#10b981"); // rouge si >= médiane, sinon vert
+      rows.push({
+        station_id: r.station_id,
+        name: (meta as any)?.name ?? r.station_id,
+        lat: ll[0],
+        lon: ll[1],
+        color,
+        max_run: Number(r.max_run),
+        n: Number(r.n),
+      });
+    }
+    return rows;
+  }, [residuals, stationsIdx]);
 
   /* ───────── RENDER ───────── */
   return (
     <div className="monitoring">
       <Head>
         <title>Monitoring — Model / Explainability</title>
-        <meta name="description" content="Importance des features, résidus, QQ, ACF, hétéroscédasticité, calibration et incertitude." />
-        {/* Styles barre si non globaux */}
-        <style
-          dangerouslySetInnerHTML={{
-            __html: `
-              .monitoring .bar{height:6px;border-radius:999px;background:#111827;position:relative;overflow:hidden}
-              .monitoring .bar__fill{height:100%;background:var(--ok)}
-              .monitoring .bar__fill--danger{background:#ef4444}
-            `,
-          }}
-        />
+        <meta name="description" content="Résidus, QQ, ACF, hétéroscédasticité, calibration, incertitude et importance des features." />
       </Head>
 
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
@@ -317,6 +575,7 @@ export default function ModelExplainabilityPage() {
         />
 
         <LoadingBar status={barStatus} />
+        {error && <div className="alert error" style={{ marginTop: 8 }}>{error}</div>}
 
         {/* Toolbar */}
         <section className="mt-3">
@@ -333,44 +592,8 @@ export default function ModelExplainabilityPage() {
           </div>
         </section>
 
-        {/* ───────────────── Feature Importance (en premier) ───────────────── */}
-        <section className="mt-4">
-          <h2>Importance des features</h2>
-          <div className="card plot-card">
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <div className="small muted">
-                {fiDoc
-                  ? `Méthode: ${fiDoc.method} · h=${fiDoc.horizon_min} min · n_rows=${fiDoc.n_rows} · n_features=${fiDoc.n_features}`
-                  : "Aucune donnée disponible"}
-              </div>
-            </div>
-
-            {fiBarData.length ? (
-              <Plot
-                data={fiBarData as Plotly.Data[]}
-                layout={chartLayout({
-                  height: 420,
-                  margin: { l: 220, r: 10, t: 10, b: 36 },
-                  xaxis: { title: { text: "importance (ΔMAE, + grand = + important)" } },
-                  yaxis: { automargin: true },
-                  hovermode: "closest",
-                })}
-                config={chartConfig}
-                className="plot plot--lg"
-              />
-            ) : (
-              <div className="empty">—</div>
-            )}
-          </div>
-          {!!fiDoc?.notes?.length && (
-            <div className="figure-note small">
-              {fiDoc.notes.join(" · ")}
-            </div>
-          )}
-        </section>
-
         {/* KPIs */}
-        <section className="mt-6">
+        <section className="mt-4">
           <h2>Résumé — KPIs</h2>
           <KpiBar items={kpiItems} dense />
           {(() => {
@@ -388,7 +611,7 @@ export default function ModelExplainabilityPage() {
         <section className="mt-6">
           <h2>Résidus</h2>
           <div className="grid-2">
-            <div className="card plot-card">
+            <div className="plot-card">
               <h3>Histogramme</h3>
               {histData.length ? (
                 <Plot
@@ -407,7 +630,7 @@ export default function ModelExplainabilityPage() {
               )}
             </div>
 
-            <div className="card plot-card">
+            <div className="plot-card">
               <h3>QQ-plot</h3>
               {qqData.length ? (
                 <Plot
@@ -436,7 +659,7 @@ export default function ModelExplainabilityPage() {
         <section className="mt-6">
           <h2>Structure des erreurs</h2>
           <div className="grid-2">
-            <div className="card plot-card">
+            <div className="plot-card">
               <h3>ACF du résidu (lag 5 min)</h3>
               {acfData.length ? (
                 <Plot
@@ -455,7 +678,7 @@ export default function ModelExplainabilityPage() {
               )}
             </div>
 
-            <div className="card plot-card">
+            <div className="plot-card">
               <h3>Hétéroscédasticité</h3>
               {heteroData.length ? (
                 <Plot
@@ -479,7 +702,122 @@ export default function ModelExplainabilityPage() {
           </div>
         </section>
 
-        {/* Tableau 1 — Épisodes d’erreurs */}
+        {/* Calibration */}
+        <section className="mt-6">
+          <h2>Calibration</h2>
+
+          <div className="plot-card">
+            <h3>Binned means (y_pred → y_true)</h3>
+            {calibBinning.length ? (
+              <Plot
+                data={calibBinning as Plotly.Data[]}
+                layout={chartLayout({
+                  height: 320,
+                  margin: { l: 54, r: 10, t: 10, b: 40 },
+                  xaxis: { title: { text: "E[ŷ]" } },
+                  yaxis: { title: { text: "E[y]" } },
+                })}
+                config={chartConfig}
+                className="plot plot--sm"
+              />
+            ) : (
+              <div className="empty">—</div>
+            )}
+          </div>
+
+          <div className="grid-2 mt-4">
+            <div className="plot-card">
+              <h3>β par heure (locale)</h3>
+              {betaByHour.length ? (
+                <Plot
+                  data={betaByHour as Plotly.Data[]}
+                  layout={chartLayout({
+                    height: 320,
+                    margin: { l: 54, r: 10, t: 10, b: 36 },
+                    xaxis: { title: { text: "Heure" } },
+                    yaxis: { title: { text: "β" } },
+                  })}
+                  config={chartConfig}
+                  className="plot plot--sm"
+                />
+              ) : (
+                <div className="empty">—</div>
+              )}
+            </div>
+
+            <div className="plot-card">
+              <h3>Erreur relative par niveau</h3>
+              {relErrBars.length ? (
+                <Plot
+                  data={relErrBars as Plotly.Data[]}
+                  layout={chartLayout({
+                    height: 320,
+                    margin: { l: 54, r: 10, t: 10, b: 36 },
+                    xaxis: { title: { text: "Niveau (quantiles y_true)" } },
+                    yaxis: { title: { text: "MAPE-like (%)" } },
+                  })}
+                  config={chartConfig}
+                  className="plot plot--sm"
+                />
+              ) : (
+                <div className="empty">—</div>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* ───────────────── Feature Importance — (déplacé ici, sous β & Erreur relative) ───────────────── */}
+        <section className="mt-6">
+          <h2>Importance des features — part & part cumulée</h2>
+          <div className="plot-card" /* container sans overflow pour éviter la coupe */ style={{ overflow: "visible" }}>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div className="small muted">
+                {fiMethod
+                  ? `Méthode: ${fiMethod}${fiMeta.length ? " · " + fiMeta.join(" · ") : ""}`
+                  : (fiDoc ? "Méthode inconnue" : "Aucune donnée disponible")}
+              </div>
+              {fiMethod?.includes("disabled") && (
+                <div className="small" style={{ color: "var(--warn)" }}>
+                  L’explicabilité par permutation est désactivée côté backend.
+                </div>
+              )}
+            </div>
+
+            {fiBarData.length ? (
+              <Plot
+                data={fiBarData as Plotly.Data[]}
+                layout={chartLayout({
+                  height: fiHeight,
+                  margin: { l: 280, r: 12, t: 10, b: 48 },
+                  xaxis: { title: { text: xTitleFI }, ticksuffix: "%", rangemode: "tozero" },
+                  yaxis: { automargin: true },
+                  hovermode: "closest",
+                })}
+                config={chartConfig}
+                className="plot plot--lg"
+                style={{ minHeight: fiHeight, overflow: "visible" }}
+              />
+            ) : (
+              <div className="empty">
+                {fiMethod?.includes("disabled")
+                  ? "Désactivé côté backend."
+                  : "Aucune importance calculée / données vides."}
+              </div>
+            )}
+          </div>
+          {!!(fiDoc as any)?.notes?.length && <div className="figure-note small">{(fiDoc as any).notes.join(" · ")}</div>}
+        </section>
+
+        {/* Carte — intégration identique à Performance, basée sur épisodes d’erreurs */}
+        <section className="mt-6">
+          <h2>Carte — épisodes d’erreurs par station</h2>
+          <div className="map-block">
+            {mapRows.length ? <SnapshotMap rows={mapRows} /> : <div className="empty">Aucune donnée carte.</div>}
+          </div>
+          <div className="small mt-2">Couleur ~ longueur maximale d’épisode |résidu| ≥ 4 (rouge = long, vert = court). Filtre n ≥ 30.</div>
+        </section>
+
+        {/* Tableaux */}
         <section className="mt-6">
           <h2>Épisodes d’erreurs (|résidu| ≥ 4)</h2>
           <div className="card">
@@ -492,7 +830,7 @@ export default function ModelExplainabilityPage() {
                     <div className="table-head table-head--sticky">n épisodes</div>
 
                     {(() => {
-                      const rows = residuals.episodes.slice(0, 80);
+                      const rows = residuals.episodes.slice(0, 160);
                       const maxRun = Math.max(...rows.map((r) => Number(r.max_run ?? 0)), 1);
 
                       return rows.map((r) => {
@@ -501,7 +839,6 @@ export default function ModelExplainabilityPage() {
                         const nm = nameIndex[r.station_id] ?? `#${r.station_id}`;
                         return (
                           <div className="table-row" key={r.station_id}>
-                            {/* col 1: Station (nom + id) */}
                             <div className="table-cell">
                               <div className="table-cell--ellipsis" style={{ fontWeight: 600 }} title={nm}>
                                 {nm}
@@ -509,7 +846,6 @@ export default function ModelExplainabilityPage() {
                               <div className="mono" style={{ fontSize: 12, opacity: 0.7 }}>#{r.station_id} · max run={fmtInt(r.max_run)}</div>
                             </div>
 
-                            {/* col 2: Durée — barre + valeur alignée à droite */}
                             <div className="table-cell">
                               <div style={{ display: "grid", gridTemplateColumns: "1fr 64px", alignItems: "center", gap: 10 }}>
                                 <div className="bar">
@@ -519,7 +855,6 @@ export default function ModelExplainabilityPage() {
                               </div>
                             </div>
 
-                            {/* col 3: n épisodes */}
                             <div className="table-cell table-cell--right" style={{ fontWeight: 700 }}>
                               {fmtInt(r.n)}
                             </div>
@@ -539,162 +874,62 @@ export default function ModelExplainabilityPage() {
           </div>
         </section>
 
-        {/* Calibration (graphiques) */}
-        <section className="mt-6">
-          <h2>Calibration</h2>
-
-          <div className="card plot-card">
-            <h3>Binned means (y_pred → y_true)</h3>
-            {calibBinning.length ? (
-              <Plot
-                data={calibBinning as Plotly.Data[]}
-                layout={chartLayout({
-                  height: 320,
-                  margin: { l: 54, r: 10, t: 10, b: 40 },
-                  xaxis: { title: { text: "E[ŷ]" } },
-                  yaxis: { title: { text: "E[y]" } },
-                })}
-                config={chartConfig}
-                className="plot plot--sm"
-              />
-            ) : (
-              <div className="empty">—</div>
-            )}
-          </div>
-          <div className="figure-note small">
-            Lecture : comparaison des moyennes binned E[ŷ] vs E[y] ; la diagonale indique une calibration parfaite.
-          </div>
-
-          <div className="grid-2 mt-4">
-            <div className="card plot-card">
-              <h3>β par heure (locale)</h3>
-              {betaByHour.length ? (
-                <Plot
-                  data={betaByHour as Plotly.Data[]}
-                  layout={chartLayout({
-                    height: 320,
-                    margin: { l: 54, r: 10, t: 10, b: 36 },
-                    xaxis: { title: { text: "Heure" } },
-                    yaxis: { title: { text: "β" } },
-                  })}
-                  config={chartConfig}
-                  className="plot plot--sm"
-                />
-              ) : (
-                <div className="empty">—</div>
-              )}
-            </div>
-
-            <div className="card plot-card">
-              <h3>Erreur relative par niveau</h3>
-              {relErrBars.length ? (
-                <Plot
-                  data={relErrBars as Plotly.Data[]}
-                  layout={chartLayout({
-                    height: 320,
-                    margin: { l: 54, r: 10, t: 10, b: 36 },
-                    xaxis: { title: { text: "Niveau (quantiles y_true)" } },
-                    yaxis: { title: { text: "MAPE-like (%)" } },
-                  })}
-                  config={chartConfig}
-                  className="plot plot--sm"
-                />
-              ) : (
-                <div className="empty">—</div>
-              )}
-            </div>
-          </div>
-          <div className="figure-note small">
-            Lecture : β reflète un éventuel biais multiplicatif selon l’heure ; l’erreur relative est agrégée par niveaux (quantiles) de y_true.
-          </div>
-        </section>
-
-        {/* Tableau 2 — Stations |biais| */}
         <section className="mt-6" style={{ marginBottom: 40 }}>
-          <h2>Stations — biais moyen</h2>
+          <h2>Stations — biais moyen (référence)</h2>
           <div className="card">
-            {biasRows.length ? (
-              <>
-                <div className="table-scroll">
-                  <div className="table-grid" style={{ ["--cols" as any]: "minmax(0,1fr) 1fr 78px" }}>
-                    <div className="table-head table-head--sticky">Station</div>
-                    <div className="table-head table-head--sticky">|biais|</div>
-                    <div className="table-head table-head--sticky">n</div>
+            {(() => {
+              const src = calib?.bias_by_station ?? [];
+              if (!src.length) return <div className="empty">Aucune station à afficher.</div>;
 
-                    {(() => {
-                      const maxAbs = Math.max(...biasRows.map((r) => Math.abs(Number(r.bias ?? 0))), 1);
-                      return biasRows.map((r) => {
+              const filtered = src.filter((r) => Number(r.n) >= 30);
+              if (!filtered.length) return <div className="empty">Aucune station après filtre n ≥ 30.</div>;
+
+              const maxAbs = Math.max(...filtered.map((r) => Math.abs(Number(r.bias ?? 0))), 1);
+              const rows = filtered
+                .map((r) => ({ ...r, abs: Math.abs(Number(r.bias ?? 0)) }))
+                .sort((a, b) => b.abs - a.abs)
+                .slice(0, 160);
+
+              return (
+                <>
+                  <div className="table-scroll">
+                    <div className="table-grid" style={{ ["--cols" as any]: "minmax(0,1fr) 1fr 78px" }}>
+                      <div className="table-head table-head--sticky">Station</div>
+                      <div className="table-head table-head--sticky">|biais|</div>
+                      <div className="table-head table-head--sticky">n</div>
+
+                      {rows.map((r) => {
                         const absBias = Math.abs(Number(r.bias ?? 0));
                         const widthPct = clamp((absBias / maxAbs) * 100, 0, 100);
                         const nm = nameIndex[r.station_id] ?? r.name ?? `#${r.station_id}`;
                         return (
                           <div className="table-row" key={r.station_id}>
-                            {/* col 1: Station */}
                             <div className="table-cell">
                               <div className="table-cell--ellipsis" style={{ fontWeight: 600 }} title={nm}>
                                 {nm}
                               </div>
                               <div className="mono" style={{ fontSize: 12, opacity: 0.7 }}>#{r.station_id}</div>
-                            </div>
-
-                            {/* col 2: |biais| — barre + valeur */}
-                            <div className="table-cell">
-                              <div style={{ display: "grid", gridTemplateColumns: "1fr 64px", alignItems: "center", gap: 10 }}>
-                                <div className="bar">
-                                  <div className="bar__fill bar__fill--danger" style={{ width: `${widthPct}%` }} aria-hidden />
-                                </div>
-                                <div className="table-cell--right" style={{ fontWeight: 700 }}>{fmtNum(absBias, 2)}</div>
+                              <div className="bar" style={{ height: 5, marginTop: 5, width: "min(75%, 320px)" }}>
+                                <div className="bar__fill bar__fill--danger" style={{ width: `${widthPct}%` }} aria-hidden />
                               </div>
                             </div>
 
-                            {/* col 3: n */}
+                            <div className="table-cell table-cell--right" style={{ fontWeight: 700 }}>
+                              {fmtNum(absBias, 2)}
+                            </div>
+
                             <div className="table-cell table-cell--right">{fmtInt(r.n)}</div>
                           </div>
                         );
-                      });
-                    })()}
-                  </div>
-                </div>
-                <div className="figure-note small">
-                  Lecture : |biais| = |E[y_true − y_pred]| par station (filtrées avec n ≥ 30) ; barres normalisées par le |biais| max du tableau.
-                </div>
-              </>
-            ) : (
-              <div className="empty">Aucune station à afficher.</div>
-            )}
-          </div>
-        </section>
-
-        {/* Incertitude */}
-        <section className="mt-6" style={{ marginBottom: 40 }}>
-          <h2>Incertitude</h2>
-          <div className="card">
-            {unc?.coverage ? (
-              <>
-                <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
-                  <div className="kpi">
-                    <div className="kpi__label small">Coverage empirique</div>
-                    <div className="kpi__value" style={{ fontWeight: 700 }}>
-                      {Number.isFinite(Number(unc.coverage.empirical))
-                        ? `${(Number(unc.coverage.empirical) * 100).toFixed(1)}%`
-                        : "—"}
+                      })}
                     </div>
                   </div>
-                  <div className="kpi">
-                    <div className="kpi__label small">Échantillon</div>
-                    <div className="kpi__value" style={{ fontWeight: 700 }}>{fmtInt(unc.coverage.n)}</div>
+                  <div className="figure-note small">
+                    Lecture : |biais| = |E[y_true − y_pred]| par station (filtre n ≥ 30). Barres normalisées par le |biais| max affiché.
                   </div>
-                  <div className="small muted" style={{ alignSelf: "center" }}>
-                    {unc.method ? `Méthode: ${unc.method}` : ""}{Number.isFinite(Number(unc.nominal)) ? ` · nominal=${(Number(unc.nominal) * 100).toFixed(0)}%` : ""}
-                  </div>
-                </div>
-                <div className="figure-note small">
-                  Lecture : proportion observée des y_true dans l’intervalle prédictif. La valeur “nominal” est la cible théorique.
-                </div>
-              </>
-            ) : (
-              <div className="empty">Aucune borne d’incertitude détectée.</div>
-            )}
+                </>
+              );
+            })()}
           </div>
         </section>
       </main>

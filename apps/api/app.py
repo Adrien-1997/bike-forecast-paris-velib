@@ -40,7 +40,7 @@ except Exception:
         except Exception:
             settings = None
 
-# ─────────── Routes ───────────
+# ─────────── Routes legacy ───────────
 try:
     from apps.api.routes import health, stations, forecast, history, badges, snapshot, weather
 except Exception:
@@ -49,6 +49,7 @@ except Exception:
     except Exception:
         from routes import health, stations, forecast, history, badges, snapshot, weather
 
+# ─────────── Routes monitoring ───────────
 try:
     from apps.api.routes.monitoring import (
         network_overview,
@@ -58,6 +59,7 @@ try:
         model_explainability,
         data_health,
         data_drift,
+        intro,  # ✅ ajout
     )
 except Exception:
     try:
@@ -69,6 +71,7 @@ except Exception:
             model_explainability,
             data_health,
             data_drift,
+            intro,  # ✅ ajout
         )
     except Exception:
         from routes.monitoring import (
@@ -79,6 +82,7 @@ except Exception:
             model_explainability,
             data_health,
             data_drift,
+            intro,  # ✅ ajout
         )
 
 # ─────────── App ───────────
@@ -143,6 +147,7 @@ app.include_router(model_performance.router)
 app.include_router(model_explainability.router)
 app.include_router(data_health.router)
 app.include_router(data_drift.router)
+app.include_router(intro.router)  # ✅ nouveau
 
 # ─────────── Debug ───────────
 @app.on_event("startup")

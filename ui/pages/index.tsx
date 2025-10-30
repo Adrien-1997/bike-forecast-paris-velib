@@ -5,6 +5,7 @@ import Head from "next/head";
 import GlobalHeader from "@/components/layout/GlobalHeader";
 import GlobalFooter from "@/components/layout/GlobalFooter";
 import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
+import { getMonitoringIntro, type IntroDoc } from "@/lib/services/monitoring/intro";
 
 export default function LandingPage() {
   // ────────────────────────────────────────────────────────────────────────────
@@ -53,7 +54,79 @@ export default function LandingPage() {
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
   // ────────────────────────────────────────────────────────────────────────────
-  // KPI counters (respect reduced motion)
+  // ➕ Ajout: lecture des KPIs intro (sans toucher à tes états ci-dessus)
+  const [intro, setIntro] = useState<IntroDoc | null>(null);
+  const [introError, setIntroError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const doc = await getMonitoringIntro();
+        if (!alive) return;
+        setIntro(doc ?? null);
+      } catch (e: any) {
+        if (!alive) return;
+        setIntroError(String(e?.message ?? e));
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Formats locaux
+  const fmtDateTime = (iso?: string | null) => (iso ? new Date(iso).toLocaleString("fr-FR") : null);
+  const generatedAt = fmtDateTime(intro?.generated_at) ?? null;
+  const modelVersions = intro?.kpis?.model_versions ?? "h15 / h60";
+
+  // Injection des valeurs dans la barre KPI (en conservant ton animation)
+  useEffect(() => {
+    const prefersReduced =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+    // Valeurs issues d’intro, sinon fallback démo existant
+    const coverage = intro?.kpis?.coverage_7d_pct ?? 98;
+    const freshP95 = intro?.kpis?.freshness_p95_min ?? 5;
+    const stations = intro?.kpis?.stations_active ?? 1400;
+    const psi = intro?.kpis?.psi_global ?? 0.3;
+
+    const nodes = document.querySelectorAll<HTMLElement>(".kpi-card .kpi__value");
+    if (nodes[0]) nodes[0].dataset.count = `${Number(coverage).toFixed(0)}%`;
+    if (nodes[1]) nodes[1].dataset.count = `${Number(freshP95).toFixed(0)}`;
+    if (nodes[2]) nodes[2].dataset.count = `${Number(stations).toFixed(0)}`;
+    if (nodes[3]) nodes[3].dataset.count = `${Number(psi).toFixed(2)}`;
+
+    if (prefersReduced) {
+      nodes.forEach((el) => el.dataset.count && (el.textContent = el.dataset.count));
+      return;
+    }
+
+    const ease = (t: number) => 1 - Math.pow(1 - t, 4);
+    const animateCount = (el: HTMLElement, to: number, suffix = "") => {
+      const start = performance.now();
+      const dur = 1100 + Math.random() * 600;
+      const from = 0;
+      const step = (now: number) => {
+        const p = Math.min(1, (now - start) / dur);
+        const v = Math.round((from + (to - from) * ease(p)) * 10) / 10;
+        el.textContent = suffix ? v + suffix : String(v);
+        if (p < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    };
+
+    document.querySelectorAll<HTMLElement>(".kpi-card .kpi__value").forEach((el) => {
+      const raw = el.dataset.count;
+      if (!raw) return;
+      const isPct = raw.trim().endsWith("%");
+      const to = parseFloat(raw);
+      if (Number.isFinite(to)) animateCount(el, to, isPct ? "%" : "");
+    });
+  }, [intro]);
+
+  // KPI counters (respect reduced motion) — CONSERVÉ tel quel, gardé pour robustesse
   useEffect(() => {
     const prefersReduced =
       typeof window !== "undefined" &&
@@ -387,6 +460,12 @@ export default function LandingPage() {
           {/* Loading bar homogène */}
           <LoadingBar status={barStatus} />
           {error && <div className="banner banner--error mt-2">{error}</div>}
+          {/* ➕ Ajout léger : ligne méta sans rien retirer */}
+          {!introError && generatedAt && (
+            <div className="kpi-bar-meta" style={{ marginTop: 6 }}>
+              Mise à jour monitoring : {generatedAt} · Modèle : {modelVersions}
+            </div>
+          )}
 
           {/* ====================== HERO ====================== */}
           <section className="panel hero" aria-labelledby="hero-title">
@@ -395,7 +474,7 @@ export default function LandingPage() {
                 <div className="eyebrow">
                   <span className="ping" aria-hidden="true" />
                   <span className="chip" aria-label="Horizon de prévision">
-                    Prévisions +15 min • Paris
+                    Prévisions +15,+60 min • Paris
                   </span>
                   <span className="chip" aria-label="Actualisation">
                     Données live 5 min
@@ -450,7 +529,7 @@ export default function LandingPage() {
                   <span className="chip">Cloud Run</span>
                   <span className="chip">Next.js</span>
                   <span className="chip">React-Leaflet</span>
-                  <span className="chip">DuckDB</span>
+                  <span className="chip">Cloud Storage</span>
                   <span className="chip">LightGBM</span>
                 </div>
               </div>
@@ -536,7 +615,7 @@ export default function LandingPage() {
                 <iframe
                   ref={demoIframeRef}
                   title="Vélib’ Forecast — Application"
-                  src="https://velib-ui-160046094975.europe-west1.run.app/"
+                  src="http://localhost:3000/app"
                   loading="lazy"
                   allow="fullscreen; clipboard-read; clipboard-write"
                   referrerPolicy="no-referrer-when-downgrade"
@@ -554,7 +633,7 @@ export default function LandingPage() {
               <div className="actions-row">
                 <a
                   className="btn"
-                  href="https://velib-ui-160046094975.europe-west1.run.app/"
+                  href="http://localhost:3000/app"
                   target="_blank"
                   rel="noopener"
                 >
@@ -770,7 +849,7 @@ export default function LandingPage() {
               <div className="steps" role="list">
                 <div className="step" role="listitem">
                   <span className="chip">1 · Ingestion</span>
-                  <strong>GBFS → DuckDB</strong>
+                  <strong>GBFS → Cloud Storage</strong>
                   <p>Snapshots toutes les 5 minutes, consolidation journalière, schéma strict.</p>
                   <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
                     <li>Parquet shardé (daily/weekly) pour IO efficaces.</li>
