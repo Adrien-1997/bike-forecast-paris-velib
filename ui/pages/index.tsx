@@ -1,42 +1,27 @@
 // ui/pages/index.tsx
 import Script from "next/script";
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Head from "next/head";
 import GlobalHeader from "@/components/layout/GlobalHeader";
 import GlobalFooter from "@/components/layout/GlobalFooter";
 import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
 import { getMonitoringIntro, type IntroDoc } from "@/lib/services/monitoring/intro";
+import { getOverviewSnapshotMap, type OverviewSnapshotMap } from "@/lib/services/monitoring/network_overview";
 
 export default function LandingPage() {
   // ────────────────────────────────────────────────────────────────────────────
   // Refs
   const demoIframeRef = useRef<HTMLIFrameElement | null>(null);
-  const demoSkeletonRef = useRef<HTMLDivElement | null>(null);
+  const embedWrapRef = useRef<HTMLDivElement | null>(null);
 
   const year = useMemo(() => new Date().getFullYear(), []);
 
-  // 🔐 Liens de paiement (remplace par tes URLs Stripe/Ko-fi/Sponsors)
-  const SUPPORT_ONE_TIME =
-    process.env.NEXT_PUBLIC_SUPPORT_ONE_TIME ?? "https://buy.stripe.com/test_123"; // Don unique
-  const SUPPORT_MONTHLY =
-    process.env.NEXT_PUBLIC_SUPPORT_MONTHLY ?? "https://buy.stripe.com/test_monthly_123"; // Abonnement
-  const SUPPORT_SPONSORS =
-    process.env.NEXT_PUBLIC_SUPPORT_SPONSORS ?? "https://github.com/sponsors/Adrien-1997"; // Sponsors
-  const SUPPORT_KOFI =
-    process.env.NEXT_PUBLIC_SUPPORT_KOFI ?? "https://ko-fi.com/adrien61942"; // Ko-fi
-
-  // 🔑 Ko-fi username (déduit de l'URL ou via env)
-  const KOFI_USERNAME =
-    process.env.NEXT_PUBLIC_KOFI_USERNAME ??
-    (() => {
-      try {
-        const u = new URL(SUPPORT_KOFI);
-        const seg = u.pathname.split("/").filter(Boolean);
-        return seg[0] || "adrien61942";
-      } catch {
-        return "adrien61942";
-      }
-    })();
+  // 🔐 Liens de paiement
+  const STRIPE_DON_5 = process.env.NEXT_PUBLIC_STRIPE_DON_5 ?? "";
+  const STRIPE_DON_10 = process.env.NEXT_PUBLIC_STRIPE_DON_10 ?? "";
+  const STRIPE_DON_20 = process.env.NEXT_PUBLIC_STRIPE_DON_20 ?? "";
+  const STRIPE_MONTHLY_5 = process.env.NEXT_PUBLIC_STRIPE_MONTHLY_5 ?? "";
 
   function getCssVar(name: string, fallback: string) {
     try {
@@ -54,7 +39,7 @@ export default function LandingPage() {
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
   // ────────────────────────────────────────────────────────────────────────────
-  // ➕ Ajout: lecture des KPIs intro (sans toucher à tes états ci-dessus)
+  // KPIs intro (réels via API monitoring)
   const [intro, setIntro] = useState<IntroDoc | null>(null);
   const [introError, setIntroError] = useState<string | null>(null);
 
@@ -75,18 +60,16 @@ export default function LandingPage() {
     };
   }, []);
 
-  // Formats locaux
   const fmtDateTime = (iso?: string | null) => (iso ? new Date(iso).toLocaleString("fr-FR") : null);
   const generatedAt = fmtDateTime(intro?.generated_at) ?? null;
   const modelVersions = intro?.kpis?.model_versions ?? "h15 / h60";
 
-  // Injection des valeurs dans la barre KPI (en conservant ton animation)
+  // Injection des valeurs dans la KPI bar animée
   useEffect(() => {
     const prefersReduced =
       typeof window !== "undefined" &&
       window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-    // Valeurs issues d’intro, sinon fallback démo existant
     const coverage = intro?.kpis?.coverage_7d_pct ?? 98;
     const freshP95 = intro?.kpis?.freshness_p95_min ?? 5;
     const stations = intro?.kpis?.stations_active ?? 1400;
@@ -126,7 +109,7 @@ export default function LandingPage() {
     });
   }, [intro]);
 
-  // KPI counters (respect reduced motion) — CONSERVÉ tel quel, gardé pour robustesse
+  // Deuxième passe d'animation (fallback robustesse)
   useEffect(() => {
     const prefersReduced =
       typeof window !== "undefined" &&
@@ -161,31 +144,77 @@ export default function LandingPage() {
     });
   }, []);
 
-  // Iframe: remove DEMO skeleton on load
+  // ────────────────────────────────────────────────────────────────────────────
+  // Snapshot map (Overview) — state + load
+  const [snapMap, setSnapMap] = useState<OverviewSnapshotMap | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getOverviewSnapshotMap()
+      .then((doc) => {
+        if (!alive) return;
+        setSnapMap(doc ?? null);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setSnapMap(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // Démo (iframe) : lancement manuel + plein écran wrapper + skeleton piloté par state
+  const [demoLaunched, setDemoLaunched] = useState<boolean>(false);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [showSkeleton, setShowSkeleton] = useState<boolean>(false);
+
+  // Au load de l’iframe, on coupe le skeleton via state (pas de remove())
   useEffect(() => {
     const frame = demoIframeRef.current;
-    const onLoad = () => demoSkeletonRef.current?.remove();
     if (!frame) return;
+    const onLoad = () => setShowSkeleton(false);
     frame.addEventListener("load", onLoad);
     return () => frame.removeEventListener("load", onLoad);
   }, []);
 
+  // Suivre les changements de plein écran sur le wrapper
+  useEffect(() => {
+    const onFs = () => setIsFullscreen(document.fullscreenElement === embedWrapRef.current);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
+
   // Actions
+  const handleLaunch = () => {
+    if (demoLaunched) return;
+    setShowSkeleton(true);
+    setDemoLaunched(true); // l'iframe reçoit src via JSX (pas de mutation DOM directe)
+  };
+
   const handleReload = () => {
     const frame = demoIframeRef.current;
-    if (!frame) return;
-    const url = frame.src;
+    if (!frame || !demoLaunched) return;
+    const url = frame.src || "/app/embed";
+    setShowSkeleton(true);
     frame.src = "";
     setTimeout(() => {
       frame.src = url;
     }, 60);
   };
 
-  const handleFullscreen = async () => {
+  const handleEnterFullscreen = async () => {
     try {
-      if (!document.fullscreenElement) {
-        await demoIframeRef.current?.requestFullscreen?.();
-      } else {
+      await embedWrapRef.current?.requestFullscreen?.();
+    } catch {
+      /* noop */
+    }
+  };
+
+  const handleExitFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) {
         await document.exitFullscreen?.();
       }
     } catch {
@@ -193,7 +222,7 @@ export default function LandingPage() {
     }
   };
 
-  // Header (ancres internes)
+  // Header (ancres + liens app/monitoring)
   const headerItems = [
     { label: "Démo", href: "#demo" },
     { label: "Fonctions", href: "#features" },
@@ -328,53 +357,16 @@ export default function LandingPage() {
     };
   }, []);
 
-  // ───────────────────────────────────────────────────────────────
-  // Ko-fi : ouverture via le bouton "Ko-fi" (branché au widget)
-  const openKoFi = () => {
-    try {
-      const api = (window as any).kofiWidgetOverlay;
-      const primary = getCssVar("--primary", "#ff6a00");
-
-      if (api && typeof api.draw === "function") {
-        // Dessiner une seule fois le widget, aux couleurs du site
-        if (!(window as any).__kofiDrawn) {
-          api.draw(KOFI_USERNAME, {
-            type: "floating-chat",
-            "floating-chat.donateButton.text": "Soutenez-moi",
-            "floating-chat.donateButton.background-color": primary,
-            "floating-chat.donateButton.text-color": "#ffffff",
-          });
-          (window as any).__kofiDrawn = true;
-        }
-
-        // Petit délai pour laisser le DOM du widget apparaître, puis ouverture
-        setTimeout(() => {
-          const btn =
-            document.querySelector<HTMLButtonElement>(
-              ".floatingchat-container button, .floatingchat-container [role='button']"
-            );
-          if (btn) btn.click();
-          else window.open(SUPPORT_KOFI, "_blank", "noopener,noreferrer"); // fallback
-        }, 60);
-        return;
-      }
-    } catch {
-      // ignore
-    }
-    // Fallback si la lib n'est pas dispo (CSP/adblock)
-    window.open(SUPPORT_KOFI, "_blank", "noopener,noreferrer");
-  };
-
   return (
     <>
       <Head>
         {/* ===== Base meta ===== */}
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Vélib’ Forecast Paris — Carte en direct & Prévisions +15 min</title>
+        <title>Vélo Paris — Carte en direct & Prévisions +15 / +60 min</title>
         <meta
           name="description"
-          content="Carte temps réel des stations Vélib’ avec prévisions à +15 minutes, et monitoring de la qualité des données. Application React embarquée, déployée sur Cloud Run."
+          content="Vélo Paris anticipe la disponibilité des stations Vélib’ à +15 et +60 minutes grâce à un pipeline Cloud Run / FastAPI / Next.js."
         />
         <meta name="theme-color" content="#0b1220" />
         <meta name="color-scheme" content="dark light" />
@@ -384,20 +376,17 @@ export default function LandingPage() {
         <meta name="robots" content="index,follow,max-image-preview:large" />
 
         {/* ===== OpenGraph / Twitter ===== */}
-        <meta
-          property="og:title"
-          content="Vélib’ Forecast Paris — Carte en direct & Prévisions +15 min"
-        />
+        <meta property="og:title" content="Vélo Paris — Carte en direct & Prévisions" />
         <meta
           property="og:description"
-          content="Anticipez la disponibilité des stations Vélib’ à +15 min. Carte en direct, comparaisons et monitoring qualité."
+          content="Anticipez la disponibilité des stations à +15 et +60 minutes. Live map, monitoring réseau, data & modèle."
         />
         <meta property="og:type" content="website" />
         <meta property="og:url" content="https://example.com/velib-forecast/" />
         <meta property="og:image" content="https://example.com/velib-forecast/cover.jpg" />
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="Vélib’ Forecast Paris — Prévisions +15 min" />
-        <meta name="twitter:description" content="Carte temps réel & prévisions à +15 minutes." />
+        <meta name="twitter:title" content="Vélib’ Forecast Paris — Prévisions +15/+60" />
+        <meta name="twitter:description" content="Carte temps réel & prévisions, pipelines Cloud Run." />
         <meta name="twitter:image" content="https://example.com/velib-forecast/cover.jpg" />
 
         {/* ===== Perf ===== */}
@@ -408,6 +397,13 @@ export default function LandingPage() {
         />
         <link rel="dns-prefetch" href="https://velib-ui-160046094975.europe-west1.run.app" />
 
+        {/* ===== Leaflet CSS (pour SnapshotMap) ===== */}
+        <link
+          rel="stylesheet"
+          href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          crossOrigin=""
+        />
+
         {/* ===== JSON-LD ===== */}
         <script
           type="application/ld+json"
@@ -415,12 +411,12 @@ export default function LandingPage() {
             __html: JSON.stringify({
               "@context": "https://schema.org",
               "@type": "WebSite",
-              name: "Vélib’ Forecast Paris",
+              name: "Vélo Paris",
               url: "https://example.com/velib-forecast/",
               description:
-                "Carte temps réel des stations Vélib’ avec prévisions à +15 minutes et monitoring.",
+                "Carte temps réel des stations Vélib’ avec prévisions +15/+60 et monitoring (réseau/data/modèle).",
               inLanguage: "fr-FR",
-              publisher: { "@type": "Organization", name: "Vélib’ Forecast" },
+              publisher: { "@type": "Organization", name: "Vélo PAris" },
               potentialAction: {
                 "@type": "SearchAction",
                 target: "https://example.com/velib-forecast/?q={query}",
@@ -431,36 +427,28 @@ export default function LandingPage() {
         />
 
         {/* Ko-fi overlay script */}
-        <Script
-          id="kofi-overlay"
-          src="https://storage.ko-fi.com/cdn/scripts/overlay-widget.js"
-          strategy="afterInteractive"
-        />
+        <Script id="kofi-overlay" src="https://storage.ko-fi.com/cdn/scripts/overlay-widget.js" strategy="afterInteractive" />
 
         {/* Z-index de sécurité pour que le widget soit au-dessus */}
         <style jsx global>{`
-          .floatingchat-container {
-            z-index: 10000 !important;
-          }
+          .floatingchat-container { z-index: 10000 !important; }
         `}</style>
       </Head>
 
       {/* ===== A11y skip link ===== */}
-      <a href="#demo" className="sr-only">
-        Aller au contenu principal
-      </a>
+      <a href="#demo" className="sr-only">Aller au contenu principal</a>
 
       {/* Header global */}
       <GlobalHeader items={headerItems} brandHref="/" />
 
       {/* ====================== CONTENT ====================== */}
-      {/* 👇 Wrapper .monitoring pour hériter des tokens/fond/containers */}
       <div className="monitoring">
         <main id="top" className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
           {/* Loading bar homogène */}
           <LoadingBar status={barStatus} />
           {error && <div className="banner banner--error mt-2">{error}</div>}
-          {/* ➕ Ajout léger : ligne méta sans rien retirer */}
+
+          {/* Ligne méta (source: monitoring/intro) */}
           {!introError && generatedAt && (
             <div className="kpi-bar-meta" style={{ marginTop: 6 }}>
               Mise à jour monitoring : {generatedAt} · Modèle : {modelVersions}
@@ -473,18 +461,13 @@ export default function LandingPage() {
               <div>
                 <div className="eyebrow">
                   <span className="ping" aria-hidden="true" />
-                  <span className="chip" aria-label="Horizon de prévision">
-                    Prévisions +15,+60 min • Paris
-                  </span>
-                  <span className="chip" aria-label="Actualisation">
-                    Données live 5 min
-                  </span>
+                  <span className="chip" aria-label="Horizon de prévision">Prévisions +15 / +60 min • Paris</span>
+                  <span className="chip" aria-label="Actualisation">Données live 5 min</span>
                 </div>
 
                 <h1 id="hero-title">
-                  Anticipez les stations Vélib’
+                  Vélo Paris
                   <br />
-                  avec une{" "}
                   <span
                     style={{
                       background: "linear-gradient(90deg,var(--primary),var(--primary-2))",
@@ -493,49 +476,47 @@ export default function LandingPage() {
                       color: "transparent",
                     }}
                   >
-                    UX taillée pour la ville
+                    Cartographie, prévisions et monitoring
                   </span>
                   .
                 </h1>
 
                 <p className="lead">
-                  Carte temps réel, prédictions à +15 min par station, comparaison aux comportements historiques, et
-                  monitoring natif. Conçu pour fiabilité, vitesse et clarté — même aux heures de pointe.
+                  Vélo Paris anticipe la disponibilité des stations Vélib’ à +15 et +60 minutes grâce à un pipeline complet :
+                  ingestion en continu des flux GBFS dans Cloud Storage, enrichissement météo et temporel, modélisation XGBoost,
+                  API FastAPI et interface Next.js déployées sur Cloud Run Jobs.
+                  Un projet pensé pour la lisibilité urbaine, la fiabilité des données et la performance technique.
                 </p>
 
                 <ul className="text-muted" style={{ margin: "10px 0 0", paddingLeft: 18 }}>
-                  <li>Filtres quartier, recherche suggérée, focus proximité.</li>
-                  <li>Mises à jour live, transitions fluides, lisibilité renforcée.</li>
-                  <li>Prévisions calibrées, médiane historique et profils horaires.</li>
+                  <li>Carte interactive optimisée pour la fluidité et la lisibilité, même à grande échelle.</li>
+                  <li>Prévisions issues d’un modèle XGBoost calibré sur les tendances horaires, la météo et les profils de station.</li>
+                  <li>Monitoring complet du réseau, des données et du modèle : fraîcheur, complétude, dérive (PSI) et stabilité des prédictions.</li>
                 </ul>
 
                 <div className="cta">
-                  <a className="btn" href="#demo" aria-label="Ouvrir la démo en direct">
+                  <a className="btn" href="#demo" aria-label="Aller à la démo en direct">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                       <path d="M7 7h10v10H7z" stroke="white" strokeWidth="1.8" />
                       <path d="M3 3v6M3 3h6M21 21v-6M21 21h-6" stroke="white" strokeWidth="1.8" />
                     </svg>
-                    Ouvrir la démo
+                    Voir la démo
                   </a>
-                  <a className="btn outline" href="#how">
-                    Architecture
-                  </a>
-                  <a className="btn outline" href="#monitoring">
-                    Monitoring
-                  </a>
+                  <a className="btn outline" href="/monitoring">Monitoring</a>
+                  <a className="btn outline" href="/app">Lancer l’app</a>
                 </div>
 
                 <div className="tech-chips">
-                  <span className="chip">Cloud Run</span>
-                  <span className="chip">Next.js</span>
-                  <span className="chip">React-Leaflet</span>
                   <span className="chip">Cloud Storage</span>
-                  <span className="chip">LightGBM</span>
+                  <span className="chip">Cloud Run Jobs</span>
+                  <span className="chip">FastAPI</span>
+                  <span className="chip">Next.js</span>
+                  <span className="chip">XGBoost</span>
                 </div>
               </div>
 
               <aside className="glass hero-card" aria-label="Indicateurs clés">
-                <h3>En chiffres — 7 derniers jours</h3>
+                <h3>En chiffres</h3>
 
                 {/* KPI BAR — auto-slide */}
                 <div className="kpi-bar-wrap">
@@ -572,19 +553,17 @@ export default function LandingPage() {
                       </div>
                     </div>
                   </div>
-
-                  <div className="kpi-bar-meta">Démo · valeurs illustratives</div>
                 </div>
 
                 <div className="embed">
                   <div className="ratio">
-                    <small>Prévisualisation statique — lancez la démo ci-dessous</small>
+                    <img src="/img/preview-map.webp" alt="Carte Vélo Paris – aperçu statique" loading="lazy" />
                   </div>
                 </div>
 
                 <ul className="text-muted" style={{ margin: "12px 0 0", paddingLeft: 18 }}>
-                  <li>MAE baseline vs modèle, par station et par segments.</li>
-                  <li>Défaut tolérant : trous comblés, horodatage strict, NaN sûrs.</li>
+                  <li>MAE vs baseline persistance — par station et tranche horaire.</li>
+                  <li>Exports JSON réutilisables : kpis, maps, résidus, calibration, importance features.</li>
                 </ul>
               </aside>
             </div>
@@ -597,62 +576,90 @@ export default function LandingPage() {
                 <div>
                   <h2 id="demo-title">Démo en direct</h2>
                   <p>
-                    Application React embarquée : carte en direct, recherche de stations, et prévisions à +15 minutes. Le
-                    premier accès peut prendre quelques secondes (cold start Cloud Run).
+                    Application React embarquée : carte en direct, recherche de stations, et prévisions à +15 minutes.
+                    Le premier accès peut prendre quelques secondes (cold start Cloud Run).
                   </p>
                 </div>
-                <div>
-                  <span className="kbd" aria-hidden="true">Alt</span> +{" "}
-                  <span className="kbd" aria-hidden="true">Clique</span>{" "}
-                  <span className="sr-only">Astuce :</span> pour plein écran
+                <div className="actions-row" style={{ gap: "0.5rem" }}>
+                  {!demoLaunched ? (
+                    <button className="btn" type="button" onClick={handleLaunch} aria-label="Lancer la démo">
+                      Lancer la démo
+                    </button>
+                  ) : (
+                    <>
+                      <button className="btn" type="button" onClick={handleEnterFullscreen} aria-label="Plein écran">
+                        Plein écran
+                      </button>
+                      <button className="btn outline" type="button" onClick={handleReload} aria-label="Recharger la démo">
+                        Recharger
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
-              <div className="embed" aria-live="polite">
-                <div className="skeleton" id="skeleton" ref={demoSkeletonRef}>
-                  Initialisation de la démo…
-                </div>
+              {/* Wrapper en plein écran (inclut l’iframe + la croix) */}
+              <div className="embed" aria-live="polite" ref={embedWrapRef} style={{ position: "relative" }}>
+                {isFullscreen && (
+                  <button
+                    type="button"
+                    onClick={handleExitFullscreen}
+                    aria-label="Quitter le plein écran"
+                    title="Quitter le plein écran"
+                    style={{
+                      position: "absolute",
+                      top: 8,
+                      right: 8,
+                      zIndex: 3,
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "6px 10px",
+                      background: "var(--panel, rgba(0,0,0,.6))",
+                      color: "var(--text, #fff)",
+                      cursor: "pointer",
+                      lineHeight: 1,
+                    }}
+                  >
+                    ×
+                  </button>
+                )}
+
+                {showSkeleton && (
+                  <div
+                    className="skeleton"
+                    id="skeleton"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                    style={{ position: "absolute", inset: 0 }}
+                  >
+                    {demoLaunched ? "Initialisation de la démo…" : "Cliquez sur « Lancer la démo » pour démarrer"}
+                  </div>
+                )}
+
                 <iframe
                   ref={demoIframeRef}
-                  title="Vélib’ Forecast — Application"
-                  src="http://localhost:3000/app"
+                  title="Vélo Paris — Application"
+                  src={demoLaunched ? "/app/embed" : ""}
                   loading="lazy"
                   allow="fullscreen; clipboard-read; clipboard-write"
                   referrerPolicy="no-referrer-when-downgrade"
+                  aria-hidden={demoLaunched ? undefined : true}
                 />
-                <button
-                  className="btn btn-fs"
-                  type="button"
-                  onClick={handleFullscreen}
-                  aria-label="Plein écran"
-                >
-                  Plein écran
-                </button>
               </div>
 
+              {/* Actions sous le frame */}
               <div className="actions-row">
-                <a
-                  className="btn"
-                  href="http://localhost:3000/app"
-                  target="_blank"
-                  rel="noopener"
-                >
-                  Ouvrir dans un onglet
-                </a>
-                <button className="btn outline" type="button" onClick={handleReload}>
-                  Recharger la démo
-                </button>
-                <a className="btn outline" href="#features">
-                  Découvrir les fonctions
-                </a>
+                <a className="btn" href="/app" target="_blank" rel="noopener">Ouvrir dans un onglet</a>
+                <a className="btn outline" href="#features">Découvrir les fonctions</a>
               </div>
 
               <div className="glass prose mt-2">
                 <h3>Pourquoi c’est fluide ?</h3>
                 <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                  <li>Préchargement DNS et connexions persistantes.</li>
-                  <li>Découpage UI, caches navigateur et CDN.</li>
-                  <li>Metrics RUM pour piloter l’expérience réelle.</li>
+                  <li>Cloud Run UI/API séparés, connexions keep-alive et caches HTTP.</li>
+                  <li>Préchargement DNS, lazy-loading et fragmentation maîtrisée.</li>
+                  <li>RUM (web-vitals) & métriques UX pour piloter l’expérience perçue.</li>
                 </ul>
               </div>
             </div>
@@ -663,15 +670,10 @@ export default function LandingPage() {
             <div className="container">
               <div className="sec-head">
                 <div>
-                  <h2 id="features-title">Plein usage, du matin au soir</h2>
-                  <p>
-                    Repérez les stations utiles, visualisez l’évolution à +15 min, comparez à la médiane, puis basculez en
-                    mode monitoring si besoin.
-                  </p>
+                  <h2 id="features-title">Du live à la décision</h2>
+                  <p>Repérez les stations utiles, anticipez à +15/+60, comparez à l’historique, basculez en monitoring.</p>
                 </div>
-                <a className="btn outline" href="#demo">
-                  Essayer maintenant
-                </a>
+                <a className="btn outline" href="/app">Essayer maintenant</a>
               </div>
 
               <div className="features">
@@ -682,10 +684,7 @@ export default function LandingPage() {
                     </svg>
                   </div>
                   <h3>Carte lisible & rapide</h3>
-                  <p>
-                    Couleurs travaillées, légende compacte, recherche instantanée, focus quartier. Affichage pensé pour 1–2
-                    infos clés par station (vélos/capacité + tendance).
-                  </p>
+                  <p>Couleurs sobres, étiquettes claires, clustering équilibré, recherche instantanée et focus proximité.</p>
                 </article>
 
                 <article className="feature">
@@ -695,11 +694,8 @@ export default function LandingPage() {
                       <path d="M12 7v6l4 2" stroke="currentColor" strokeWidth="2" />
                     </svg>
                   </div>
-                  <h3>Prévisions à +15 min</h3>
-                  <p>
-                    Modèle entraîné sur l’historique et enrichi météo (vents, pluie, saisonnalités). Calibrage par segments
-                    horaires et stations pour limiter les biais.
-                  </p>
+                  <h3>Prévisions +15/+60</h3>
+                  <p>LightGBM avec features calendrier/météo, calibration légère et segments horaires pour limiter les biais.</p>
                 </article>
 
                 <article className="feature">
@@ -710,10 +706,7 @@ export default function LandingPage() {
                     </svg>
                   </div>
                   <h3>Comparaisons utiles</h3>
-                  <p>
-                    “Aujourd’hui vs médiane” et profils horaires par station pour comprendre les dynamiques locales (heures
-                    de pointe, zones de reports, anomalies).
-                  </p>
+                  <p>“Aujourd’hui vs médiane” et profils horaires par station pour comprendre les dynamiques locales.</p>
                 </article>
 
                 <article className="feature">
@@ -724,10 +717,7 @@ export default function LandingPage() {
                     </svg>
                   </div>
                   <h3>Monitoring intégré</h3>
-                  <p>
-                    KPIs fraîcheur/complétude, alertes simples (saturation/pénurie), suivi de stabilité des features — pour
-                    des décisions fiables.
-                  </p>
+                  <p>KPIs fraîcheur/complétude, dérive simple (PSI), résidus, QQ/ACF, calibration & incertitude.</p>
                 </article>
 
                 <article className="feature">
@@ -737,10 +727,10 @@ export default function LandingPage() {
                       <path d="M3 3v6M3 3h6M21 21v-6M21 21h-6" stroke="currentColor" strokeWidth="2" />
                     </svg>
                   </div>
-                  <h3>Accessible partout</h3>
+                  <h3>Intégrable partout</h3>
                   <p>
-                    Un simple <code>&lt;iframe&gt;</code> suffit (Cloud Run, proxy, sous-domaine), avec thème auto
-                    (clair/sombre) et navigation clavier.
+                    Un simple <code>&lt;iframe&gt;</code> suffit (sous-domaine/app proxy). Thème auto (clair/sombre), navigation
+                    clavier, CORS & headers sûrs.
                   </p>
                 </article>
 
@@ -751,18 +741,16 @@ export default function LandingPage() {
                     </svg>
                   </div>
                   <h3>Pensé pour évoluer</h3>
-                  <p>
-                    Code modulaire : nouveaux horizons (T+60), nouvelles villes, nouvelles sources — sans refonte complète.
-                  </p>
+                  <p>Nouveaux horizons, nouvelles villes, nouvelles sources — sans refonte : pipeline modulaire & contrats JSON.</p>
                 </article>
               </div>
 
               <div className="glass prose mt-2">
                 <h3>Cas d’usage rapides</h3>
                 <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                  <li>Communication et info voyageurs : carte intégrée à un site de quartier/entreprise.</li>
-                  <li>Immobilier/événementiel : repérer les zones sous- ou sur-servies à l’instant T.</li>
-                  <li>Mobilité individuelle : planifier un trajet avec station d’arrivée fiable.</li>
+                  <li>Info voyageurs (entreprises/quartiers) : carte intégrée.</li>
+                  <li>Immobilier/événementiel : repérer zones sous-/sur-servies.</li>
+                  <li>Mobilité individuelle : planifier avec station d’arrivée fiable.</li>
                 </ul>
               </div>
             </div>
@@ -773,61 +761,62 @@ export default function LandingPage() {
             <div className="container">
               <div className="sec-head">
                 <div>
-                  <h2 id="monitoring-title">Monitoring & Qualité des données</h2>
+                  <h2 id="monitoring-title">Monitoring & Qualité (data + modèle)</h2>
                   <p>
-                    Surveille en continu la fraîcheur, la couverture et les anomalies pour préserver la fiabilité des
-                    prévisions. Export des KPIs en JSON pour alimenter d’autres vues.
+                    Exports JSON versionnés sur Cloud Storage : kpis.json, snapshot_map.json, station_health.json,
+                    drift_summary.json, residuals.json, calibration.json, uncertainty.json, feature_importance.json…
                   </p>
                 </div>
-                <a className="btn outline" href="#faq">
-                  En savoir plus
-                </a>
+                <a className="btn outline" href="/monitoring">Ouvrir le monitoring</a>
               </div>
 
               <div className="showcase">
+                {/* === Grand cadre : carte Snapshot réseau (live) === */}
                 <figure className="card">
                   <figcaption className="cap">
-                    <strong>Data Health Dashboard</strong>
-                    <span>Détails techniques & KPIs</span>
+                    <strong>Snapshot réseau (live)</strong>
+                    <span>Carte instantanée pénurie / saturation</span>
                   </figcaption>
-                  <div className="ratio">
-                    <small>Prévisualisation — insérez vos captures générées</small>
+                  <div style={{ width: "100%", height: 360, borderRadius: 12, overflow: "hidden" }}>
+                    {snapMap?.rows?.length ? (
+                      <SnapshotMap rows={snapMap.rows} />
+                    ) : (
+                      <div className="empty" style={{ height: "100%", display: "grid", placeItems: "center" }}>
+                        Snapshot indisponible.
+                      </div>
+                    )}
                   </div>
                 </figure>
 
                 <div className="kpi-row">
                   <figure className="card">
                     <figcaption className="cap">
-                      <strong>Fraîcheur</strong>
-                      <span>Objectif ≤ 5 min</span>
+                      <strong>Explainability</strong>
+                      <span>Résidus, QQ, ACF, calibration</span>
                     </figcaption>
                     <div className="ratio" />
                   </figure>
                   <figure className="card">
                     <figcaption className="cap">
-                      <strong>Complétude</strong>
-                      <span>Stations × heures</span>
+                      <strong>Performance</strong>
+                      <span>MAE/WAPE vs baseline</span>
                     </figcaption>
                     <div className="ratio" />
                   </figure>
                 </div>
               </div>
 
+              <div className="figure-note small" style={{ marginTop: 8 }}>
+                Basemap : Carto Light (no labels). Rouge = pénurie ; Bleu = saturation ; Vert = OK. Taille ∝ √(bikes).
+              </div>
+
               <div className="glass prose mt-2">
                 <h3>Ce que l’on suit</h3>
                 <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                  <li>
-                    <strong>Freshness</strong> : p50/p95, hors-plage, trous de capture.
-                  </li>
-                  <li>
-                    <strong>Coverage</strong> : % lignes valides, champs critiques, NaN sûrs.
-                  </li>
-                  <li>
-                    <strong>Stability</strong> : dérive simple (KS/PSI) sur features clés.
-                  </li>
-                  <li>
-                    <strong>Alerts</strong> : pénurie/saturation anormales, outliers horaires.
-                  </li>
+                  <li><strong>Freshness</strong> : p50/p95, trous, hors-plage.</li>
+                  <li><strong>Coverage</strong> : % lignes valides, champs critiques, NaN sûrs.</li>
+                  <li><strong>Stability</strong> : dérive simple (PSI/KS) sur features clés.</li>
+                  <li><strong>Alerts</strong> : pénurie/saturation anormales, outliers horaires.</li>
                 </ul>
               </div>
             </div>
@@ -839,58 +828,73 @@ export default function LandingPage() {
               <div className="sec-head">
                 <div>
                   <h2 id="how-title">Sous le capot</h2>
-                  <p>
-                    Un pipeline robuste de l’ingestion à la mise en prod, avec des composants simples à maintenir et des
-                    points de contrôle clairs.
-                  </p>
+                  <p>Pipeline reproductible, artefacts versionnés, UI et API découplées.</p>
                 </div>
               </div>
 
               <div className="steps" role="list">
                 <div className="step" role="listitem">
                   <span className="chip">1 · Ingestion</span>
-                  <strong>GBFS → Cloud Storage</strong>
-                  <p>Snapshots toutes les 5 minutes, consolidation journalière, schéma strict.</p>
+                  <strong>GBFS → Cloud Storage (bronze)</strong>
+                  <p>Snapshots toutes 5 min, parquet 5-min, compactage journalier, schéma strict station_id+tbin.</p>
                   <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
-                    <li>Parquet shardé (daily/weekly) pour IO efficaces.</li>
-                    <li>Clés station_id + tbin_utc, zones horaires UTC/locale.</li>
+                    <li>Organisation GCS : <code>velib/daily</code>, <code>velib/exports</code>, <code>velib/monitoring</code>.</li>
+                    <li>Nettoyage NaN/Inf et timestamps sûrs (UTC/local).</li>
                   </ul>
                 </div>
                 <div className="step" role="listitem">
                   <span className="chip">2 · Enrichissement</span>
                   <strong>Features calendrier & météo</strong>
-                  <p>Jour/semaine, vacances, sin/cos horaires, pluie/vent.</p>
+                  <p>Sin/cos horaires, jours/semaine/vacances, lags & rollings (1–4 h), tendances & ratios.</p>
                   <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
-                    <li>Rollings (lags, fenêtres 1–4 h) et indicateurs de tendance.</li>
-                    <li>Sanitization JSON (NaN→null) pour APIs propres.</li>
+                    <li>Exports JSON prêts-API (sanitization NaN→null).</li>
+                    <li>Contrats de schéma versionnés.</li>
                   </ul>
                 </div>
                 <div className="step" role="listitem">
                   <span className="chip">3 · Modélisation</span>
-                  <strong>LightGBM (T+15)</strong>
-                  <p>Évaluation MAE/WAPE vs baseline persistance par segments.</p>
+                  <strong>LightGBM (h15/h60)</strong>
+                  <p>Évaluation MAE/WAPE vs baseline persistance, calibration légère, Optuna HPO (GPU Kaggle).</p>
                   <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
-                    <li>Calibration légère, contrôle des sur-/sous-estimations.</li>
-                    <li>Artifacts versionnés (joblib) et manifest JSON.</li>
+                    <li>Artefacts <code>.joblib</code> versionnés (latest + timestamps).</li>
+                    <li>Manifests & métriques au format JSON.</li>
                   </ul>
                 </div>
                 <div className="step" role="listitem">
-                  <span className="chip">4 · App & Docs</span>
-                  <strong>Next.js + APIs</strong>
-                  <p>Carte interactive, pages Réseau/Modèle/Monitoring/Data.</p>
+                  <span className="chip">4 · API</span>
+                  <strong>FastAPI (Cloud Run)</strong>
+                  <p>Endpoints stations/prévisions/monitoring, ETag/Last-Modified, TTLs et <code>/latest</code> vs <code>?at=</code>.</p>
                   <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
-                    <li>Déploiement Cloud Run, CORS maîtrisé, headers sûrs.</li>
-                    <li>Static props + lazy pour une UX perçue plus rapide.</li>
+                    <li>CORS limité, headers de sécurité, health checks <code>/ready</code>.</li>
+                    <li>Réponses JSON compactes & cacheables.</li>
+                  </ul>
+                </div>
+                <div className="step" role="listitem">
+                  <span className="chip">5 · UI</span>
+                  <strong>Next.js</strong>
+                  <p>Pages App/Monitoring (Leaflet/Plotly), thème auto, UX responsive, animations respect RDM.</p>
+                  <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
+                    <li>Composants : KPI bars, nav sticky, cartes/graphes, tables triables.</li>
+                    <li>Perf : lazy, suspense, préconnect/prefetch ciblés.</li>
+                  </ul>
+                </div>
+                <div className="step" role="listitem">
+                  <span className="chip">6 · Jobs</span>
+                  <strong>Cloud Run Jobs</strong>
+                  <p>Jobs Python (build_*), logs Cloud Build, env vars explicites, mémoire/CPU/timeout adaptés.</p>
+                  <ul className="text-muted" style={{ marginTop: 8, paddingLeft: 18 }}>
+                    <li>Images dédiées (pipeline/api/ui) via Artifact Registry.</li>
+                    <li>Exports versionnés sous <code>monitoring/*/latest</code> + datés.</li>
                   </ul>
                 </div>
               </div>
 
               <div className="glass prose mt-2">
-                <h3>Pourquoi c’est fiable ?</h3>
+                <h3>Fiabilité</h3>
                 <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                  <li>Tests unitaires sur parsing/horodatage et contrats de schéma.</li>
-                  <li>Nettoyage systématique des valeurs infinies/NaN avant export.</li>
-                  <li>Monitoring indépendant et exports JSON réutilisables.</li>
+                  <li>Contrats de schéma + tests parsing/horodatage.</li>
+                  <li>Sanitization systématique (NaN→null, bornes, types).</li>
+                  <li>Monitoring indépendant et réutilisable (JSON-first).</li>
                 </ul>
               </div>
             </div>
@@ -906,54 +910,46 @@ export default function LandingPage() {
 
                 <details>
                   <summary>La démo met quelques secondes à démarrer, normal ?</summary>
-                  <p>
-                    Oui, c’est le cold start de Cloud Run. Les accès suivants sont instantanés. Vous pouvez configurer une
-                    instance minimum pour éviter ce délai.
-                  </p>
+                  <p>Oui : cold start Cloud Run. Une instance minimale supprime le délai.</p>
                 </details>
 
                 <details>
                   <summary>Puis-je intégrer l’app dans mon site ?</summary>
                   <p>
-                    Oui, via un simple <code>&lt;iframe&gt;</code>. La page gère le responsive, le thème clair/sombre et la
-                    navigation clavier.
+                    Oui, via un simple <code>&lt;iframe&gt;</code>. Responsive, thème clair/sombre, navigation clavier et
+                    headers de sécurité compatibles.
                   </p>
                 </details>
 
                 <details>
                   <summary>Comment sont calculées les prévisions ?</summary>
                   <p>
-                    Entraînement station-par-station avec signaux calendrier/météo. Une baseline de persistance permet de
-                    mesurer l’amélioration réelle et d’éviter les gains artificiels.
+                    Modèles LightGBM avec signaux calendrier/météo, lissages et calibration. Baseline persistance pour
+                    mesurer le vrai gain (MAE/WAPE).
                   </p>
                 </details>
 
                 <details>
                   <summary>Et la qualité des données ?</summary>
                   <p>
-                    Contrôles de fraîcheur (p50/p95), complétude des champs critiques, dérive simple des features, et
-                    alertes sur pénurie/saturation. Exports JSON pour vos propres tableaux de bord.
+                    KPIs fraîcheur/complétude, dérive simple (PSI/KS), résidus & calibration. Exports JSON pour vos
+                    tableaux de bord.
                   </p>
                 </details>
               </div>
 
               <aside className="glass prose">
-                <h3>Intégration Cloud Run</h3>
-                <p className="text-muted">Remplacez l’URL ci-dessous par l’endpoint public de votre service.</p>
-                <pre>
-                  <code>{`<iframe
-  src="https://velib-ui-160046094975.europe-west1.run.app/"
-  width="100%" height="68vh" style="border:0"
-  allow="fullscreen"></iframe>`}</code>
+                <h3>Intégration (Cloud Run)</h3>
+                <p className="text-muted">
+                  Intégrez la carte directement dans votre site avec un simple iframe&nbsp;:
+                </p>
+                <pre style={{ whiteSpace: "pre", overflowX: "auto" }}>
+                  <code>{`<iframe src="https://velo-paris.fr/app/embed" width="100%" height="68svh" style="border:0"></iframe>`}</code>
                 </pre>
                 <p className="text-muted" style={{ fontSize: ".95rem" }}>
-                  Vous pouvez aussi placer l’app derrière un sous-domaine (ex. <em>app.votredomaine.fr</em>), avec un
-                  enregistrement CNAME et des headers de sécurité adaptés.
+                  Vous pouvez aussi héberger l’app sur un sous-domaine dédié
+                  (<em>app.votredomaine.fr</em>) via Cloud Run ou Netlify.
                 </p>
-                <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                  <li>CORS restreint, CSP stricte, cookies “None; Secure”.</li>
-                  <li>Build reproductible, image minimale, endpoint de santé /ready.</li>
-                </ul>
               </aside>
             </div>
           </section>
@@ -965,8 +961,8 @@ export default function LandingPage() {
                 <div>
                   <h2 id="support-title">Soutenir le projet</h2>
                   <p>
-                    Ce projet est développé et maintenu indépendamment pour proposer une expérience fluide de la mobilité à
-                    Paris. Votre soutien permet de couvrir l’hébergement, la supervision et le temps de R&D.
+                    Projet indépendant pour une expérience de mobilité fluide à Paris. Votre soutien couvre hébergement,
+                    supervision et R&D continue.
                   </p>
                 </div>
               </div>
@@ -977,63 +973,84 @@ export default function LandingPage() {
                   <h3>À propos</h3>
                   <p className="text-muted">
                     Je m’appelle <strong>Adrien</strong>, ingénieur en mathématiques appliquées spécialisé en analyse,
-                    modélisation statistique et machine learning. J’aime transformer des données réelles en outils utiles,
-                    fiables et élégants – ici, pour anticiper la disponibilité des vélos en ville.
+                    modélisation statistique et machine learning. Je conçois des outils utiles, fiables et élégants — ici
+                    pour anticiper la disponibilité des vélos en ville.
                   </p>
                   <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                    <li>Pipeline temps réel (GBFS + météo) et modèles LightGBM.</li>
-                    <li>App Next.js avec carte interactive et monitoring dédié.</li>
-                    <li>Hébergement sur Cloud Run, coûts optimisés.</li>
+                    <li>Pipeline temps réel (GBFS + météo) → Cloud Storage.</li>
+                    <li>Modèles LightGBM (h15/h60) & monitoring JSON-first.</li>
+                    <li>App Next.js (Leaflet/Plotly) déployée sur Cloud Run.</li>
                   </ul>
                   <p className="text-muted" style={{ fontSize: ".95rem" }}>
-                    Vous pouvez contribuer une fois, vous abonner mensuellement, ou devenir sponsor. Merci 🙏
+                    Contribuez une fois, abonnez-vous mensuellement, ou devenez sponsor. Merci 🙏
                   </p>
                 </article>
 
                 {/* Cartes de paiement */}
                 <div className="support-cards">
+                  {/* Don unique */}
                   <figure className="card">
                     <figcaption className="cap">
-                      <strong>Don unique</strong>
-                      <span>Rapide et sans compte</span>
+                      <strong>Contributions uniques</strong>
+                      <span>Rapides et sans compte</span>
                     </figcaption>
-                    <div className="ratio" />
-                    <div className="actions-row">
-                      <a className="btn" href={SUPPORT_ONE_TIME} target="_blank" rel="noopener">
-                        Contribuer une fois
-                      </a>
 
-                      {/* BOUTON KO-FI BRANCHÉ SUR LE WIDGET */}
-                      <button
-                        className="btn outline"
-                        type="button"
-                        onClick={openKoFi}
-                        aria-label="Soutenez-moi sur Ko-fi"
-                      >
-                        Ko-fi
-                      </button>
+                    <img
+                      src="/img/velo-paris-red.png"
+                      alt="Vélo rouge souriant — dons Vélo Paris"
+                      width={400}
+                      height={400}
+                      style={{
+                        borderRadius: "var(--radius-md)",
+                        boxShadow: "0 4px 18px rgba(0,0,0,0.25)",
+                        background: "var(--panel)",
+                      }}
+                    />
+
+                    <div className="actions-row" style={{ flexWrap: "wrap", gap: "0.5rem", marginTop: "0.75rem" }}>
+                      <a className="btn" href={STRIPE_DON_5} target="_blank" rel="noopener">
+                        5 €
+                      </a>
+                      <a className="btn outline" href={STRIPE_DON_10} target="_blank" rel="noopener">
+                        10 €
+                      </a>
+                      <a className="btn outline" href={STRIPE_DON_20} target="_blank" rel="noopener">
+                        20 €
+                      </a>
                     </div>
+
                     <small className="text-muted" style={{ display: "block", marginTop: 8 }}>
-                      Géré par Stripe/Ko-fi. Les frais de plateforme s’appliquent.
+                      Géré par Stripe. Paiement sécurisé sans création de compte.
                     </small>
                   </figure>
 
+                  {/* Abonnement mensuel */}
                   <figure className="card">
                     <figcaption className="cap">
-                      <strong>Mensuel</strong>
-                      <span>Annulable à tout moment</span>
+                      <strong>Soutien mensuel</strong>
+                      <span>5 €/mois – annulable à tout moment</span>
                     </figcaption>
-                    <div className="ratio" />
-                    <div className="actions-row">
-                      <a className="btn" href={SUPPORT_MONTHLY} target="_blank" rel="noopener">
-                        Soutien mensuel
-                      </a>
-                      <a className="btn outline" href={SUPPORT_SPONSORS} target="_blank" rel="noopener">
-                        GitHub Sponsors
+
+                    <img
+                      src="/img/velo-paris-blue.png"
+                      alt="Vélo bleu souriant — abonnement Vélo Paris"
+                      width={400}
+                      height={400}
+                      style={{
+                        borderRadius: "var(--radius-md)",
+                        boxShadow: "0 4px 18px rgba(0,0,0,0.25)",
+                        background: "var(--panel)",
+                      }}
+                    />
+
+                    <div className="actions-row" style={{ marginTop: "0.75rem" }}>
+                      <a className="btn" href={STRIPE_MONTHLY_5} target="_blank" rel="noopener">
+                        S’abonner
                       </a>
                     </div>
+
                     <small className="text-muted" style={{ display: "block", marginTop: 8 }}>
-                      Abonnements sécurisés. Reçus automatiques par e-mail.
+                      Abonnements gérés par Stripe. Reçus automatiques par e-mail.
                     </small>
                   </figure>
                 </div>
@@ -1044,14 +1061,12 @@ export default function LandingPage() {
                 <h3>Transparence & contact</h3>
                 <ul className="text-muted" style={{ paddingLeft: 18 }}>
                   <li>Les contributions financent l’hébergement, la supervision et l’amélioration continue.</li>
-                  <li>Pas de contreparties fiscales particulières (don non-déductible), sauf mention contraire.</li>
+                  <li>Pas de déduction fiscale (sauf mention contraire).</li>
                   <li>
                     Besoin d’un reçu, d’une facture ou d’un partenariat ? Écrivez-moi : <em>contact@votredomaine.fr</em>.
                   </li>
                 </ul>
-                <p className="small muted" style={{ marginTop: 8 }}>
-                  © {year} • Vélib’ Forecast Paris
-                </p>
+                <p className="small muted" style={{ marginTop: 8 }}>© {year} • Vélo Paris</p>
               </div>
             </div>
           </section>
@@ -1063,3 +1078,102 @@ export default function LandingPage() {
     </>
   );
 }
+
+/* ───────────────────────── Mini Map (snapshot) ───────────────────────── */
+type MapRow = OverviewSnapshotMap["rows"][number];
+
+const SnapshotMap = dynamic(async () => {
+  const RL = await import("react-leaflet");
+  const { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } = RL as any;
+  const { useEffect, useMemo, useState } = await import("react");
+
+  function FitBounds({ rows }: { rows: MapRow[] }) {
+    const map = useMap();
+    useEffect(() => {
+      const pts = rows.filter(
+        (r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon))
+      );
+      if (!pts.length) return;
+      let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+      for (const r of pts) {
+        const la = Number(r.lat), lo = Number(r.lon);
+        if (la < minLat) minLat = la;
+        if (la > maxLat) maxLat = la;
+        if (lo < minLon) minLon = lo;
+        if (lo > maxLon) maxLon = lo;
+      }
+      if (minLat <= maxLat && minLon <= maxLon) {
+        map.fitBounds([[minLat, minLon], [maxLat, maxLon]], { padding: [20, 20] });
+      }
+    }, [rows, map]);
+    return null;
+  }
+
+  function MapInner({ rows }: { rows: MapRow[] }) {
+    const valid = useMemo(
+      () => rows.filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon))),
+      [rows]
+    );
+
+    const latMed = valid.length
+      ? valid.map((r) => Number(r.lat)).sort((a, b) => a - b)[Math.floor(valid.length / 2)]
+      : 48.8566;
+    const lonMed = valid.length
+      ? valid.map((r) => Number(r.lon)).sort((a, b) => a - b)[Math.floor(valid.length / 2)]
+      : 2.3522;
+
+    const [tileUrl, setTileUrl] = useState(
+      "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
+    );
+    useEffect(() => {
+      const img = new Image();
+      img.onerror = () => setTileUrl("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png");
+      img.src = "https://a.basemaps.cartocdn.com/light_nolabels/3/4/2.png";
+    }, []);
+
+    return (
+      <div style={{ position: "relative", width: "100%", height: "100%" }}>
+        <MapContainer center={[latMed, lonMed]} zoom={12} style={{ height: "100%", width: "100%", background: "#fff" }}>
+          <TileLayer
+            url={tileUrl}
+            attribution='&copy; OpenStreetMap, &copy; <a href="https://carto.com/">CARTO</a>'
+            detectRetina
+          />
+          <FitBounds rows={valid} />
+          {valid.map((r) => {
+            const pen = r.is_penury === 1;
+            const sat = r.is_saturation === 1;
+            const col = pen ? "#ef4444" : sat ? "#3b82f6" : "#10b981";
+            const rad = Math.max(3, Math.min(9, Math.sqrt(Math.max(0, Number(r.bikes ?? 0))) + (sat ? 2 : 0)));
+            return (
+              <CircleMarker
+                key={r.station_id}
+                center={[Number(r.lat), Number(r.lon)]}
+                radius={rad}
+                pathOptions={{ color: col, weight: 0.8, fillColor: col, fillOpacity: 0.85 }}
+              >
+                <Tooltip>
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <div><b>{r.name}</b></div>
+                    <div>bikes: {Number.isFinite(Number(r.bikes)) ? Number(r.bikes) : "?"}</div>
+                    <div>docks: {Number.isFinite(Number(r.docks_avail)) ? Number(r.docks_avail) : "?"}</div>
+                    {pen && <div style={{ color: "#ef4444" }}>pénurie</div>}
+                    {sat && <div style={{ color: "#3b82f6" }}>saturation</div>}
+                    <a
+                      href={`/monitoring/network/dynamics?station_id=${encodeURIComponent(r.station_id)}`}
+                      style={{ textDecoration: "underline" }}
+                    >
+                      Voir la dynamique →
+                    </a>
+                  </div>
+                </Tooltip>
+              </CircleMarker>
+            );
+          })}
+        </MapContainer>
+      </div>
+    );
+  }
+
+  return MapInner;
+}, { ssr: false });

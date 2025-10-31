@@ -4,6 +4,9 @@ import { useMap } from 'react-leaflet'
 import type { Station, Forecast } from '@/lib/types/types'
 import type * as LType from 'leaflet'
 
+import 'leaflet.markercluster/dist/MarkerCluster.css'
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
+
 /* Leaflet côté client uniquement */
 let L: typeof import('leaflet') | null = null
 if (typeof window !== 'undefined') {
@@ -11,7 +14,7 @@ if (typeof window !== 'undefined') {
   L = require('leaflet') as typeof import('leaflet')
 }
 
-/* Dynamic imports (SSR-safe) */
+/* Dynamic imports */
 const MapContainer       = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false })
 const TileLayer          = dynamic(() => import('react-leaflet').then(m => m.TileLayer), { ssr: false })
 const Marker             = dynamic(() => import('react-leaflet').then(m => m.Marker), { ssr: false })
@@ -28,7 +31,7 @@ export type MapViewProps = {
   setMapInstance?: (m: LType.Map) => void
 }
 
-/* ───────────────── helpers ───────────────── */
+/* ───────── helpers ───────── */
 
 const toNum = (x: unknown, def = 0) => {
   const n = Number(x)
@@ -59,7 +62,7 @@ const makeDivIcon = (html: string, size: [number, number], anchor: [number, numb
 const getPred = (f?: Forecast | any): number =>
   Math.max(0, Math.round(toNum(f?.bikes_pred_int ?? f?.bikes_pred, 0)))
 
-/* ───────────────── sub-components ───────────────── */
+/* ───────── Sub-components ───────── */
 
 function MapInstanceBridge({ setMapInstance }: { setMapInstance?: (m: LType.Map) => void }) {
   const map = useMap()
@@ -86,7 +89,7 @@ function MapLocateControl({ userPos }: { userPos?: [number, number] | null }) {
   )
 }
 
-/* ───────────────── main component ───────────────── */
+/* ───────── Main component ───────── */
 
 export default function MapView({ stations, forecast, mode, center, userPos, setMapInstance }: MapViewProps) {
   const [isMobile, setIsMobile] = useState(false)
@@ -127,12 +130,14 @@ export default function MapView({ stations, forecast, mode, center, userPos, set
       const current = Math.max(0, Math.round(toNum((s as any).num_bikes_available, 0)))
       const pred    = getPred(f)
       const value   = mode === 'current' ? current : pred
+
       const cap = Math.max(1, Math.round(toNum((s as any).capacity, 0)))
       const occ = value / cap
       const colRing = ringColor(occ)
       const deg     = Math.min(360, Math.max(0, occ * 360))
       const size    = 44
 
+      // ✅ ROND ORIGINAL INTACT
       const iconHtml = `
         <div style="position:relative;width:${size}px;height:${size}px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.25));">
           <div style="width:100%;height:100%;border-radius:50%;
@@ -152,33 +157,17 @@ export default function MapView({ stations, forecast, mode, center, userPos, set
 
       const divIcon =
         makeDivIcon(iconHtml, [size, size + 12], [size / 2, size + 12]) ??
-        makeDivIcon(
-          `<div style="font:700 12px/1 Inter;color:#111;background:#fff;border:1px solid #ddd;border-radius:8px;padding:2px 6px">${value}</div>`,
-          [28, 18],
-          [14, 9]
-        )
+        makeDivIcon(`<div style="font:700 12px/1 Inter;color:#111;background:#fff;border:1px solid #ddd;border-radius:8px;padding:2px 6px">${value}</div>`, [28, 18], [14, 9])
 
-      const delta = pred - current
-      const deltaPct = cap > 0 ? ((pred - current) / cap) * 100 : 0
-      const deltaBadge =
-        Math.abs(deltaPct) < 0.5
-          ? `<span class="badge neutral">▬ 0%</span>`
-          : deltaPct > 0
-          ? `<span class="badge up">▲ ${deltaPct.toFixed(0)}%</span>`
-          : `<span class="badge down">▼ ${deltaPct.toFixed(0)}%</span>`
-
+      // ✅ Popup d’origine, juste sans Δ vélos
       const popupHtml = `
         <div class="popup-content">
           <div class="popup-title">${(s as any).name ?? (s as any).station_id}</div>
           <div class="popup-sub">#${String((s as any).station_id ?? '')}</div>
           <div class="popup-row">
             <span class="badge current">Actuel&nbsp;: <b>${current}</b> / ${cap}</span>
-            <span class="badge pred">Prévision T+15&nbsp;: <b>${pred}</b></span>
-            ${deltaBadge}
+            <span class="badge pred">Prévision&nbsp;: <b>${pred}</b></span>
           </div>
-          ${Number.isFinite(delta) && delta !== 0 ? `<div class="popup-delta ${delta >= 0 ? 'up' : 'down'}">
-            Δ vélos: <b>${delta >= 0 ? `+${delta}` : delta}</b>
-          </div>` : ''}
         </div>`
 
       return (
@@ -191,25 +180,32 @@ export default function MapView({ stations, forecast, mode, center, userPos, set
     })
   }, [stationsWithGeo, forecastById, mode])
 
+  // ✅ Clusters sobres (gris-bleu neutre)
   const clusterIcon = (cluster: any) => {
     const count = cluster.getChildCount()
-    const bg = count >= 100
-      ? 'linear-gradient(135deg, #ff6a00, #1d7fff)'
-      : count >= 50
-      ? 'linear-gradient(135deg, rgba(255,106,0,.8), rgba(29,127,255,.8))'
-      : 'linear-gradient(135deg, rgba(255,106,0,.6), rgba(29,127,255,.6))'
-    const s = count >= 100 ? 46 : count >= 50 ? 42 : count >= 20 ? 38 : 34
+    const s =
+      count >= 250 ? 50 :
+      count >= 100 ? 46 :
+      count >= 50  ? 42 :
+      count >= 20  ? 38 : 34
+    const fontPx = Math.floor(s * 0.42)
+
+    const html = `
+      <div style="
+        width:${s}px;height:${s}px;border-radius:999px;
+        display:flex;align-items:center;justify-content:center;
+        background:#1c2535;
+        border:1px solid rgba(255,255,255,.15);
+        box-shadow:0 3px 10px rgba(0,0,0,.3);
+        color:#e8ecf2;
+        font:800 ${fontPx}px/1 Inter, system-ui, sans-serif;
+      ">
+        ${count}
+      </div>`
 
     return (L as typeof import('leaflet')).divIcon({
-      html: `
-        <div style="
-          width:${s}px;height:${s}px;border-radius:50%;
-          background:${bg};color:#fff;display:flex;align-items:center;justify-content:center;
-          border:2px solid rgba(255,255,255,.85);font:700 ${Math.floor(s*0.42)}px/1 Inter,sans-serif;
-          box-shadow:0 6px 16px rgba(0,0,0,.25);">
-          ${count}
-        </div>`,
-      className: 'cluster-icon',
+      html,
+      className: 'cluster-icon cluster-icon--neutral',
       iconSize: [s, s],
     })
   }

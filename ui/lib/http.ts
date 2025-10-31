@@ -3,23 +3,22 @@
 
 /*─────────────────────────────── Base URL & Token ───────────────────────────────*/
 
-export const API_BASE = (
+// 👉 Nouvelle architecture :
+// - Le front n’appelle plus directement l’API externe
+// - Il passe par /api/proxy/* côté serveur (token privé injecté en backend)
+
+export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ||
   (process.env.NODE_ENV === "production"
     ? "https://velib-api-160046094975.europe-west1.run.app"
-    : "http://localhost:8081")
-).replace(/\/$/, "");
+    : "http://localhost:3000/api/proxy"); // ← proxy local
 
-export const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN || "";
 export const DEFAULT_TIMEOUT_MS = Number(
   process.env.NEXT_PUBLIC_HTTP_TIMEOUT_MS ?? "30000"
 ); // 30s par défaut
 
-// Debug logs (visible dans console navigateur)
 console.log("[http] API_BASE =", API_BASE);
 console.log("[http] timeout =", DEFAULT_TIMEOUT_MS, "ms");
-if (API_TOKEN) console.log("[http] using token (set)");
-else console.warn("[http] no API token defined");
 
 /*─────────────────────────────── Types & Helpers ───────────────────────────────*/
 
@@ -60,10 +59,7 @@ async function fetchWithRetry(input: RequestInfo, init: RequestInit, tries = 2) 
   try {
     return await fetch(input, init);
   } catch (e: any) {
-    if (
-      tries > 1 &&
-      (e?.name === "AbortError" || /aborted/i.test(String(e)))
-    ) {
+    if (tries > 1 && (e?.name === "AbortError" || /aborted/i.test(String(e)))) {
       console.warn("[http] retry after abort/timeout →", input);
       return fetchWithRetry(input, init, tries - 1);
     }
@@ -85,7 +81,6 @@ export async function json<T>(path: string, init: JsonInit = {}): Promise<T> {
       headers: {
         accept: "application/json",
         "Content-Type": "application/json",
-        ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
         ...(rest.headers || {}),
       },
       cache: noCache ? "no-store" : rest.cache,
@@ -127,7 +122,6 @@ export async function fetchJsonWithEtag<T>(
       headers: {
         accept: "application/json",
         "Content-Type": "application/json",
-        ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
         ...(prevEtag ? { "If-None-Match": prevEtag } : {}),
         ...(rest.headers || {}),
       },
@@ -145,7 +139,6 @@ export async function fetchJsonWithEtag<T>(
         headers: {
           accept: "application/json",
           "Content-Type": "application/json",
-          ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
           ...(rest.headers || {}),
         },
         cache: "no-store",

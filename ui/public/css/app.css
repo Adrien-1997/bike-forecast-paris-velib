@@ -137,7 +137,7 @@ body{ margin:0; color:var(--text); background:var(--bg); }
   box-shadow: inset 0 1px 0 var(--glass-ring);
 }
 
-/* Hover relief */
+/* Hover relief (conservé pour les conteneurs interactifs, pas pour les étiquettes) */
 @media (hover:hover){
   .panel:hover, .map-root:hover, .main > :first-child:hover{
     box-shadow: var(--glass-shadow-hover);
@@ -171,13 +171,9 @@ body{ margin:0; color:var(--text); background:var(--bg); }
   box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none;
   transition: transform .25s, box-shadow .25s, background .25s;
 }
-@media (hover:hover){
-  .kpi .card:hover{
-    transform: translateY(-2px);
-    box-shadow: var(--shadow);
-    background: rgba(255,255,255,.06);
-  }
-}
+/* >>> SUPPRIMÉ : aucun :hover sur .kpi .card <<< */
+/* .kpi .card:hover{ ... } */
+
 .kpi .card .small{ color:var(--muted); font-size:.82rem; }
 .kpi .card .val{ font-weight:900; font-size:1.25rem; }
 
@@ -188,13 +184,8 @@ body{ margin:0; color:var(--text); background:var(--bg); }
     border: 1px solid rgba(0,0,0,.08);
     box-shadow: none;
   }
-  @media (hover:hover){
-    .kpi .card:hover{
-      background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.78));
-      box-shadow: 0 10px 22px rgba(0,0,0,.10);
-      transform: translateY(-2px);
-    }
-  }
+  /* >>> SUPPRIMÉ : aucun :hover en light non plus <<< */
+  /* .kpi .card:hover{ ... } */
 }
 
 /* ---------- Liste “stations proches” ---------- */
@@ -210,15 +201,10 @@ h3.section-title{ margin:10px 0 4px; font-size:1rem; font-weight:800; letter-spa
   backdrop-filter:saturate(120%) blur(4px);
   -webkit-backdrop-filter:saturate(120%) blur(4px);
 }
-@media (hover:hover){
-  .list .row:hover{
-    transform:translateY(-1px);
-    box-shadow: var(--glass-shadow);
-    background:linear-gradient(180deg,
-      color-mix(in srgb, var(--glass-bg-1) 80%, transparent),
-      color-mix(in srgb, var(--glass-bg-2) 80%, transparent));
-  }
-}
+/* >>> SUPPRIMÉ : aucun :hover sur .list .row <<< */
+/* @media (hover:hover){
+  .list .row:hover{ ... }
+} */
 .list .row .small{ color:var(--muted); font-size:.82rem; }
 
 /* ---------- Contrôles Leaflet ---------- */
@@ -320,5 +306,28 @@ h3.section-title{ margin:10px 0 4px; font-size:1rem; font-weight:800; letter-spa
   }
   @supports (height: 1dvh){
     .main > :first-child{ height: 70dvh !important; }
+  }
+}
+
+
+/* ============================================
+   Popup badges — texte foncé même en thème sombre
+   ============================================ */
+.leaflet-popup-content .badge {
+  color: #111827 !important;   /* texte foncé lisible partout */
+  font-weight: 700;
+}
+
+.leaflet-popup-content .badge b {
+  color: #000000 !important;   /* chiffres bien visibles */
+}
+
+/* Empêche tout blanchiment hérité du dark mode */
+@media (prefers-color-scheme: dark) {
+  .leaflet-popup-content .badge,
+  .leaflet-popup-content .badge b {
+    color: #111827 !important;
+    text-shadow: none !important;
+    opacity: 1 !important;
   }
 }

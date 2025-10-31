@@ -132,4 +132,3 @@ export const getPerformanceStationTimeseries = (h: number, at?: string | null) =
   if (at) q.set("at", at);
   return fetchJsonWithEtag<StationTimeseries>(path(`/station_timeseries?${q.toString()}`));
 };
-

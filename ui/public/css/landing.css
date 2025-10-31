@@ -49,10 +49,7 @@ body::before{
   }
 }
 
-/* ======================= Light theme (forcé) =======================
-   Optionnel : ajoute data-theme="light" sur <html> OU .theme-light sur <body>
-   pour forcer le clair quel que soit le système.
-   =================================================================== */
+/* ======================= Light theme (forcé) ======================= */
 :root[data-theme="light"] html,
 :root[data-theme="light"] body,
 :root[data-theme="light"] body::before,
@@ -70,7 +67,7 @@ body::before{
   background-blend-mode: normal, normal, saturation, normal;
 }
 
-/* Variables (inchangées) */
+/* Variables */
 :root{
   --bg:#0b1220; --bg-soft:#111a2b;
   --panel:#0f172a; --panel-2:#0c1324;
@@ -275,7 +272,10 @@ section > .glass:not(:first-child){ margin-top: var(--g3); }
 * + .glass{ margin-top: var(--g3); }
 
 /* ---------------------- HERO ---------------------- */
-.hero{position:relative; padding:84px 0 34px; min-block-size: calc(100svh - var(--header-h) - var(--safe-top));}
+.hero{
+  position:relative; padding:84px 0 34px;
+  min-block-size: calc(100svh - var(--header-h) - var(--safe-top));
+}
 .hero-grid{display:grid; grid-template-columns:1.1fr .9fr; gap:var(--g6); align-items:center}
 .eyebrow{display:inline-flex; gap:.5rem; align-items:center; margin-bottom:.8rem}
 .eyebrow .ping{width:8px; height:8px; border-radius:50%; background:var(--ok); box-shadow:0 0 0 6px rgba(34,197,94,.15)}
@@ -290,6 +290,7 @@ section > .glass:not(:first-child){ margin-top: var(--g3); }
     var(--panel-2);
   backdrop-filter:saturate(150%) blur(14px);
   -webkit-backdrop-filter:saturate(150%) blur(14px);
+  line-height:0;                 /* <<< supprime l'espace baseline */
 }
 .embed:hover{ box-shadow:none; transform:none; }
 .embed .skeleton{
@@ -298,8 +299,18 @@ section > .glass:not(:first-child){ margin-top: var(--g3); }
   background-size:400% 100%; animation:shimmer 2.2s infinite; user-select:none; pointer-events:none
 }
 @keyframes shimmer{0%{background-position:0 0}100%{background-position:200% 0}}
-iframe{width:100%; height:68vh; min-height:380px; border:0; background:var(--panel)}
-.embed .btn-fs{position:absolute; right:14px; bottom:14px; z-index:2; padding:.6rem .85rem; border-radius:10px; opacity:.95}
+.embed > iframe{
+  display:block;                /* <<< évite le baseline gap */
+  width:100%;
+  height:68vh;
+  min-height:380px;
+  border:0;
+  background:var(--panel);
+}
+.embed .btn-fs{
+  position:absolute; right:14px; bottom:14px; z-index:2;
+  padding:.6rem .85rem; border-radius:10px; opacity:.95
+}
 
 /* Variante interactive si besoin */
 .embed.embed--interactive:hover{
@@ -402,7 +413,11 @@ details[open] summary::after{transform:rotate(-90deg)}
 
 /* ---------------------- TOOLTIPS / TOASTS ---------------------- */
 .tooltip{position:absolute; z-index:var(--z-tooltip); padding:.4rem .6rem; background:rgba(13,18,30,.95); color:#fff; border-radius:8px; font-size:.85rem; border:1px solid var(--border)}
-.toast{position:fixed; right:18px; bottom:calc(18px + var(--safe-bot)); z-index:var(--z-toast); padding:.8rem 1rem; border-radius:12px; background:rgba(13,18,30,.92); color:#fff; border:1px solid var(--border); box-shadow:var(--shadow)}
+.toast{
+  position:fixed; right:18px; bottom:calc(18px + var(--safe-bot));
+  z-index:var(--z-toast); padding:.8rem 1rem; border-radius:12px;
+  background:rgba(13,18,30,.92); color:#fff; border:1px solid var(--border); box-shadow:var(--shadow)
+}
 
 /* ---------------------- FOOTER ---------------------- */
 footer{padding:40px 0 calc(40px + var(--safe-bot)); border-top:1px solid var(--border); color:var(--muted)}
@@ -449,8 +464,8 @@ footer{padding:40px 0 calc(40px + var(--safe-bot)); border-top:1px solid var(--b
   .hero-grid,.grid-2{grid-template-columns:1fr}
   .features{grid-template-columns:repeat(2,1fr)}
   .steps{grid-template-columns:repeat(2,1fr)}
-  iframe{height:64vh}
-  .hero{ padding: 76px 0 28px; min-blocksize: calc(100svh - var(--header-h) - var(--safe-top)); }
+  .embed > iframe{height:64vh}
+  .hero{ padding: 76px 0 28px; min-block-size: calc(100svh - var(--header-h) - var(--safe-top)); }
   h1{ line-height: 1.06; }
   .lead{ max-width: 65ch; }
   .cta { gap: .6rem; }
@@ -465,7 +480,7 @@ footer{padding:40px 0 calc(40px + var(--safe-bot)); border-top:1px solid var(--b
   .steps{grid-template-columns:1fr}
   .hero{padding:72px 0 26px; min-block-size: calc(100svh - var(--header-h) - var(--safe-top) - 4vh);}
   .embed{margin-top:18px}
-  iframe{height:58vh; min-height:360px}
+  .embed > iframe{height:58vh; min-height:360px}
   section{ min-block-size: calc(100svh - var(--header-h) - var(--safe-top) - 4vh); }
 
   .nav { padding: 12px 0; }
@@ -474,7 +489,7 @@ footer{padding:40px 0 calc(40px + var(--safe-bot)); border-top:1px solid var(--b
 
 @media (max-width:520px){
   .btn{padding:.8rem 1rem}
-  iframe{height:54vh; min-height:300px}
+  .embed > iframe{height:54vh; min-height:300px}
   .sec-head{flex-direction:column; align-items:flex-start}
   body{ font-size: clamp(15px, 3.8vw, 16px); }
   h1{ font-size: clamp(26px, 8.2vw, 36px); }
@@ -619,7 +634,7 @@ footer{padding:40px 0 calc(40px + var(--safe-bot)); border-top:1px solid var(--b
   .kpi__label,.kpi__hint{color:#4b5563;}
 }
 
-/* ---------------------- Ajustement ciblé des blocs .glass.prose.mt-2 ---------------------- */
+/* Ajustement ciblé des blocs .glass.prose.mt-2 */
 section .container > .glass.prose.mt-2{
   margin-top: 34px !important;
 }
@@ -632,27 +647,19 @@ section .container > .glass.prose.mt-2{
 /* ---------------------- PRINT ---------------------- */
 @media print{
   body{background:#fff; color:#000; padding:0}
-  .embed, iframe{display:none !important}
+  .embed, .embed > iframe{display:none !important}
   .btn{border:1px solid #000; background:none; color:#000; box-shadow:none}
 }
 
-
 /* Neutralize continuous marquee when using discrete auto mode */
-.kpi-bar.kpi-bar--auto .kpi-track {
-  animation: none !important;
-}
+.kpi-bar.kpi-bar--auto .kpi-track { animation: none !important; }
 
-
-
-
-
-/* S'assure que le bouton est au-dessus du header sticky */
+/* Ko-fi overlay toujours au-dessus */
 .floatingchat-container {
   z-index: 10000 !important;
-  right: 20px !important;   /* position par défaut : bas-droite */
+  right: 20px !important;
   bottom: 20px !important;
 }
-
 @media (max-width: 640px) {
-  .floatingchat-container { bottom: 80px !important; } /* si bandeau cookie, etc. */
+  .floatingchat-container { bottom: 80px !important; }
 }

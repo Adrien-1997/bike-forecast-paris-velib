@@ -115,6 +115,26 @@ export default function MyApp({ Component, pageProps }: AppProps) {
     []
   );
 
+  // ─────────────────────────────────────────────────────────────
+  // NO-CHROME: désactive header/footer/halo pour les pages embarquées
+  // ─────────────────────────────────────────────────────────────
+  const [inFrame, setInFrame] = useState(false);
+  useEffect(() => {
+    try {
+      setInFrame(window.self !== window.top);
+    } catch {
+      setInFrame(true); // sandbox cross-origin
+    }
+  }, []);
+
+  const noChromeFlag = (Component as any)?.noChrome === true;
+  const viaQuery =
+    (router.query?.embed as string) === "1" ||
+    (router.query?.nochrome as string) === "1";
+  const isEmbedRoute = router.pathname === "/app/embed";
+
+  const noChrome = noChromeFlag || viaQuery || isEmbedRoute || inFrame;
+
   return (
     <>
       <Head>
@@ -138,13 +158,17 @@ export default function MyApp({ Component, pageProps }: AppProps) {
       </Head>
 
       <div className={ctx}>
-        {/* halo décoratif global — désactivé sur la landing pour laisser le fond défiler */}
-        {ctx !== "landing" && <div className="fx--page" aria-hidden="true" />}
+        {/* halo décoratif global — désactivé sur landing ET en mode noChrome */}
+        {ctx !== "landing" && !noChrome && (
+          <div className="fx--page" aria-hidden="true" />
+        )}
 
-        {/* Header / Footer globaux hors landing */}
-        {ctx !== "landing" && <GlobalHeader items={sharedHeaderItems} />}
+        {/* Header / Footer globaux hors landing, mais pas en noChrome */}
+        {ctx !== "landing" && !noChrome && (
+          <GlobalHeader items={sharedHeaderItems} />
+        )}
         <Component {...pageProps} />
-        {ctx !== "landing" && <GlobalFooter />}
+        {ctx !== "landing" && !noChrome && <GlobalFooter />}
       </div>
     </>
   );
