@@ -96,6 +96,8 @@ export default function MyApp({ Component, pageProps }: AppProps) {
     } else if (ctx === "app") {
       addCSS("/css/mapview.css");
       addCSS("/css/loadingbar.css");
+      addCSS("/css/switchtoggle.css"); // ✅ nouvelle feuille pour SwitchBar
+
     }
 
     return () => {

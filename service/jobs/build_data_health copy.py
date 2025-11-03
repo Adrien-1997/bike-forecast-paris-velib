@@ -3,26 +3,6 @@
 # =============================================================================
 # Vélib’ Forecast — Data Health (v1.5 “files-aware”)
 #
-# ▶ ENV HEADER UNIFIÉ (v1) — mêmes noms que les autres jobs
-#   - GCS_EXPORTS_PREFIX      (gs://.../velib/exports)            [requis]
-#   - GCS_MONITORING_PREFIX   (gs://.../velib[/monitoring])        [requis]
-#   - MON_TZ                  (ex: Europe/Paris)                   [def=Europe/Paris]
-#   - MON_LAST_DAYS           (fenêtre courante, int)              [def=14]
-#   - (MON_REF_DAYS ignoré ici)
-#
-#   - DATA_HEALTH_BIN_MIN           (def=5)    taille de pas (min)
-#   - DATA_HEALTH_FRESH_SLO_MIN     (def=5)    SLO fraicheur p95 (min)
-#   - DATA_HEALTH_DUP_ALERT_PCT     (def=1.0)  seuil alerte duplication (% des lignes)
-#   - DATA_HEALTH_FLAT_STEPS        (def=6)    min steps séquence plate (en steps)
-#   - DATA_HEALTH_COMPL_ALERT_PCT   (def=98.0) seuil OK couverture globale (%)
-#   - DATA_HEALTH_LAT_MAX_MIN       (def=4320) cap latence (min, 72h) pour robustesse
-#   - DATA_HEALTH_ACTIVE_MIN_FRAC   (optionnel 0..1) filtre actives presence-aware
-#   - DATA_HEALTH_WEIGHTED          (0/1) moyenne PA pondérée par expected_i
-#   - DATA_HEALTH_ANOM_TOPK         (def=200) 0=illimité
-#   - DATA_HEALTH_ANOM_SAMPLE       (def=0)   0..1 sous-échantillonnage anomalies
-#   - DATA_HEALTH_ROUND             (def=3)   arrondi flottants JSON
-#   - DATA_HEALTH_ANOM_INCLUDE_NAMES (def=true) inclure "name" quand dispo
-#
 # Objectifs
 # ---------
 # - Lire les exports “events_YYYY-MM-DD.parquet” réellement présents sur GCS
@@ -38,9 +18,30 @@
 #
 # Principes clés (v1.5)
 # ---------------------
-# ✅ Files-aware: “attendu global” = (#jours de FICHIERS présents) * (bins/jour)
-# ✅ Presence-aware heure: attendu_i(h, station) = (#jours où vue) * (bins/heure)
+# ✅ Files-aware: l’“attendu global” par station = (#jours de FICHIERS présents) * (bins/jour)
+#    → cohérence entre KPI global, table stations et “missing bins”
+# ✅ Presence-aware heure: attendu_i(h, station) = (#jours où la station est VUE) * (bins/heure)
 # ✅ Merge des noms défensif et typage station_id en string
+#
+# Env attendues
+# -------------
+# - GCS_EXPORTS_PREFIX        gs://.../velib/exports
+# - GCS_MONITORING_PREFIX     gs://.../velib        (alias /monitoring sera ajouté si absent)
+# - DATA_HEALTH_CURRENT_DAYS  (def=7)   fenêtre d’analyse
+# - DATA_HEALTH_BIN_MIN       (def=5)   taille de pas (min)
+# - DATA_HEALTH_FRESH_SLO_MIN (def=5)   SLO fraicheur p95 (min)
+# - DATA_HEALTH_DUP_ALERT_PCT (def=1.0) seuil alerte duplication (% des lignes)
+# - DATA_HEALTH_FLAT_STEPS    (def=6)   longueur min d’une séquence plate (en steps)
+# - DATA_HEALTH_COMPL_ALERT_PCT (def=98.0) seuil OK couverture globale (%)
+# - DATA_HEALTH_LAT_MAX_MIN   (def=72h) cap latence pour robustesse
+# - DATA_HEALTH_ACTIVE_MIN_FRAC (optionnel) filtre actives presence-aware (0..1)
+# - DATA_HEALTH_WEIGHTED        (0/1) pondérer moyenne presence-aware par expected_i
+# - DATA_HEALTH_ANOM_TOPK       (def=200) 0=illimité
+# - DATA_HEALTH_ANOM_SAMPLE     (def=0)   0..1, sous-échantillonnage
+# - DATA_HEALTH_ROUND           (def=3)   arrondi flottants JSON
+# - DATA_HEALTH_ANOM_INCLUDE_NAMES (def=true)
+#
+# Auth GCP: utiliser ADC (gcloud auth application-default login) ou var GOOGLE_APPLICATION_CREDENTIALS
 # =============================================================================
 
 from __future__ import annotations
@@ -63,28 +64,6 @@ except Exception as e:
     raise RuntimeError("google-cloud-storage requis") from e
 
 SCHEMA_VERSION = "1.5"  # files-aware global expected + robust name merge + hourly PA
-
-# ─────────────────────────── ENV unifié ───────────────────────────
-
-def _env(name: str, default=None):
-    v = os.environ.get(name)
-    return v if (v is not None and v != "") else default
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(_env(name, default))
-    except Exception:
-        return default
-
-GCS_EXPORTS_PREFIX    = _env("GCS_EXPORTS_PREFIX")
-GCS_MONITORING_PREFIX = _env("GCS_MONITORING_PREFIX")
-MON_TZ                = _env("MON_TZ", "Europe/Paris")
-MON_LAST_DAYS         = _env_int("MON_LAST_DAYS", 14)
-
-if not (GCS_EXPORTS_PREFIX and str(GCS_EXPORTS_PREFIX).startswith("gs://")):
-    raise RuntimeError("GCS_EXPORTS_PREFIX manquant ou invalide")
-if not (GCS_MONITORING_PREFIX and str(GCS_MONITORING_PREFIX).startswith("gs://")):
-    raise RuntimeError("GCS_MONITORING_PREFIX manquant ou invalide")
 
 # ─────────────────────────── Helpers GCS ───────────────────────────
 
@@ -215,6 +194,8 @@ def kpi_completeness_files_aware(
         empty = pd.DataFrame()
         return {"coverage_global_pct": np.nan, "coverage_active_pct": np.nan}, empty, empty, empty, 0, (60 // max(1,int(bin_min))) * 24
 
+    # Fenêtre courante (basée sur tmax) — on ne filtre *pas* par jours “théoriques”,
+    # puisque la liste des blobs lus est déjà files-aware.
     tmax = df[ts_col].max()
     tmin = tmax - pd.Timedelta(days=current_days)
     win = df[(df[ts_col] > tmin) & (df[ts_col] <= tmax)].copy()
@@ -222,13 +203,13 @@ def kpi_completeness_files_aware(
         empty = pd.DataFrame()
         return {"coverage_global_pct": np.nan, "coverage_active_pct": np.nan}, empty, empty, empty, 0, (60 // max(1,int(bin_min))) * 24
 
-    # Jours de FICHIERS réellement présents (global)
+    # Jours de FICHIERS réellement présents dans la fenêtre (global, pas par station)
     days_present_all = int(win[ts_col].dt.normalize().nunique())
     bins_per_hour = (60 // max(1, int(bin_min)))
     bins_per_day = bins_per_hour * 24
     expected_global = int(days_present_all * bins_per_day)
 
-    # Observé par station (bins uniques)
+    # Observé par station (bins uniques sur la fenêtre)
     per_station_obs = win.groupby(sid_col)[ts_col].nunique().rename_axis(sid_col).reset_index(name="obs")
     per_station_obs["obs"] = per_station_obs["obs"].clip(upper=expected_global)
 
@@ -242,7 +223,7 @@ def kpi_completeness_files_aware(
     )
     coverage_global = float(by_station_global["coverage_pct_global"].mean()) if len(by_station_global) else np.nan
 
-    # Presence-aware par station
+    # Presence-aware par station (expected_i station-spécifique)
     pres = win.groupby(sid_col)[ts_col].agg(first="min", last="max").reset_index()
     pres["expected_i"] = pres.apply(
         lambda r: _bins_between(max(tmin, r["first"]), min(tmax, r["last"]), bin_min),
@@ -253,13 +234,13 @@ def kpi_completeness_files_aware(
     pa["obs_clamped"] = pa.apply(lambda r: min(int(r["obs"]), int(r["expected_i"])), axis=1)
     pa["coverage_pct_i"] = pa["obs_clamped"] / pa["expected_i"] * 100.0
 
-    # Filtre actives
+    # Filtre actives (optionnel)
     if active_min_frac is not None and 0 < active_min_frac <= 1:
         pa_active = pa[pa["obs_clamped"] >= (active_min_frac * pa["expected_i"])].copy()
     else:
         pa_active = pa.copy()
 
-    # Moyenne presence-aware
+    # Moyenne presence-aware (pondérée ou non)
     if len(pa_active):
         if weighted:
             w = pa_active["expected_i"].astype(float).replace(0, np.nan)
@@ -269,7 +250,7 @@ def kpi_completeness_files_aware(
     else:
         coverage_active = np.nan
 
-    # Coverage par heure (presence-aware)
+    # Coverage par heure (presence-aware PAR STATION, attendu_i = jours vus pour la station * bins/heure)
     if tz:
         win["_hour"] = pd.to_datetime(win[ts_col]).dt.tz_localize("UTC").dt.tz_convert(tz).dt.hour
         win["_day"]  = pd.to_datetime(win[ts_col]).dt.tz_localize("UTC").dt.tz_convert(tz).dt.normalize()
@@ -278,12 +259,14 @@ def kpi_completeness_files_aware(
         win["_day"]  = pd.to_datetime(win[ts_col]).dt.normalize()
 
     days_by_station = win.groupby(sid_col)["_day"].nunique().rename("days_present_i").reset_index()
+
     per_hour_obs = (
         win.groupby(["_hour", sid_col])[ts_col]
            .nunique()
            .rename("obs")
            .reset_index()
     )
+
     per_hour = per_hour_obs.merge(days_by_station, on=sid_col, how="left")
     per_hour["expected_i"] = (per_hour["days_present_i"].fillna(0).astype(int) * int(bins_per_hour)).astype(int)
     per_hour["coverage_pct_i"] = np.where(
@@ -291,6 +274,7 @@ def kpi_completeness_files_aware(
         per_hour["obs"].clip(upper=per_hour["expected_i"]) / per_hour["expected_i"] * 100.0,
         np.nan,
     )
+
     cov_by_hour = (
         per_hour.groupby("_hour")["coverage_pct_i"]
                 .mean()
@@ -299,7 +283,7 @@ def kpi_completeness_files_aware(
                 .reset_index()
     )
 
-    # Table PA (UI)
+    # Table PA (pour UI secondaire)
     by_station_pa = pa.rename(columns={
         sid_col: "station_id",
         "expected_i": "expected",
@@ -362,31 +346,37 @@ def flat_sequences(df: pd.DataFrame, sid_col: str, ts_col: str, bikes_col: str, 
 # ─────────────────────────── Main ───────────────────────────
 
 def main() -> int:
-    # Options spécifiques au job (seuils & granularité)
-    TZNAME            = MON_TZ
-    CURRENT_DAYS      = int(MON_LAST_DAYS)  # ← unifié
-    BIN_MIN           = _env_int("DATA_HEALTH_BIN_MIN", 5)
-    FRESH_SLO_MIN     = _env_int("DATA_HEALTH_FRESH_SLO_MIN", 5)
-    DUP_ALERT_PCT     = float(_env("DATA_HEALTH_DUP_ALERT_PCT", "1.0"))
-    FLAT_STEPS        = _env_int("DATA_HEALTH_FLAT_STEPS", 6)
-    COMPL_ALERT_PCT   = float(_env("DATA_HEALTH_COMPL_ALERT_PCT", "98.0"))
-    LAT_MAX_MIN       = _env_int("DATA_HEALTH_LAT_MAX_MIN", 72*60)
+    EXPORTS_PREFIX = os.environ.get("GCS_EXPORTS_PREFIX")    # gs://bucket/velib/exports
+    MON_PREFIX     = os.environ.get("GCS_MONITORING_PREFIX") # gs://bucket/velib (ou …/monitoring)
+    if not (EXPORTS_PREFIX and EXPORTS_PREFIX.startswith("gs://")):
+        raise RuntimeError("GCS_EXPORTS_PREFIX manquant ou invalide")
+    if not (MON_PREFIX and MON_PREFIX.startswith("gs://")):
+        raise RuntimeError("GCS_MONITORING_PREFIX manquant ou invalide")
 
-    _active_frac_env = _env("DATA_HEALTH_ACTIVE_MIN_FRAC", "").strip()
+    TZNAME            = os.environ.get("DATA_HEALTH_TZ", "Europe/Paris")
+    CURRENT_DAYS      = int(os.environ.get("DATA_HEALTH_CURRENT_DAYS", "7"))
+    BIN_MIN           = int(os.environ.get("DATA_HEALTH_BIN_MIN", "5"))
+    FRESH_SLO_MIN     = int(os.environ.get("DATA_HEALTH_FRESH_SLO_MIN", "5"))
+    DUP_ALERT_PCT     = float(os.environ.get("DATA_HEALTH_DUP_ALERT_PCT", "1.0"))
+    FLAT_STEPS        = int(os.environ.get("DATA_HEALTH_FLAT_STEPS", "6"))
+    COMPL_ALERT_PCT   = float(os.environ.get("DATA_HEALTH_COMPL_ALERT_PCT", "98.0"))
+    LAT_MAX_MIN       = int(os.environ.get("DATA_HEALTH_LAT_MAX_MIN", str(72*60)))
+
+    _active_frac_env = os.environ.get("DATA_HEALTH_ACTIVE_MIN_FRAC", "").strip()
     ACTIVE_MIN_FRAC  = float(_active_frac_env) if _active_frac_env not in ("", None) else None
-    WEIGHTED         = _env("DATA_HEALTH_WEIGHTED", "0").lower() in ("1","true","yes","y")
+    WEIGHTED         = os.environ.get("DATA_HEALTH_WEIGHTED", "0").lower() in ("1","true","yes","y")
 
-    ANOM_TOPK          = _env_int("DATA_HEALTH_ANOM_TOPK", 200)
-    ANOM_SAMPLE        = float(_env("DATA_HEALTH_ANOM_SAMPLE", "0"))
-    ROUND_ND           = _env_int("DATA_HEALTH_ROUND", 3)
-    ANOM_INCLUDE_NAMES = _env("DATA_HEALTH_ANOM_INCLUDE_NAMES", "true").lower() in ("1","true","yes","y")
+    ANOM_TOPK          = int(os.environ.get("DATA_HEALTH_ANOM_TOPK", "200"))
+    ANOM_SAMPLE        = float(os.environ.get("DATA_HEALTH_ANOM_SAMPLE", "0"))
+    ROUND_ND           = int(os.environ.get("DATA_HEALTH_ROUND", "3"))
+    ANOM_INCLUDE_NAMES = os.environ.get("DATA_HEALTH_ANOM_INCLUDE_NAMES", "true").lower() in ("1","true","yes","y")
 
     # Fenêtre de lecture : >= CURRENT_DAYS (marge min 7 jours)
     now = datetime.now(timezone.utc)
     start = (now - timedelta(days=max(CURRENT_DAYS, 7))).replace(hour=0, minute=0, second=0, microsecond=0)
     print(f"[data.health] window UTC: {start.date()} → {now.date()} (days≥{CURRENT_DAYS})")
 
-    blobs = _list_event_blobs(GCS_EXPORTS_PREFIX, start, now)
+    blobs = _list_event_blobs(EXPORTS_PREFIX, start, now)
     if not blobs:
         print("[data.health] no event blobs in window — nothing to do")
         return 0
@@ -439,7 +429,7 @@ def main() -> int:
     miss["missing"] = (miss["expected"] - miss["obs"]).clip(lower=0).astype(int)
     missing_stations = int((miss["missing"] > 0).sum()) if len(miss) else 0
 
-    # Table station_health
+    # Table station_health (cohérente avec KPI global & missing)
     station_health_rows = (
         by_station_global
         .rename(columns={
@@ -456,7 +446,7 @@ def main() -> int:
         (station_health_rows["expected"] - station_health_rows["obs"]).clip(lower=0)
     ).astype(int)
 
-    # Ajout des noms défensif
+    # Ajout des noms (défensif)
     if ANOM_INCLUDE_NAMES and cols.get("name") and cols["name"] in df.columns:
         name_col = cols["name"]
         name_map_df = (
@@ -606,7 +596,7 @@ def main() -> int:
             "include_names": ANOM_INCLUDE_NAMES,
         },
         "sources": {
-            "exports_prefix": GCS_EXPORTS_PREFIX,
+            "exports_prefix": EXPORTS_PREFIX,
         },
     }
 
@@ -625,7 +615,7 @@ def main() -> int:
     }
 
     # ─────────────────────────── Uploads → latest ───────────────────────────
-    mon_base = str(GCS_MONITORING_PREFIX).rstrip("/")
+    mon_base = os.environ.get("GCS_MONITORING_PREFIX", "").rstrip("/")
     if not mon_base.endswith("/monitoring"):
         mon_base = mon_base + "/monitoring"
     base_alias = f"{mon_base}/data/health/latest"

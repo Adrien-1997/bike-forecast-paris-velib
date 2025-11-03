@@ -133,7 +133,7 @@ const SnapshotMap = dynamic(async () => {
                   )}
                   {Number.isFinite(Number(r.max_run)) && (
                     <div>
-                      Max run (|résidu|≥4) : <b>{Number(r.max_run).toFixed(0)}</b>
+                      Épisode max (|résidu|≥4) : <b>{Number(r.max_run).toFixed(0)}</b>
                     </div>
                   )}
                 </div>
@@ -186,7 +186,7 @@ function getLatLng(meta?: StationMeta | null): [number, number] | null {
 }
 
 /* ───────────────── Horizon (SSR-safe) ───────────────── */
-function useQueryParamH(defaultH = 15): [number, (h: number) => void, boolean] {
+function useQueryParamH(defaultH = 60): [number, (h: number) => void, boolean] {
   const [h, setH] = useState<number>(defaultH);
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
@@ -267,7 +267,7 @@ function normalizeFeatureImportance(fi: any): { rows: FIRow[]; method: string | 
 
 /* ───────────────── Page ───────────────── */
 export default function ModelExplainabilityPage() {
-  const [h, setH, mounted] = useQueryParamH(15);
+  const [h, setH, mounted] = useQueryParamH(60);
 
   const [overview, setOverview] = useState<Overview | null>(null);
   const [residuals, setResiduals] = useState<ResidualsDoc | null>(null);
@@ -363,7 +363,7 @@ export default function ModelExplainabilityPage() {
   }, [overview, calib]);
 
   const subtitleText = useMemo(
-    () => `Résidus, QQ, ACF, hétéroscédasticité, calibration, incertitude & importance des features (h=${mounted ? h : 15} min)`,
+    () => `Résidus, QQ, ACF, hétéroscédasticité, calibration, incertitude et importance des variables (h=${mounted ? h : 15} min)`,
     [h, mounted],
   );
 
@@ -414,7 +414,7 @@ export default function ModelExplainabilityPage() {
     const { min, max } = safeMinMax([xp, yt]);
     return [
       { x: [min, max], y: [min, max], type: "scatter", mode: "lines", name: "y = x", hoverinfo: "none" },
-      { x: xp, y: yt, type: "scatter", mode: "markers", name: "Binned means", hovertemplate: "E[ŷ]=%{x:.2f}<br>E[y]=%{y:.2f}<extra></extra>" },
+      { x: xp, y: yt, type: "scatter", mode: "markers", name: "Moyennes par bin", hovertemplate: "E[ŷ]=%{x:.2f}<br>E[y]=%{y:.2f}<extra></extra>" },
     ];
   }, [calib]);
 
@@ -443,7 +443,7 @@ export default function ModelExplainabilityPage() {
     }];
   }, [calib]);
 
-  /* ───────── Feature Importance (part + cumul) ───────── */
+  /* ───────── Importance des variables (part + cumul) ───────── */
   const { rows: fiRowsRaw, method: fiMethod, meta: fiMeta } = useMemo(
     () => normalizeFeatureImportance(fiDoc),
     [fiDoc]
@@ -468,10 +468,9 @@ export default function ModelExplainabilityPage() {
     return "Part d’importance (%)";
   }, [fiMethod]);
 
-  // Hauteur dynamique (toutes features visibles) + relayout pour éviter coupe
+  // Hauteur dynamique (toutes variables visibles) + relayout pour éviter coupe
   const fiHeight = useMemo(() => {
     const n = fiAll.rows.length;
-    // ~24 px par ligne + marge généreuse pour étiquettes + texte
     return Math.max(380, Math.min(2000, 24 * n + 160));
   }, [fiAll.rows.length]);
 
@@ -504,12 +503,10 @@ export default function ModelExplainabilityPage() {
     ];
   }, [fiAll]);
 
-  // Relayout auto sur resize pour éviter coupure (hauteur recalculée)
+  // Relayout auto sur resize (astuce CSS var)
   useEffect(() => {
     if (typeof window === "undefined") return;
     const onResize = () => {
-      // rien à faire ici : Plotly recalcule via props de layout (height dépend de fiHeight dans React)
-      // mais on force un repaint léger en modifiant un CSS var (astuce sans impact visuel)
       document.documentElement.style.setProperty("--fi-resize-tick", String(Date.now() % 1000));
     };
     window.addEventListener("resize", onResize);
@@ -523,7 +520,6 @@ export default function ModelExplainabilityPage() {
     if (!src.length) return rows;
 
     const aggregated = new Map<string, { station_id: string; max_run: number; n: number }>();
-    // On agrège par station : max_run = max, n = n total (si déjà agrégé côté backend, ça ne change rien)
     for (const r of src) {
       const id = String(r.station_id);
       const cur = aggregated.get(id);
@@ -536,7 +532,6 @@ export default function ModelExplainabilityPage() {
     const list = Array.from(aggregated.values()).filter((r) => Number(r.n) >= 30);
     if (!list.length) return rows;
 
-    // Seuil basé sur médiane des max_run
     const vals = list.map((t) => Number(t.max_run ?? 0)).filter((v) => Number.isFinite(v)) as number[];
     const median = vals.length ? [...vals].sort((a, b) => a - b)[Math.floor(vals.length / 2)] : 0;
 
@@ -544,7 +539,7 @@ export default function ModelExplainabilityPage() {
       const meta = stationsIdx[r.station_id] as StationMeta | undefined;
       const ll = getLatLng(meta);
       if (!ll) continue;
-      const color = (Number(r.max_run) >= median ? "#ef4444" : "#10b981"); // rouge si >= médiane, sinon vert
+      const color = (Number(r.max_run) >= median ? "#ef4444" : "#10b981");
       rows.push({
         station_id: r.station_id,
         name: (meta as any)?.name ?? r.station_id,
@@ -562,13 +557,13 @@ export default function ModelExplainabilityPage() {
   return (
     <div className="monitoring">
       <Head>
-        <title>Monitoring — Model / Explainability</title>
-        <meta name="description" content="Résidus, QQ, ACF, hétéroscédasticité, calibration, incertitude et importance des features." />
+        <title>Monitoring — Modèle / Explicabilité</title>
+        <meta name="description" content="Résidus, QQ, ACF, hétéroscédasticité, calibration, incertitude et importance des variables." />
       </Head>
 
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
-          title="Model — Explainability"
+          title="Modèle — Explicabilité"
           subtitle={subtitleText}
           generatedAt={generatedAt}
           extraActions={[{ label: "Performance", href: "/monitoring/model/performance" }]}
@@ -598,9 +593,9 @@ export default function ModelExplainabilityPage() {
           <KpiBar items={kpiItems} dense />
           {(() => {
             const parts: string[] = [];
-            if (overview?.schema_version != null) parts.push(`Schema v${overview.schema_version}`);
+            if (overview?.schema_version != null) parts.push(`Schéma v${overview.schema_version}`);
             if (overview?.ts_min_perf || overview?.ts_max_perf)
-              parts.push(`Intervalle: ${overview?.ts_min_perf ?? "—"} → ${overview?.ts_max_perf ?? "—"} (UTC)`);
+              parts.push(`Intervalle : ${overview?.ts_min_perf ?? "—"} → ${overview?.ts_max_perf ?? "—"} (UTC)`);
             if (typeof (overview as any)?.horizon_min === "number") parts.push(`h=${(overview as any).horizon_min} min`);
             if ((overview as any)?.window_days) parts.push(`fenêtre=${(overview as any).window_days} j`);
             return parts.length ? <div className="kpi-bar-meta">{parts.join(" · ")}</div> : null;
@@ -686,7 +681,7 @@ export default function ModelExplainabilityPage() {
                   layout={chartLayout({
                     height: 320,
                     margin: { l: 54, r: 10, t: 10, b: 36 },
-                    xaxis: { title: { text: "Quantiles(y_true)" }, tickangle: -30 },
+                    xaxis: { title: { text: "Quantiles (y_true)" }, tickangle: -30 },
                     yaxis: { title: { text: "MAE" } },
                   })}
                   config={chartConfig}
@@ -707,7 +702,7 @@ export default function ModelExplainabilityPage() {
           <h2>Calibration</h2>
 
           <div className="plot-card">
-            <h3>Binned means (y_pred → y_true)</h3>
+            <h3>Moyennes par bin (ŷ → y)</h3>
             {calibBinning.length ? (
               <Plot
                 data={calibBinning as Plotly.Data[]}
@@ -766,14 +761,14 @@ export default function ModelExplainabilityPage() {
           </div>
         </section>
 
-        {/* ───────────────── Feature Importance — (déplacé ici, sous β & Erreur relative) ───────────────── */}
+        {/* Importance des variables — part & cumul */}
         <section className="mt-6">
-          <h2>Importance des features — part & part cumulée</h2>
-          <div className="plot-card" /* container sans overflow pour éviter la coupe */ style={{ overflow: "visible" }}>
+          <h2>Importance des variables — part & cumul</h2>
+          <div className="plot-card" style={{ overflow: "visible" }}>
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <div className="small muted">
                 {fiMethod
-                  ? `Méthode: ${fiMethod}${fiMeta.length ? " · " + fiMeta.join(" · ") : ""}`
+                  ? `Méthode : ${fiMethod}${fiMeta.length ? " · " + fiMeta.join(" · ") : ""}`
                   : (fiDoc ? "Méthode inconnue" : "Aucune donnée disponible")}
               </div>
               {fiMethod?.includes("disabled") && (
@@ -814,7 +809,7 @@ export default function ModelExplainabilityPage() {
           <div className="map-block">
             {mapRows.length ? <SnapshotMap rows={mapRows} /> : <div className="empty">Aucune donnée carte.</div>}
           </div>
-          <div className="small mt-2">Couleur ~ longueur maximale d’épisode |résidu| ≥ 4 (rouge = long, vert = court). Filtre n ≥ 30.</div>
+          <div className="small mt-2">Couleur ~ longueur maximale d’un épisode |résidu| ≥ 4 (rouge = long, vert = court). Filtre n ≥ 30.</div>
         </section>
 
         {/* Tableaux */}

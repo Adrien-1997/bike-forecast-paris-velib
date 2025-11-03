@@ -1,3 +1,4 @@
+// ui/components/layout/GlobalHeader.tsx
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
@@ -5,6 +6,7 @@ import { createPortal } from "react-dom";
 
 export type HeaderItem = { label: string; href: string };
 
+/** Active pour routes (pages), pas pour ancres. */
 function isPathActive(path: string, href: string) {
   if (!href.startsWith("#")) return path === href || path.startsWith(href + "/");
   return false;
@@ -17,25 +19,35 @@ export default function GlobalHeader({
   items?: HeaderItem[];
   brandHref?: string;
 }) {
-  const { pathname } = useRouter();
-  const [activeHash, setActiveHash] = useState<string>("");
+  const router = useRouter();
+  const { pathname } = router;
+
+  // ── États
   const [open, setOpen] = useState(false);
+  const [hasDOM, setHasDOM] = useState(false);
   const headerRef = useRef<HTMLElement | null>(null);
-  const [hasDOM, setHasDOM] = useState(false); // évite le mismatch SSR des portals
+
+  const burgerRef = useRef<HTMLButtonElement | null>(null);
+  const firstLinkRef = useRef<HTMLAnchorElement | null>(null);
+
+  const [activeHash, setActiveHash] = useState<string>("");
 
   useEffect(() => setHasDOM(true), []);
 
-  const list =
-    items && items.length
-      ? items
-      : [
-          { label: "Accueil", href: "/" },
-          { label: "App", href: "/app" },
-          { label: "Monitoring", href: "/monitoring" },
-        ];
+  const list = useMemo<HeaderItem[]>(
+    () =>
+      items && items.length
+        ? items
+        : [
+            { label: "Accueil", href: "/" },
+            { label: "App", href: "/app" },
+            { label: "Monitoring", href: "/monitoring" },
+          ],
+    [items]
+  );
 
   const hashTargets = useMemo(
-    () => list.filter((i) => i.href.startsWith("#")).map((i) => i.href.replace("#", "")),
+    () => list.filter((i) => i.href.startsWith("#")).map((i) => i.href.slice(1)),
     [list]
   );
 
@@ -44,24 +56,54 @@ export default function GlobalHeader({
 
   const closeMenu = () => setOpen(false);
 
-  // Suivi des sections hash pour l'état actif
+  // ===== Scroll-spy via IntersectionObserver =====
   useEffect(() => {
-    if (hashTargets.length === 0 || typeof window === "undefined") return;
-    const onHashChange = () => setActiveHash(window.location.hash || "");
-    window.addEventListener("hashchange", onHashChange, { passive: true });
-    onHashChange();
+    if (typeof window === "undefined" || hashTargets.length === 0) return;
+
+    const headerH = (() => {
+      const doc = document.documentElement;
+      const comp = getComputedStyle(doc);
+      const raw = comp.getPropertyValue("--header-h").trim();
+      const px = raw.endsWith("px") ? parseFloat(raw) : NaN;
+      return Number.isFinite(px) ? px : 60;
+    })();
+
+    const topOffset = Math.ceil(window.innerHeight * 0.3) + headerH;
 
     const observer = new IntersectionObserver(
       (entries) => {
-        const visible = entries
+        const visibles = entries
           .filter((e) => e.isIntersecting)
           .sort(
             (a, b) =>
-              (a.target as HTMLElement).offsetTop - (b.target as HTMLElement).offsetTop
-          )[0];
-        if (visible) setActiveHash(`#${(visible.target as HTMLElement).id}`);
+              (a.target as HTMLElement).getBoundingClientRect().top -
+              (b.target as HTMLElement).getBoundingClientRect().top
+          );
+
+        if (visibles.length > 0) {
+          const id = (visibles[0].target as HTMLElement).id;
+          if (id) setActiveHash("#" + id);
+          return;
+        }
+
+        let bestId = "";
+        let bestTop = -Infinity;
+        for (const id of hashTargets) {
+          const el = document.getElementById(id);
+          if (!el) continue;
+          const top = el.getBoundingClientRect().top;
+          if (top <= topOffset && top > bestTop) {
+            bestTop = top;
+            bestId = id;
+          }
+        }
+        if (bestId) setActiveHash("#" + bestId);
       },
-      { rootMargin: "-30% 0px -60% 0px", threshold: [0, 1] }
+      {
+        root: null,
+        rootMargin: `-${topOffset}px 0px -60% 0px`,
+        threshold: [0, 0.25, 0.5, 1],
+      }
     );
 
     hashTargets.forEach((id) => {
@@ -69,13 +111,22 @@ export default function GlobalHeader({
       if (el) observer.observe(el);
     });
 
+    const setFromUrl = () => {
+      const h = window.location.hash;
+      if (h && hashTargets.includes(h.slice(1))) setActiveHash(h);
+    };
+    setFromUrl();
+
+    const onHash = () => setFromUrl();
+    window.addEventListener("hashchange", onHash, { passive: true });
+
     return () => {
-      window.removeEventListener("hashchange", onHashChange);
+      window.removeEventListener("hashchange", onHash);
       observer.disconnect();
     };
   }, [hashTargets]);
 
-  // Fermer le menu si on repasse desktop
+  // Fermer menu si resize desktop
   useEffect(() => {
     const onResize = () => {
       if (window.innerWidth >= 980) setOpen(false);
@@ -84,20 +135,44 @@ export default function GlobalHeader({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // Lock scroll + classe utilitaire quand menu ouvert
+  // Scroll-lock body
   useEffect(() => {
-    if (typeof document === "undefined") return;
+    if (typeof window === "undefined") return;
     const body = document.body;
-    const prev = body.style.overflow;
-    body.style.overflow = open ? "hidden" : prev || "";
-    body.classList.toggle("menu-open", open);
+
+    if (open) {
+      const scrollY = window.scrollY;
+      body.dataset.prevScrollY = String(scrollY);
+      body.style.position = "fixed";
+      body.style.top = `-${scrollY}px`;
+      body.style.left = "0";
+      body.style.right = "0";
+      body.style.width = "100%";
+      body.classList.add("menu-open");
+      requestAnimationFrame(() => firstLinkRef.current?.focus());
+    } else {
+      const prev = body.dataset.prevScrollY;
+      body.style.position = "";
+      body.style.top = "";
+      body.style.left = "";
+      body.style.right = "";
+      body.style.width = "";
+      body.classList.remove("menu-open");
+      if (prev) window.scrollTo(0, parseInt(prev, 10));
+      burgerRef.current?.focus();
+    }
+
     return () => {
-      body.style.overflow = prev || "";
+      body.style.position = "";
+      body.style.top = "";
+      body.style.left = "";
+      body.style.right = "";
+      body.style.width = "";
       body.classList.remove("menu-open");
     };
   }, [open]);
 
-  // Auto-hide du header au scroll
+  // Auto-hide header
   useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
@@ -105,8 +180,12 @@ export default function GlobalHeader({
 
     const onScroll = () => {
       const y = window.scrollY;
-      const goingDown = y > prevY && y > 10;
-      el.classList.toggle("is-hidden", goingDown && !open);
+      if (!open) {
+        const goingDown = y > prevY && y > 10;
+        el.classList.toggle("is-hidden", goingDown);
+      } else {
+        el.classList.remove("is-hidden");
+      }
       prevY = y;
     };
 
@@ -118,7 +197,7 @@ export default function GlobalHeader({
     };
   }, [open]);
 
-  // Échap pour fermer
+  // ESC pour fermer
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -128,10 +207,9 @@ export default function GlobalHeader({
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
-  // Fermer au clic extérieur (en plus du backdrop)
+  // Clic extérieur
   useEffect(() => {
     if (!open) return;
-
     const onPointerDown = (e: PointerEvent) => {
       const headerEl =
         headerRef.current ?? document.querySelector<HTMLElement>(".site-header");
@@ -146,10 +224,21 @@ export default function GlobalHeader({
       }
       setOpen(false);
     };
-
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
   }, [open]);
+
+  // Fermer navigation interne
+  useEffect(() => {
+    const handleStart = () => setOpen(false);
+    router.events.on("routeChangeStart", handleStart);
+    return () => router.events.off("routeChangeStart", handleStart);
+  }, [router.events]);
+
+  const ariaCurrentFor = (href: string): "page" | "location" | undefined => {
+    if (href.startsWith("#")) return isActive(href) ? "location" : undefined;
+    return isActive(href) ? "page" : undefined;
+  };
 
   return (
     <>
@@ -182,7 +271,10 @@ export default function GlobalHeader({
                   <Link
                     href={it.href}
                     className={isActive(it.href) ? "nav-trigger active" : "nav-trigger"}
-                    aria-current={isActive(it.href) ? "page" : undefined}
+                    aria-current={ariaCurrentFor(it.href)}
+                    onClick={() => {
+                      if (it.href.startsWith("#")) setActiveHash(it.href);
+                    }}
                   >
                     {it.label}
                   </Link>
@@ -191,8 +283,9 @@ export default function GlobalHeader({
             </ul>
           </nav>
 
-          {/* Burger (2 traits parallèles) */}
+          {/* Burger */}
           <button
+            ref={burgerRef}
             className={open ? "burger close" : "burger"}
             aria-label={open ? "Fermer le menu" : "Ouvrir le menu"}
             aria-controls="mobile-menu"
@@ -206,8 +299,22 @@ export default function GlobalHeader({
                   <rect x="3" y="17" width="18" height="2" rx="1" />
                 </g>
                 <g className="cross">
-                  <rect x="4" y="11" width="16" height="2" rx="1" transform="rotate(45 12 12)" />
-                  <rect x="4" y="11" width="16" height="2" rx="1" transform="rotate(-45 12 12)" />
+                  <rect
+                    x="4"
+                    y="11"
+                    width="16"
+                    height="2"
+                    rx="1"
+                    transform="rotate(45 12 12)"
+                  />
+                  <rect
+                    x="4"
+                    y="11"
+                    width="16"
+                    height="2"
+                    rx="1"
+                    transform="rotate(-45 12 12)"
+                  />
                 </g>
               </svg>
             </span>
@@ -223,13 +330,17 @@ export default function GlobalHeader({
         >
           <nav className="mobile-nav">
             <ul>
-              {list.map((it) => (
+              {list.map((it, idx) => (
                 <li key={it.href}>
                   <Link
                     href={it.href}
                     className={isActive(it.href) ? "nav-trigger active" : "nav-trigger"}
-                    aria-current={isActive(it.href) ? "page" : undefined}
-                    onClick={closeMenu}
+                    aria-current={ariaCurrentFor(it.href)}
+                    onClick={() => {
+                      if (it.href.startsWith("#")) setActiveHash(it.href);
+                      closeMenu();
+                    }}
+                    ref={idx === 0 ? firstLinkRef : undefined}
                   >
                     {it.label}
                   </Link>
@@ -240,7 +351,7 @@ export default function GlobalHeader({
         </div>
       </header>
 
-      {/* Backdrop global porté au <body> (floute toute la page, pas le menu) */}
+      {/* Backdrop global */}
       {hasDOM &&
         createPortal(
           <button

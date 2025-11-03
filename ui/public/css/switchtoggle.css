@@ -1,32 +1,30 @@
-/* ==========================================================================
-   switch-toggle.css — petit interrupteur 15/60, style verre dépoli
-   ========================================================================== */
+/* switch-toggle.css — interrupteur 15/60, style verre dépoli */
 
-.monitoring .hz-switch{
-  display:inline-flex;
-  align-items:center;
-  gap:10px;
+/* Container */
+.hz-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.monitoring .hz-switch__label{
-  font-size:12px;
-  letter-spacing:.02em;
-  text-transform:uppercase;
+.hz-switch__label {
+  font-size: 12px;
+  letter-spacing: .02em;
+  text-transform: uppercase;
   color: var(--muted, #9ca3af);
-  opacity:.9;
+  opacity: .9;
 }
 
-/* Texte 15 min / 60 min */
-.monitoring .hz-switch__text{
-  font-size:12.5px;
-  font-weight:700;
+.hz-switch__text {
+  font-size: 12.5px;
+  font-weight: 700;
   color: var(--text, #e6eaf2);
-  opacity:.9;
+  opacity: .9;
 }
 
-/* Contrôle (track) */
-.monitoring .hz-switch__control{
-  position:relative;
+/* Track */
+.hz-switch__control {
+  position: relative;
   width: 44px;
   height: 24px;
   border-radius: 999px;
@@ -34,69 +32,71 @@
   background:
     linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04)),
     var(--panel-2, #0c1324);
-  cursor:pointer;
-  padding:0;
+  cursor: pointer;
+  padding: 0;
   outline: none;
   transition: border-color .12s ease, background .12s ease;
   backdrop-filter: saturate(150%) blur(14px);
   -webkit-backdrop-filter: saturate(150%) blur(14px);
 }
-.monitoring .hz-switch__control.is-dense{
+.hz-switch__control.is-dense {
   width: 40px;
   height: 22px;
 }
 
 /* Thumb */
-.monitoring .hz-switch__thumb{
-  position:absolute;
+.hz-switch__thumb {
+  position: absolute;
   top: 2px;
   left: 2px;
   width: 20px;
   height: 20px;
-  border-radius:999px;
+  border-radius: 999px;
   background: var(--text, #e6eaf2);
   box-shadow: 0 1px 2px rgba(0,0,0,.3);
   transition: transform .14s ease;
 }
-.monitoring .hz-switch__control.is-dense .hz-switch__thumb{
+.hz-switch__control.is-dense .hz-switch__thumb {
   width: 18px;
   height: 18px;
 }
 
-/* État checked → on translate le thumb à droite */
-.monitoring .hz-switch__control[aria-checked="true"] .hz-switch__thumb{
+/* Checked */
+.hz-switch__control[aria-checked="true"] .hz-switch__thumb {
   transform: translateX(20px);
 }
-.monitoring .hz-switch__control.is-dense[aria-checked="true"] .hz-switch__thumb{
+.hz-switch__control.is-dense[aria-checked="true"] .hz-switch__thumb {
   transform: translateX(18px);
 }
 
 /* Hover / Focus */
-.monitoring .hz-switch__control:hover{
+.hz-switch__control:hover {
   border-color: color-mix(in srgb, var(--text, #e6eaf2) 26%, transparent);
 }
-.monitoring .hz-switch__control:focus-visible{
+.hz-switch__control:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--text, #e6eaf2) 18%, transparent);
 }
 
-/* Disabled (si besoin plus tard) */
-.monitoring .hz-switch__control:disabled{
-  opacity:.55;
-  cursor:not-allowed;
+/* Disabled */
+.hz-switch__control:disabled {
+  opacity: .55;
+  cursor: not-allowed;
 }
 
 /* Light theme */
-@media (prefers-color-scheme: light){
-  .monitoring .hz-switch__text{ color:#111827; }
-  .monitoring .hz-switch__control{
+@media (prefers-color-scheme: light) {
+  .hz-switch__text { color: #111827; }
+
+  .hz-switch__control {
     background:
       linear-gradient(180deg, rgba(255,255,255,.95), rgba(255,255,255,.82)),
       var(--panel-2, #f7f9fd);
-    border:1px solid rgba(0,0,0,.10);
+    border: 1px solid rgba(0,0,0,.10);
     backdrop-filter: saturate(150%) blur(12px);
     -webkit-backdrop-filter: saturate(150%) blur(12px);
   }
-  .monitoring .hz-switch__thumb{
-    background:#111827;
+
+  .hz-switch__thumb {
+    background: #111827;
   }
 }

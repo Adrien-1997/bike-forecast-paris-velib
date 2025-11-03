@@ -3,15 +3,19 @@
 
 /*─────────────────────────────── Base URL & Token ───────────────────────────────*/
 
-// 👉 Nouvelle architecture :
-// - Le front n’appelle plus directement l’API externe
-// - Il passe par /api/proxy/* côté serveur (token privé injecté en backend)
+// En production (Netlify), on passe par le rewrite /api → évite CORS.
+// En dev, si tu as un proxy Next: http://localhost:3000/api/proxy ; sinon /api marche aussi.
+function joinUrl(base: string, path: string) {
+  const b = base.replace(/\/+$/, "");
+  const p = path.replace(/^\/+/, "");
+  return `${b}/${p}`;
+}
+
+const PUBLIC_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN ?? "";
 
 export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE ||
-  (process.env.NODE_ENV === "production"
-    ? "https://velib-api-160046094975.europe-west1.run.app"
-    : "http://localhost:3000/api/proxy"); // ← proxy local
+  (process.env.NEXT_PUBLIC_API_BASE && process.env.NEXT_PUBLIC_API_BASE.trim()) ||
+  (process.env.NODE_ENV === "production" ? "/api" : "http://localhost:3000/api/proxy");
 
 export const DEFAULT_TIMEOUT_MS = Number(
   process.env.NEXT_PUBLIC_HTTP_TIMEOUT_MS ?? "30000"
@@ -46,8 +50,8 @@ function withTimeout(ms = DEFAULT_TIMEOUT_MS) {
 
 function resolveUrl(pathOrUrl: string) {
   const hasProtocol = /^https?:\/\//i.test(pathOrUrl);
-  const path = hasProtocol ? pathOrUrl : `${API_BASE}${pathOrUrl}`;
-  return { path };
+  const url = hasProtocol ? pathOrUrl : joinUrl(API_BASE, pathOrUrl);
+  return { url };
 }
 
 function addTs(url: string) {
@@ -70,19 +74,20 @@ async function fetchWithRetry(input: RequestInfo, init: RequestInit, tries = 2) 
 /*─────────────────────────────── Core JSON fetch ───────────────────────────────*/
 
 export async function json<T>(path: string, init: JsonInit = {}): Promise<T> {
-  const { path: url0 } = resolveUrl(path);
+  const { url: url0 } = resolveUrl(path);
   const url = addTs(url0);
   const { timeoutMs = DEFAULT_TIMEOUT_MS, noCache = true, ...rest } = init;
   const t = withTimeout(timeoutMs);
 
   try {
+    const headers = new Headers(rest.headers || {});
+    headers.set("accept", "application/json");
+    headers.set("Content-Type", "application/json");
+    if (PUBLIC_TOKEN) headers.set("Authorization", `Bearer ${PUBLIC_TOKEN}`);
+
     const res = await fetchWithRetry(url, {
       ...rest,
-      headers: {
-        accept: "application/json",
-        "Content-Type": "application/json",
-        ...(rest.headers || {}),
-      },
+      headers,
       cache: noCache ? "no-store" : rest.cache,
       signal: t.signal,
     });
@@ -106,7 +111,7 @@ export async function fetchJsonWithEtag<T>(
   pathOrUrl: string,
   init: JsonInit = {}
 ): Promise<T> {
-  const { path: url0 } = resolveUrl(pathOrUrl);
+  const { url: url0 } = resolveUrl(pathOrUrl);
   const url = addTs(url0);
   const { timeoutMs = DEFAULT_TIMEOUT_MS, noCache = false, ...rest } = init;
   const t = withTimeout(timeoutMs);
@@ -117,14 +122,15 @@ export async function fetchJsonWithEtag<T>(
     typeof window !== "undefined" ? localStorage.getItem(etagKey) : null;
 
   try {
+    const headers = new Headers(rest.headers || {});
+    headers.set("accept", "application/json");
+    headers.set("Content-Type", "application/json");
+    if (PUBLIC_TOKEN) headers.set("Authorization", `Bearer ${PUBLIC_TOKEN}`);
+    if (prevEtag) headers.set("If-None-Match", prevEtag);
+
     const res = await fetchWithRetry(url, {
       ...rest,
-      headers: {
-        accept: "application/json",
-        "Content-Type": "application/json",
-        ...(prevEtag ? { "If-None-Match": prevEtag } : {}),
-        ...(rest.headers || {}),
-      },
+      headers,
       cache: noCache ? "no-store" : rest.cache,
       signal: t.signal,
     });
@@ -134,13 +140,14 @@ export async function fetchJsonWithEtag<T>(
       const cached = localStorage.getItem(bodyKey);
       if (cached) return JSON.parse(cached) as T;
 
+      const headers2 = new Headers(rest.headers || {});
+      headers2.set("accept", "application/json");
+      headers2.set("Content-Type", "application/json");
+      if (PUBLIC_TOKEN) headers2.set("Authorization", `Bearer ${PUBLIC_TOKEN}`);
+
       const res2 = await fetchWithRetry(addTs(url0), {
         ...rest,
-        headers: {
-          accept: "application/json",
-          "Content-Type": "application/json",
-          ...(rest.headers || {}),
-        },
+        headers: headers2,
         cache: "no-store",
         signal: t.signal,
       });
@@ -194,16 +201,32 @@ export const postJSON = <T>(
 
 /*─────────────────────────────── Forecast helpers ───────────────────────────────*/
 
+// Robust row selector for forecast payloads (supports multiple shapes)
 export function selectForecastRows(payload: any, horizonMin = 15): any[] {
+  // Root array
   if (Array.isArray(payload)) return payload;
+
+  // Current format: { data: [...] }
+  if (Array.isArray(payload?.data)) return payload.data;
+
+  // Legacy keyed by horizon: { data: { "15": [...] } }
   const k = String(horizonMin);
   if (payload?.data?.[k] && Array.isArray(payload.data[k])) return payload.data[k];
+
+  // Other legacy: { predictions: [...] }
   if (Array.isArray(payload?.predictions)) return payload.predictions;
+
   console.warn("[selectForecastRows] unexpected payload shape:", payload);
   return [];
 }
 
 export async function getForecastRows(horizonMin = 15) {
-  const payload = await getJSON(`/forecast/latest?h=${horizonMin}`);
-  return selectForecastRows(payload, horizonMin);
+  try {
+    const payload = await getJSON(`/forecast/latest?h=${horizonMin}`);
+    return selectForecastRows(payload, horizonMin);
+  } catch (e: any) {
+    // GCS file missing → API returns 404; return [] for UI resilience
+    if (e?.status === 404) return [];
+    throw e;
+  }
 }

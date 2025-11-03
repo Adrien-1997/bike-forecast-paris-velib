@@ -8,6 +8,18 @@ import GlobalFooter from "@/components/layout/GlobalFooter";
 import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
 import { getMonitoringIntro, type IntroDoc } from "@/lib/services/monitoring/intro";
 import { getOverviewSnapshotMap, type OverviewSnapshotMap } from "@/lib/services/monitoring/network_overview";
+import { chartLayout, chartConfig } from "@/lib/plotlyTheme";
+import { getDataHealthCoverageByHour, type CoverageByHourRow } from "@/lib/services/monitoring/data_health";
+import type * as Plotly from "plotly.js";
+import { getPerformanceLiftCurve, type LiftCurve } from "@/lib/services/monitoring/model_performance";
+
+
+/* Plotly (client only) */
+const Plot = dynamic(() => import("react-plotly.js").then(m => m.default), {
+  ssr: false,
+  loading: () => <div className="empty">Chargement…</div>,
+});
+
 
 export default function LandingPage() {
   // ────────────────────────────────────────────────────────────────────────────
@@ -148,6 +160,12 @@ export default function LandingPage() {
   // Snapshot map (Overview) — state + load
   const [snapMap, setSnapMap] = useState<OverviewSnapshotMap | null>(null);
 
+  // Couverture par heure (Data Health)
+  const [covHour, setCovHour] = useState<CoverageByHourRow[] | null>(null);
+
+  // Lift quotidien (h=60)
+  const [lift60, setLift60] = useState<LiftCurve | null>(null);
+
   useEffect(() => {
     let alive = true;
     getOverviewSnapshotMap()
@@ -163,6 +181,51 @@ export default function LandingPage() {
       alive = false;
     };
   }, []);
+
+  // Fetch couverture par heure
+    useEffect(() => {
+      let alive = true;
+      getDataHealthCoverageByHour()
+        .then((doc) => { if (alive) setCovHour(doc ?? null); })
+        .catch(() => { if (alive) setCovHour(null); });
+      return () => { alive = false; };
+    }, []);
+
+    const coverageBarData = useMemo(() => {
+    const arr = covHour ?? [];
+    if (!arr.length) return [];
+    return [{
+      x: arr.map(r => `${String(r.hour).padStart(2,"0")}h`),
+      y: arr.map(r => Number(r.coverage_pct)),
+      type: "bar" as const,
+      name: "Couverture (%)",
+      hovertemplate: "%{x} — %{y:.1f}%<extra></extra>",
+    }];
+  }, [covHour]);
+
+
+  // Fetch lift quotidien (h=60)
+  useEffect(() => {
+    let alive = true;
+    getPerformanceLiftCurve(60)
+      .then((doc) => { if (alive) setLift60(doc ?? null); })
+      .catch(() => { if (alive) setLift60(null); });
+    return () => { alive = false; };
+  }, []);
+
+  const liftDailyData = useMemo(() => {
+    const pts = lift60?.points ?? [];
+    if (!pts.length) return [];
+    return [{
+      x: pts.map(p => p.date),
+      y: pts.map(p => Number.isFinite(Number(p.lift_vs_baseline)) ? Number(p.lift_vs_baseline) * 100 : null),
+      type: "scatter" as const,
+      mode: "lines",
+      name: "Lift vs baseline (%)",
+      connectgaps: false,
+      hovertemplate: "%{x} — %{y:.1f}%<extra></extra>",
+    }];
+  }, [lift60]);
 
   // ────────────────────────────────────────────────────────────────────────────
   // Démo (iframe) : lancement manuel + plein écran wrapper + skeleton piloté par state
@@ -204,22 +267,18 @@ export default function LandingPage() {
     }, 60);
   };
 
-  const handleEnterFullscreen = async () => {
-    try {
-      await embedWrapRef.current?.requestFullscreen?.();
-    } catch {
-      /* noop */
-    }
+  const handleEnterFullscreen = () => {
+    const wrap = embedWrapRef.current;
+    if (!wrap) return;
+    wrap.classList.add("is-fs"); // active le plein écran “interne”
+    setIsFullscreen(true);
   };
 
-  const handleExitFullscreen = async () => {
-    try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen?.();
-      }
-    } catch {
-      /* noop */
-    }
+  const handleExitFullscreen = () => {
+    const wrap = embedWrapRef.current;
+    if (!wrap) return;
+    wrap.classList.remove("is-fs");
+    setIsFullscreen(false);
   };
 
   // Header (ancres + liens app/monitoring)
@@ -426,9 +485,6 @@ export default function LandingPage() {
           }}
         />
 
-        {/* Ko-fi overlay script */}
-        <Script id="kofi-overlay" src="https://storage.ko-fi.com/cdn/scripts/overlay-widget.js" strategy="afterInteractive" />
-
         {/* Z-index de sécurité pour que le widget soit au-dessus */}
         <style jsx global>{`
           .floatingchat-container { z-index: 10000 !important; }
@@ -443,17 +499,10 @@ export default function LandingPage() {
 
       {/* ====================== CONTENT ====================== */}
       <div className="monitoring">
-        <main id="top" className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
+        <main id="top" className="page" style={{ paddingTop: "var(--header-offset, 10px)" }}>
           {/* Loading bar homogène */}
           <LoadingBar status={barStatus} />
           {error && <div className="banner banner--error mt-2">{error}</div>}
-
-          {/* Ligne méta (source: monitoring/intro) */}
-          {!introError && generatedAt && (
-            <div className="kpi-bar-meta" style={{ marginTop: 6 }}>
-              Mise à jour monitoring : {generatedAt} · Modèle : {modelVersions}
-            </div>
-          )}
 
           {/* ====================== HERO ====================== */}
           <section className="panel hero" aria-labelledby="hero-title">
@@ -555,6 +604,12 @@ export default function LandingPage() {
                   </div>
                 </div>
 
+                {!introError && generatedAt && (
+                  <p className="meta-line" aria-live="polite">
+                    Mise à jour monitoring : {generatedAt}
+                  </p>
+                )}
+
                 <div className="embed">
                   <div className="ratio">
                     <img src="/img/preview-map.webp" alt="Carte Vélo Paris – aperçu statique" loading="lazy" />
@@ -601,27 +656,34 @@ export default function LandingPage() {
               {/* Wrapper en plein écran (inclut l’iframe + la croix) */}
               <div className="embed" aria-live="polite" ref={embedWrapRef} style={{ position: "relative" }}>
                 {isFullscreen && (
-                  <button
-                    type="button"
-                    onClick={handleExitFullscreen}
-                    aria-label="Quitter le plein écran"
-                    title="Quitter le plein écran"
-                    style={{
-                      position: "absolute",
-                      top: 8,
-                      right: 8,
-                      zIndex: 3,
-                      border: "none",
-                      borderRadius: 8,
-                      padding: "6px 10px",
-                      background: "var(--panel, rgba(0,0,0,.6))",
-                      color: "var(--text, #fff)",
-                      cursor: "pointer",
-                      lineHeight: 1,
-                    }}
-                  >
-                    ×
-                  </button>
+                <button
+                  type="button"
+                  onClick={handleExitFullscreen}
+                  aria-label="Quitter le plein écran"
+                  title="Quitter le plein écran"
+                  style={{
+                    position: "absolute",
+                    top: "max(12px, env(safe-area-inset-top) + 15px)",
+                    left: "max(12px, env(safe-area-inset-left) + 15px)",
+                    zIndex: 3,
+                    border: "none",
+                    borderRadius: "50%",
+                    width: "42px",
+                    height: "42px",
+                    background: "color-mix(in srgb, var(--panel) 70%, black)",
+                    color: "var(--text, #fff)",
+                    cursor: "pointer",
+                    fontSize: "2rem",
+                    lineHeight: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    boxShadow: "0 4px 16px rgba(0,0,0,.3)",
+                    backdropFilter: "blur(4px)",
+                  }}
+                >
+                  ×
+                </button>
                 )}
 
                 {showSkeleton && (
@@ -645,7 +707,9 @@ export default function LandingPage() {
                   allow="fullscreen; clipboard-read; clipboard-write"
                   referrerPolicy="no-referrer-when-downgrade"
                   aria-hidden={demoLaunched ? undefined : true}
+                  style={{ width: "100%", height: "100%", border: 0, display: "block" }}
                 />
+
               </div>
 
               {/* Actions sous le frame */}
@@ -761,7 +825,7 @@ export default function LandingPage() {
             <div className="container">
               <div className="sec-head">
                 <div>
-                  <h2 id="monitoring-title">Monitoring & Qualité (data + modèle)</h2>
+                  <h2 id="monitoring-title">Monitoring & Qualité (réseau, data, modèle)</h2>
                   <p>
                     Exports JSON versionnés sur Cloud Storage : kpis.json, snapshot_map.json, station_health.json,
                     drift_summary.json, residuals.json, calibration.json, uncertainty.json, feature_importance.json…
@@ -770,16 +834,42 @@ export default function LandingPage() {
                 <a className="btn outline" href="/monitoring">Ouvrir le monitoring</a>
               </div>
 
-              <div className="showcase">
-                {/* === Grand cadre : carte Snapshot réseau (live) === */}
-                <figure className="card">
-                  <figcaption className="cap">
-                    <strong>Snapshot réseau (live)</strong>
-                    <span>Carte instantanée pénurie / saturation</span>
+              <div className="monitoring-showcase">
+                {/* Carte principale */}
+                <figure className="card card--map">
+                  <figcaption className="cap" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                      <strong>Snapshot réseau</strong>
+                      {snapMap?.generated_at && (
+                        <span>
+                          {snapMap.generated_at
+                            .replace("T", " ")
+                            .replace("Z", "")
+                            .replace(/\.\d+/, "")}
+                        </span>
+                      )}
+                    </div>
+
+                    <a
+                      className="btn sm outline"
+                      href="/monitoring/network/overview"
+                      aria-label="Voir les détails du réseau"
+                    >
+                      Détails du réseau
+                    </a>
                   </figcaption>
-                  <div style={{ width: "100%", height: 360, borderRadius: 12, overflow: "hidden" }}>
+
+                  <div className="map-wrap">
                     {snapMap?.rows?.length ? (
-                      <SnapshotMap rows={snapMap.rows} />
+                      <>
+                        <SnapshotMap rows={snapMap.rows} />
+                        <div className="cluster-legend" aria-hidden>
+                          <div className="title">État du réseau</div>
+                          <div className="row"><span className="dot dot--pen" /> <span>Pénurie</span></div>
+                          <div className="row"><span className="dot dot--sat" /> <span>Saturation</span></div>
+                          <div className="row"><span className="dot dot--ok"  /> <span>OK</span></div>
+                        </div>
+                      </>
                     ) : (
                       <div className="empty" style={{ height: "100%", display: "grid", placeItems: "center" }}>
                         Snapshot indisponible.
@@ -788,26 +878,94 @@ export default function LandingPage() {
                   </div>
                 </figure>
 
-                <div className="kpi-row">
-                  <figure className="card">
-                    <figcaption className="cap">
-                      <strong>Explainability</strong>
-                      <span>Résidus, QQ, ACF, calibration</span>
-                    </figcaption>
-                    <div className="ratio" />
-                  </figure>
-                  <figure className="card">
-                    <figcaption className="cap">
-                      <strong>Performance</strong>
-                      <span>MAE/WAPE vs baseline</span>
-                    </figcaption>
-                    <div className="ratio" />
-                  </figure>
-                </div>
-              </div>
+                {/* Couverture par heure (moyenne) */}
+                <figure className="card plot-card">
+                  <figcaption className="cap" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <div>
+                      <strong>Couverture par heure</strong>
+                      <span style={{ marginLeft: 8 }}>Moyenne récente (%)</span>
+                    </div>
 
-              <div className="figure-note small" style={{ marginTop: 8 }}>
-                Basemap : Carto Light (no labels). Rouge = pénurie ; Bleu = saturation ; Vert = OK. Taille ∝ √(bikes).
+                    <a
+                      className="btn sm outline"
+                      href="/monitoring/data/health"
+                      aria-label="Voir les détails de la qualité des données"
+                    >
+                      Détails qualité des données
+                    </a>
+                  </figcaption>
+
+                  {coverageBarData.length ? (
+                    <div className="plot-wrap">
+                      <Plot
+                        data={coverageBarData as Plotly.Data[]}
+                        layout={chartLayout({
+                          autosize: true,
+                          height: 280,
+                          margin: { l: 56, r: 10, t: 6, b: 40 },
+                          yaxis: { title: { text: "Couverture (%)" }, range: [0, 100], ticksuffix: "%" },
+                          xaxis: { title: { text: "Heure (locale)" } },
+                          hovermode: "x unified",
+                        })}
+                        config={{ ...chartConfig, responsive: true }}
+                        useResizeHandler
+                        style={{ width: "100%" }}
+                        className="plot"
+                      />
+                    </div>
+                  ) : (
+                    <div className="empty">Pas de données de couverture horaire.</div>
+                  )}
+                </figure>
+
+                {/* Lift quotidien (h=60) */}
+                <figure className="card plot-card">
+                  <figcaption
+                    className="cap"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 8,
+                    }}
+                  >
+                    <div>
+                      <strong>Lift quotidien</strong>
+                      <span style={{ marginLeft: 8 }}>Amélioration vs baseline (h=60)</span>
+                    </div>
+
+                    <a
+                      className="btn sm outline"
+                      href="/monitoring/model/performance"
+                      aria-label="Voir les détails de performance du modèle"
+                    >
+                      Détails performance
+                    </a>
+                  </figcaption>
+
+                  {liftDailyData.length ? (
+                    <div className="plot-wrap">
+                      <Plot
+                        data={liftDailyData as Plotly.Data[]}
+                        layout={chartLayout({
+                          autosize: true,
+                          height: 280,
+                          margin: { l: 56, r: 10, t: 6, b: 40 },
+                          yaxis: { title: { text: "Lift (%)" }, zeroline: true },
+                          xaxis: { title: { text: "Date (locale)" } },
+                          hovermode: "x unified",
+                        })}
+                        config={{ ...chartConfig, responsive: true }}
+                        useResizeHandler
+                        style={{ width: "100%" }}
+                        className="plot"
+                      />
+                    </div>
+                  ) : (
+                    <div className="empty">Pas de courbe de lift disponible.</div>
+                  )}
+                </figure>
+
               </div>
 
               <div className="glass prose mt-2">
@@ -902,55 +1060,59 @@ export default function LandingPage() {
 
           {/* ====================== FAQ ====================== */}
           <section id="faq" className="panel" aria-labelledby="faq-title">
-            <div className="container grid-2">
-              <div>
-                <div className="sec-head">
-                  <h2 id="faq-title">FAQ</h2>
-                </div>
-
-                <details>
-                  <summary>La démo met quelques secondes à démarrer, normal ?</summary>
-                  <p>Oui : cold start Cloud Run. Une instance minimale supprime le délai.</p>
-                </details>
-
-                <details>
-                  <summary>Puis-je intégrer l’app dans mon site ?</summary>
-                  <p>
-                    Oui, via un simple <code>&lt;iframe&gt;</code>. Responsive, thème clair/sombre, navigation clavier et
-                    headers de sécurité compatibles.
-                  </p>
-                </details>
-
-                <details>
-                  <summary>Comment sont calculées les prévisions ?</summary>
-                  <p>
-                    Modèles LightGBM avec signaux calendrier/météo, lissages et calibration. Baseline persistance pour
-                    mesurer le vrai gain (MAE/WAPE).
-                  </p>
-                </details>
-
-                <details>
-                  <summary>Et la qualité des données ?</summary>
-                  <p>
-                    KPIs fraîcheur/complétude, dérive simple (PSI/KS), résidus & calibration. Exports JSON pour vos
-                    tableaux de bord.
-                  </p>
-                </details>
+            <div className="container">
+              <div className="sec-head">
+                <h2 id="faq-title">FAQ</h2>
               </div>
 
-              <aside className="glass prose">
-                <h3>Intégration (Cloud Run)</h3>
-                <p className="text-muted">
-                  Intégrez la carte directement dans votre site avec un simple iframe&nbsp;:
-                </p>
-                <pre style={{ whiteSpace: "pre", overflowX: "auto" }}>
-                  <code>{`<iframe src="https://velo-paris.fr/app/embed" width="100%" height="68svh" style="border:0"></iframe>`}</code>
-                </pre>
-                <p className="text-muted" style={{ fontSize: ".95rem" }}>
-                  Vous pouvez aussi héberger l’app sur un sous-domaine dédié
-                  (<em>app.votredomaine.fr</em>) via Cloud Run ou Netlify.
-                </p>
-              </aside>
+              <div className="faq-grid">
+                {/* Colonne gauche : questions */}
+                <div className="faq-questions">
+                  <details>
+                    <summary>La démo met quelques secondes à démarrer, normal ?</summary>
+                    <p>Oui : cold start Cloud Run. Une instance minimale supprime le délai.</p>
+                  </details>
+
+                  <details>
+                    <summary>Puis-je intégrer l’app dans mon site ?</summary>
+                    <p>
+                      Oui, via un simple <code>&lt;iframe&gt;</code>. Responsive, thème clair/sombre, navigation clavier et
+                      headers de sécurité compatibles.
+                    </p>
+                  </details>
+
+                  <details>
+                    <summary>Comment sont calculées les prévisions ?</summary>
+                    <p>
+                      Modèles LightGBM avec signaux calendrier/météo, lissages et calibration. Baseline persistance pour
+                      mesurer le vrai gain (MAE/WAPE).
+                    </p>
+                  </details>
+
+                  <details>
+                    <summary>Et la qualité des données ?</summary>
+                    <p>
+                      KPIs fraîcheur/complétude, dérive simple (PSI/KS), résidus & calibration. Exports JSON pour vos
+                      tableaux de bord.
+                    </p>
+                  </details>
+                </div>
+
+                {/* Colonne droite : intégration */}
+                <aside className="glass prose">
+                  <h3>Intégration (Cloud Run)</h3>
+                  <p className="text-muted">
+                    Intégrez la carte directement dans votre site avec un simple iframe&nbsp;:
+                  </p>
+                  <pre style={{ whiteSpace: "pre", overflowX: "auto" }}>
+                    <code>{`<iframe src="https://velo-paris.fr/app/embed" width="100%" height="68svh" style="border:0"></iframe>`}</code>
+                  </pre>
+                  <p className="text-muted" style={{ fontSize: ".95rem" }}>
+                    Vous pouvez aussi héberger l’app sur un sous-domaine dédié
+                    (<em>app.votredomaine.fr</em>) via Cloud Run ou Netlify.
+                  </p>
+                </aside>
+              </div>
             </div>
           </section>
 
@@ -960,10 +1122,6 @@ export default function LandingPage() {
               <div className="sec-head">
                 <div>
                   <h2 id="support-title">Soutenir le projet</h2>
-                  <p>
-                    Projet indépendant pour une expérience de mobilité fluide à Paris. Votre soutien couvre hébergement,
-                    supervision et R&D continue.
-                  </p>
                 </div>
               </div>
 
@@ -972,85 +1130,78 @@ export default function LandingPage() {
                 <article className="glass prose">
                   <h3>À propos</h3>
                   <p className="text-muted">
-                    Je m’appelle <strong>Adrien</strong>, ingénieur en mathématiques appliquées spécialisé en analyse,
-                    modélisation statistique et machine learning. Je conçois des outils utiles, fiables et élégants — ici
-                    pour anticiper la disponibilité des vélos en ville.
+                    Je m’appelle <strong>Adrien</strong>. Ingénieur en mathématiques appliquées, je conçois des outils fondés sur la
+                    donnée pour mieux comprendre et anticiper les dynamiques urbaines.  
+                    J’ai créé <em>Vélo Paris</em> pour rendre la mobilité plus lisible et accessible, à travers une approche claire,
+                    transparente et méthodique.
                   </p>
-                  <ul className="text-muted" style={{ paddingLeft: 18 }}>
-                    <li>Pipeline temps réel (GBFS + météo) → Cloud Storage.</li>
-                    <li>Modèles LightGBM (h15/h60) & monitoring JSON-first.</li>
-                    <li>App Next.js (Leaflet/Plotly) déployée sur Cloud Run.</li>
-                  </ul>
+
+                  <p className="text-muted">
+                    Ce projet indépendant vise à montrer ce que la donnée peut apporter de concret à la vie quotidienne : une vision
+                    plus fiable du réseau, une meilleure compréhension des usages, et une capacité à anticiper plutôt qu’à subir.
+                    Tout a été pensé pour rester simple à utiliser et solide dans le fond.
+                  </p>
+
+                  <p className="text-muted">
+                    Je crois qu’une donnée bien traitée peut devenir un repère, une aide à la décision, voire un outil de confiance.
+                    C’est cet équilibre entre rigueur et utilité que je cherche à construire, jour après jour, à travers Vélo Paris.
+                  </p>
+
                   <p className="text-muted" style={{ fontSize: ".95rem" }}>
-                    Contribuez une fois, abonnez-vous mensuellement, ou devenez sponsor. Merci 🙏
+                    Votre soutien contribue à maintenir le projet en ligne, à améliorer la qualité des prévisions et à garantir son
+                    indépendance.  
+                    <strong>Merci pour votre appui, il fait réellement la différence.</strong>
                   </p>
                 </article>
 
+
                 {/* Cartes de paiement */}
                 <div className="support-cards">
-                  {/* Don unique */}
                   <figure className="card">
                     <figcaption className="cap">
-                      <strong>Contributions uniques</strong>
-                      <span>Rapides et sans compte</span>
+                      <strong>Soutenir Vélo Paris</strong>
                     </figcaption>
 
-                    <img
-                      src="/img/velo-paris-red.png"
-                      alt="Vélo rouge souriant — dons Vélo Paris"
-                      width={400}
-                      height={400}
-                      style={{
-                        borderRadius: "var(--radius-md)",
-                        boxShadow: "0 4px 18px rgba(0,0,0,0.25)",
-                        background: "var(--panel)",
-                      }}
-                    />
-
-                    <div className="actions-row" style={{ flexWrap: "wrap", gap: "0.5rem", marginTop: "0.75rem" }}>
-                      <a className="btn" href={STRIPE_DON_5} target="_blank" rel="noopener">
-                        5 €
-                      </a>
-                      <a className="btn outline" href={STRIPE_DON_10} target="_blank" rel="noopener">
-                        10 €
-                      </a>
-                      <a className="btn outline" href={STRIPE_DON_20} target="_blank" rel="noopener">
-                        20 €
-                      </a>
+                    <div className="prose text-muted" style={{ marginBottom: "1rem" }}>
+                      <p>
+                        Votre contribution aide à financer le <strong>développement continu</strong> du projet,
+                        l’<strong>hébergement cloud</strong>, la <strong>supervision des données</strong> et la
+                        maintenance des modèles de prévision.  
+                        Chaque soutien, ponctuel ou régulier, contribue à garder Vélo Paris
+                        <strong> libre, fiable et performant</strong>.
+                      </p>
                     </div>
 
-                    <small className="text-muted" style={{ display: "block", marginTop: 8 }}>
-                      Géré par Stripe. Paiement sécurisé sans création de compte.
-                    </small>
-                  </figure>
+                    <div className="actions-col" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                      {/* Ligne 1 : dons uniques */}
+                      <div className="actions-row" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+                        <span style={{ flex: "1 1 100%", fontSize: "0.95rem", color: "var(--text-dim)" }}>
+                          Contribution unique :
+                        </span>
+                        <a className="btn" href={STRIPE_DON_5} target="_blank" rel="noopener">
+                          5 €
+                        </a>
+                        <a className="btn outline" href={STRIPE_DON_10} target="_blank" rel="noopener">
+                          10 €
+                        </a>
+                        <a className="btn outline" href={STRIPE_DON_20} target="_blank" rel="noopener">
+                          20 €
+                        </a>
+                      </div>
 
-                  {/* Abonnement mensuel */}
-                  <figure className="card">
-                    <figcaption className="cap">
-                      <strong>Soutien mensuel</strong>
-                      <span>5 €/mois – annulable à tout moment</span>
-                    </figcaption>
-
-                    <img
-                      src="/img/velo-paris-blue.png"
-                      alt="Vélo bleu souriant — abonnement Vélo Paris"
-                      width={400}
-                      height={400}
-                      style={{
-                        borderRadius: "var(--radius-md)",
-                        boxShadow: "0 4px 18px rgba(0,0,0,0.25)",
-                        background: "var(--panel)",
-                      }}
-                    />
-
-                    <div className="actions-row" style={{ marginTop: "0.75rem" }}>
-                      <a className="btn" href={STRIPE_MONTHLY_5} target="_blank" rel="noopener">
-                        S’abonner
-                      </a>
+                      {/* Ligne 2 : soutien mensuel */}
+                      <div className="actions-row" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+                        <span style={{ flex: "1 1 100%", fontSize: "0.95rem", color: "var(--text-dim)" }}>
+                          Soutien mensuel :
+                        </span>
+                        <a className="btn" href={STRIPE_MONTHLY_5} target="_blank" rel="noopener">
+                          5 €/mois
+                        </a>
+                      </div>
                     </div>
 
-                    <small className="text-muted" style={{ display: "block", marginTop: 8 }}>
-                      Abonnements gérés par Stripe. Reçus automatiques par e-mail.
+                    <small className="text-muted" style={{ display: "block", marginTop: "1rem" }}>
+                      Paiements gérés par Stripe. Transactions sécurisées et reçus automatiques par e-mail.
                     </small>
                   </figure>
                 </div>
@@ -1063,10 +1214,9 @@ export default function LandingPage() {
                   <li>Les contributions financent l’hébergement, la supervision et l’amélioration continue.</li>
                   <li>Pas de déduction fiscale (sauf mention contraire).</li>
                   <li>
-                    Besoin d’un reçu, d’une facture ou d’un partenariat ? Écrivez-moi : <em>contact@votredomaine.fr</em>.
+                    Besoin d’un reçu, d’une facture ou d’un partenariat ? Écrivez-moi : <em>adrien.morel@gmail.com</em>.
                   </li>
                 </ul>
-                <p className="small muted" style={{ marginTop: 8 }}>© {year} • Vélo Paris</p>
               </div>
             </div>
           </section>
@@ -1152,21 +1302,15 @@ const SnapshotMap = dynamic(async () => {
                 radius={rad}
                 pathOptions={{ color: col, weight: 0.8, fillColor: col, fillOpacity: 0.85 }}
               >
-                <Tooltip>
-                  <div style={{ display: "grid", gap: 4 }}>
-                    <div><b>{r.name}</b></div>
-                    <div>bikes: {Number.isFinite(Number(r.bikes)) ? Number(r.bikes) : "?"}</div>
-                    <div>docks: {Number.isFinite(Number(r.docks_avail)) ? Number(r.docks_avail) : "?"}</div>
-                    {pen && <div style={{ color: "#ef4444" }}>pénurie</div>}
-                    {sat && <div style={{ color: "#3b82f6" }}>saturation</div>}
-                    <a
-                      href={`/monitoring/network/dynamics?station_id=${encodeURIComponent(r.station_id)}`}
-                      style={{ textDecoration: "underline" }}
-                    >
-                      Voir la dynamique →
-                    </a>
-                  </div>
-                </Tooltip>
+              <Tooltip>
+                <div style={{ fontSize: "12.5px", lineHeight: 1.4 }}>
+                  <div style={{ fontWeight: 700 }}>{r.name}</div>
+                  <div>Vélos : {r.bikes ?? "—"}</div>
+                  <div>Bornes : {r.docks_avail ?? "—"}</div>
+                  {pen && <div style={{ color: "#ef4444", fontWeight: 600 }}>⚠️ Pénurie</div>}
+                  {sat && <div style={{ color: "#3b82f6", fontWeight: 600 }}>⚠️ Saturation</div>}
+                </div>
+              </Tooltip>
               </CircleMarker>
             );
           })}

@@ -199,6 +199,3 @@ img{ max-width:100%; display:block; }
 /* ======================= Utilitaires ======================= */
 .hidden{ display:none!important; }
 .text-muted{ color:var(--text-dim)!important; }
-
-
-

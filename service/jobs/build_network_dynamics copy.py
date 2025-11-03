@@ -18,35 +18,13 @@ try:
 except Exception as e:
     raise RuntimeError("google-cloud-storage requis") from e
 
-SCHEMA_VERSION = "1.3"  # ENV unifié MON_*, fenêtre stricte, manifest, LATEST only
+SCHEMA_VERSION = "1.2"  # masques exclusifs, n_obs valides, cap_sum zone, fix broadcasting
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ENV — unifié (pas de fallbacks exotiques)
+# Seuils (surchargeables par ENV)
 # ──────────────────────────────────────────────────────────────────────────────
-def _env(name: str, default=None):
-    v = os.environ.get(name)
-    return v if (v is not None and v != "") else default
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(_env(name, default))
-    except Exception:
-        return default
-
-# Requis
-GCS_EXPORTS_PREFIX    = _env("GCS_EXPORTS_PREFIX")    # gs://bucket/velib/exports
-GCS_MONITORING_PREFIX = _env("GCS_MONITORING_PREFIX") # gs://bucket/velib   (ou .../monitoring)
-
-# Optionnels (seulement MON_*)
-MON_TZ                = _env("MON_TZ", "Europe/Paris")
-MON_LAST_DAYS         = _env_int("MON_LAST_DAYS", 7)
-MON_PENURY_THRESH     = _env_int("MON_PENURY_THRESH", 2)
-MON_SATURATION_THRESH = _env_int("MON_SATURATION_THRESH", 2)
-
-if not (GCS_EXPORTS_PREFIX and str(GCS_EXPORTS_PREFIX).startswith("gs://")):
-    raise RuntimeError("GCS_EXPORTS_PREFIX manquant ou invalide (attendu gs://...)")
-if not (GCS_MONITORING_PREFIX and str(GCS_MONITORING_PREFIX).startswith("gs://")):
-    raise RuntimeError("GCS_MONITORING_PREFIX manquant ou invalide (attendu gs://...)")
+_PEN_T = int(os.environ.get("DYNAMICS_PENURY_THRESH",  os.environ.get("PENURY_THRESH", "2")))
+_SAT_T = int(os.environ.get("DYNAMICS_SATURATION_THRESH", os.environ.get("SATURATION_THRESH", "2")))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # GCS helpers
@@ -80,7 +58,7 @@ def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datet
     out.sort(key=lambda b: b.name)
     return out
 
-def _upload_json_gs(obj: dict | list, gs_uri: str, log_prefix: str = "network.dynamics"):
+def _upload_json_gs(obj: dict, gs_uri: str, log_prefix: str = "network.dynamics"):
     """JSON safe: remplace NaN/±Inf par null."""
     def _san(o):
         if isinstance(o, dict):
@@ -157,6 +135,7 @@ def _estimate_capacity_window(df: pd.DataFrame, cols: Dict[str, Optional[str]]) 
 
     cols_for_group = [c for c in [cap, docks, bikes] if c and c in df.columns]
     if not cols_for_group:
+        # aucune info — renvoie une série de NaN par station
         return df.groupby(cols["station"]).size().rename("cap_est").astype(float) * float("nan")
     return df.groupby(sid)[cols_for_group].apply(est).rename("cap_est")
 
@@ -167,13 +146,9 @@ def _compute_occ_and_masks(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> 
     """
     bikes = cols["bikes"]; docks = cols["docks"]; sid = cols["station"]
 
-    # seuils (uniquement MON_*)
-    _PEN_T = float(MON_PENURY_THRESH)
-    _SAT_T = float(MON_SATURATION_THRESH)
-
     # 1) s'assurer que df possède cap_est (colonne alignée ligne à ligne)
     if "cap_est" not in df.columns:
-        cap_per_station = _estimate_capacity_window(df, cols)
+        cap_per_station = _estimate_capacity_window(df, cols)            # index=station (court)
         df = df.merge(cap_per_station.to_frame(), left_on=sid, right_index=True, how="left")
 
     # 2) occ et validité
@@ -184,13 +159,13 @@ def _compute_occ_and_masks(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> 
     occ = np.where((~np.isnan(c)) & (c > 0), np.clip(occ, 0.0, 1.0), np.nan)
     valid = np.isfinite(occ)
 
-    # 3) règles brutes
-    pen_raw = (b <= _PEN_T)
+    # 3) règles brutes (fallback)
+    pen_raw = (b <= float(_PEN_T))
     if docks and docks in df.columns:
         d = pd.to_numeric(df[docks], errors="coerce")
         sat_raw = (d == 0)
     else:
-        sat_raw = (pd.notna(c) & pd.notna(b) & ((c - b) <= _SAT_T))
+        sat_raw = (pd.notna(c) & pd.notna(b) & ((c - b) <= float(_SAT_T)))
 
     # 4) exclusivité + validité
     is_sat = (sat_raw & valid)
@@ -471,34 +446,25 @@ def _regularity_today(ev: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: 
 # Main
 # ──────────────────────────────────────────────────────────────────────────────
 def main() -> int:
-    now = datetime.now(timezone.utc)
+    EXPORTS_PREFIX = os.environ.get("GCS_EXPORTS_PREFIX")    # gs://bucket/velib/exports
+    MON_PREFIX     = os.environ.get("GCS_MONITORING_PREFIX") # gs://bucket/monitoring  (ou gs://bucket/velib)
+    TZNAME         = os.environ.get("OVERVIEW_TZ", "Europe/Paris")
+    LAST_DAYS      = int(os.environ.get("DYNAMICS_LAST_DAYS", os.environ.get("OVERVIEW_LAST_DAYS", "7")))
 
-    # Fenêtre STRICTE = MON_LAST_DAYS
-    window_days = int(MON_LAST_DAYS)
-    end = now
-    start = (end - timedelta(days=window_days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    print(f"[network.dynamics] window UTC: {start.date()} → {end.date()} (days={window_days})")
+    if not (EXPORTS_PREFIX and EXPORTS_PREFIX.startswith("gs://")):
+        raise RuntimeError("GCS_EXPORTS_PREFIX manquant ou invalide")
+    if not (MON_PREFIX and MON_PREFIX.startswith("gs://")):
+        raise RuntimeError("GCS_MONITORING_PREFIX manquant ou invalide")
+
+    now = datetime.now(timezone.utc)
+    WINDOW_DAYS = max(LAST_DAYS, 30)  # 30 jours mini pour profils
+    start = (now - timedelta(days=WINDOW_DAYS - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    print(f"[network.dynamics] window UTC: {start.date()} → {now.date()} (days={WINDOW_DAYS})")
 
     # 1) Lire les parquets évènementiels dans la fenêtre
-    blobs = _list_event_blobs(GCS_EXPORTS_PREFIX, start, end)
+    blobs = _list_event_blobs(EXPORTS_PREFIX, start, now)
     if not blobs:
         print("[network.dynamics] no event blobs in window — nothing to do")
-        # publier manifest minimal pour latest
-        mon_base = GCS_MONITORING_PREFIX.rstrip("/")
-        if not mon_base.endswith("/monitoring"):
-            mon_base = mon_base + "/monitoring"
-        base_latest = f"{mon_base}/network/dynamics/latest"
-        manifest = {
-            "schema_version": SCHEMA_VERSION,
-            "generated_at": now.isoformat().replace("+00:00","Z"),
-            "latest_prefix": base_latest,
-            "window_days": window_days,
-            "tz": MON_TZ,
-            "thresholds": {"penury": int(MON_PENURY_THRESH), "saturation": int(MON_SATURATION_THRESH)},
-            "sources": {"exports_prefix": GCS_EXPORTS_PREFIX},
-            "artifacts": [],
-        }
-        _upload_json_gs(manifest, f"{base_latest}/manifest.json")
         return 0
 
     frames: List[pd.DataFrame] = []
@@ -530,9 +496,9 @@ def main() -> int:
         ev[cols["name"]] = ev[cols["name"]].astype("string")
 
     ev = ev.dropna(subset=[cols["ts"], cols["station"]]).copy()
-    ev = ev[(ev[cols["ts"]] >= pd.Timestamp(start)) & (ev[cols["ts"]] <= pd.Timestamp(end))].copy()
+    ev = ev[(ev[cols["ts"]] >= pd.Timestamp(start)) & (ev[cols["ts"]] <= pd.Timestamp(now))].copy()
 
-    # 3) Jour opérationnel (= dernier events_*.parquet lu)
+    # 3) Jour opérationnel (= dernier events_*.parquet)
     m = re.search(r"events_(\d{4}-\d{2}-\d{2})\.parquet$", blobs[-1].name)
     if not m:
         raise RuntimeError("Impossible de déterminer la date du dernier fichier events")
@@ -540,18 +506,20 @@ def main() -> int:
     print(f"[network.dynamics] day_for_today_utc auto-detected → {day_for_today_utc.date()}")
 
     # 4) Calculs dynamiques
-    heatmaps_profiles_doc = _heatmap_and_profiles(ev, cols, MON_TZ)
-    hourly_doc            = _hourly_pen_sat(ev, cols, MON_TZ)
-    episodes_doc          = _episodes(ev, cols, MON_TZ, MON_LAST_DAYS)
-    by_zone_doc           = _by_zone(ev, cols, MON_TZ, MON_LAST_DAYS)
-    tension_doc           = _tension_by_station(ev, cols, MON_TZ, MON_LAST_DAYS)
-    regularity_doc        = _regularity_today(ev, cols, MON_TZ)
+    heatmaps_profiles_doc = _heatmap_and_profiles(ev, cols, TZNAME)
+    hourly_doc            = _hourly_pen_sat(ev, cols, TZNAME)
+    episodes_doc          = _episodes(ev, cols, TZNAME, LAST_DAYS)
+    by_zone_doc           = _by_zone(ev, cols, TZNAME, LAST_DAYS)
+    tension_doc           = _tension_by_station(ev, cols, TZNAME, LAST_DAYS)
+    regularity_doc        = _regularity_today(ev, cols, TZNAME)
 
-    # 5) Uploads (LATEST only + manifest)
-    mon_base = GCS_MONITORING_PREFIX.rstrip("/")
+    # 5) Uploads (latest + versionnés)
+    mon_base = MON_PREFIX.rstrip("/")
     if not mon_base.endswith("/monitoring"):
         mon_base = mon_base + "/monitoring"
+
     base_latest = f"{mon_base}/network/dynamics/latest"
+    base_ver    = f"{mon_base}/network/dynamics/{now.strftime('%Y-%m-%dT%H-%M-%SZ')}"
 
     common_meta = {
         "schema_version": SCHEMA_VERSION,
@@ -559,6 +527,7 @@ def main() -> int:
         "day_for_today_utc": day_for_today_utc.strftime("%Y-%m-%d"),
     }
 
+    # Latest
     _upload_json_gs({**common_meta, **{"heatmaps_profiles": heatmaps_profiles_doc}}, f"{base_latest}/heatmaps_profiles.json")
     _upload_json_gs({**common_meta, **{"hourly":             hourly_doc}},            f"{base_latest}/hourly_pen_sat.json")
     _upload_json_gs({**common_meta, **{"episodes":           episodes_doc}},          f"{base_latest}/episodes.json")
@@ -566,28 +535,15 @@ def main() -> int:
     _upload_json_gs({**common_meta, **{"tension_by_station": tension_doc}},           f"{base_latest}/tension_by_station.json")
     _upload_json_gs({**common_meta, **{"regularity_today":   regularity_doc}},        f"{base_latest}/regularity_today.json")
 
-    # Manifest top-level (pour la page)
-    manifest = {
-        "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
-        "latest_prefix": base_latest,
-        "window_days": int(MON_LAST_DAYS),
-        "tz": MON_TZ,
-        "thresholds": {"penury": int(MON_PENURY_THRESH), "saturation": int(MON_SATURATION_THRESH)},
-        "sources": {"exports_prefix": GCS_EXPORTS_PREFIX},
-        "artifacts": [
-            "heatmaps_profiles.json",
-            "hourly_pen_sat.json",
-            "episodes.json",
-            "by_zone.json",
-            "tension_by_station.json",
-            "regularity_today.json",
-        ],
-        "day_for_today_utc": day_for_today_utc.strftime("%Y-%m-%d"),
-    }
-    _upload_json_gs(manifest, f"{base_latest}/manifest.json")
+    # Versionnés
+    _upload_json_gs({**common_meta, **{"heatmaps_profiles": heatmaps_profiles_doc}}, f"{base_ver}/heatmaps_profiles.json")
+    _upload_json_gs({**common_meta, **{"hourly":             hourly_doc}},            f"{base_ver}/hourly_pen_sat.json")
+    _upload_json_gs({**common_meta, **{"episodes":           episodes_doc}},          f"{base_ver}/episodes.json")
+    _upload_json_gs({**common_meta, **{"by_zone":            by_zone_doc}},           f"{base_ver}/by_zone.json")
+    _upload_json_gs({**common_meta, **{"tension_by_station": tension_doc}},           f"{base_ver}/tension_by_station.json")
+    _upload_json_gs({**common_meta, **{"regularity_today":   regularity_doc}},        f"{base_ver}/regularity_today.json")
 
-    print("[network.dynamics] done (latest only)")
+    print("[network.dynamics] done")
     return 0
 
 if __name__ == "__main__":

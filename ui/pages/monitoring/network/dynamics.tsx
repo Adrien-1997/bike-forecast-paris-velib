@@ -25,7 +25,7 @@ import {
 /* ───────────────── Plotly (client only) ───────────────── */
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ssr: false,
-  loading: () => <div className="empty">Loading chart…</div>,
+  loading: () => <div className="empty">Chargement du graphique…</div>,
 });
 
 /* ───────────────── Utils ───────────────── */
@@ -94,7 +94,12 @@ const EpisodesMap = dynamic(async () => {
 
     return (
       <div style={{ position: "relative", width: "100%", height: "100%" }}>
-        <MapContainer center={[latMed, lonMed]} zoom={12} className="leaflet-container">
+        <MapContainer
+          center={[latMed, lonMed]}
+          zoom={12}
+          className="leaflet-container"
+          style={{ width: "100%", height: "100%" }}
+        >
           <TileLayer
             url={tileUrl}
             attribution='&copy; OpenStreetMap, &copy; <a href="https://carto.com/">CARTO</a>'
@@ -383,26 +388,27 @@ export default function NetworkDynamicsPage() {
   return (
     <div className="monitoring">
       <Head>
-        <title>Monitoring — Network / Dynamics</title>
-        <meta name="description" content="Dynamiques réseau: heatmaps, profils, épisodes, tension par station." />
+        <title>Monitoring — Réseau / Dynamiques</title>
+        <meta name="description" content="Dynamiques réseau : heatmaps, profils, épisodes et tension par station." />
       </Head>
 
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
-          title="Network — Dynamics"
+          title="Réseau — Dynamiques"
           subtitle="Heatmaps 7×24, profils par jour, épisodes et tension"
           generatedAt={generatedAt}
           extraActions={[
-            { label: "Overview", href: "/monitoring/network/overview" },
+            { label: "Aperçu", href: "/monitoring/network/overview" },
             { label: "Stations", href: "/monitoring/network/stations" },
           ]}
         />
 
         <LoadingBar status={barStatus} />
+        {error && <div className="alert error" style={{ marginTop: 8 }}>{error}</div>}
 
         {/* KPIs */}
         <section className="mt-4">
-          <h2>Network summary</h2>
+          <h2>Résumé réseau</h2>
           <KpiBar
             dense
             items={[
@@ -413,7 +419,7 @@ export default function NetworkDynamicsPage() {
             ]}
           />
           <div className="kpi-bar-meta">
-            Window: {windowDays ?? "—"} days · Schema v{schemaVersion ?? "—"} · Generated {generatedAt ?? "—"}
+            Fenêtre : {windowDays ?? "—"} j · Schéma v{schemaVersion ?? "—"} · Généré {generatedAt ?? "—"}
           </div>
         </section>
 
@@ -431,14 +437,14 @@ export default function NetworkDynamicsPage() {
                 {heatmap("Pénurie (%)", heat.heatmap?.penury_rate ?? [], true)}
               </div>
               <div className="figure-note small">
-                Part horaire des stations en pénurie (≥ 0 % – 100 %).
+                Part horaire des stations en pénurie (0 % – 100 %).
               </div>
 
               <div className="mt-3">
                 {heatmap("Saturation (%)", heat.heatmap?.saturation_rate ?? [], true)}
               </div>
               <div className="figure-note small">
-                Part horaire des stations en saturation (≥ 0 % – 100 %).
+                Part horaire des stations en saturation (0 % – 100 %).
               </div>
             </>
           ) : (
@@ -540,7 +546,7 @@ export default function NetworkDynamicsPage() {
             <input
               value={stationId}
               onChange={(e) => setStationId(e.target.value)}
-              placeholder="ex: 12123"
+              placeholder="ex : 12123"
               className="input"
             />
             <button
@@ -557,7 +563,7 @@ export default function NetworkDynamicsPage() {
             </button>
             {episodes && (
               <span className="small" style={{ opacity: 0.7 }}>
-                Fenêtre: {episodes.last_days} j
+                Fenêtre : {episodes.last_days} j
               </span>
             )}
           </div>
@@ -632,7 +638,7 @@ export default function NetworkDynamicsPage() {
         </section>
 
         {/* Tension par station (stations non cliquables) */}
-        <section className="mt-6">
+        <section className="mt-6" style={{ marginBottom: 40 }}>
           <h2>Tension par station</h2>
           <div className="card">
             <div className="filters">
@@ -645,7 +651,7 @@ export default function NetworkDynamicsPage() {
               />
               {tension && (
                 <span className="small" style={{ opacity: 0.7 }}>
-                  Fenêtre: {tension.last_days} j
+                  Fenêtre : {tension.last_days} j
                 </span>
               )}
             </div>

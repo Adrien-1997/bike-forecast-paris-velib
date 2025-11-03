@@ -1,30 +1,4 @@
-# =============================================================================
 # service/jobs/build_data_drift.py
-# =============================================================================
-# Vélib’ Forecast — Data Drift
-# Schema v1.4 (exclut coords/temps des features + garde-fous robustes)
-#
-# ▶ ENV UNIFIÉ (un seul nom par variable)
-#   - GCS_EXPORTS_PREFIX      (gs://.../velib/exports)          [requis]
-#   - GCS_MONITORING_PREFIX   (gs://.../velib[/monitoring])      [requis]
-#   - MON_TZ                  (ex: Europe/Paris)                 [def=Europe/Paris]
-#   - MON_LAST_DAYS           (fenêtre courante, int)            [def=14]
-#   - MON_REF_DAYS            (fenêtre de référence, int)        [def=28]
-#   - FORECAST_HORIZONS       (liste "15,60")                    [ignoré ici]
-#
-# Sorties (LATEST only):
-#   {GCS_MONITORING_PREFIX}/monitoring/data/drift/latest/
-#     - psi_by_feature.json
-#     - ks_by_feature.json
-#     - deltas_by_feature.json
-#     - psi_global_daily_ema.json
-#     - summary.json
-#     - alerts.json
-#     - bounds.json
-#     - zones.json
-#     - features_detected.json
-# =============================================================================
-
 from __future__ import annotations
 import os, re, json, sys
 from io import BytesIO
@@ -44,47 +18,8 @@ try:
 except Exception as e:
     raise RuntimeError("google-cloud-storage is required") from e
 
-SCHEMA_VERSION = "1.4"
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ENV — un seul nom par variable
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _env(name: str, default=None):
-    v = os.environ.get(name)
-    return v if (v is not None and v != "") else default
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(_env(name, default))
-    except Exception:
-        return default
-
-def _env_list_int(name: str, default_csv: str) -> list[int]:
-    raw = str(_env(name, default_csv))
-    out: list[int] = []
-    for tok in raw.split(","):
-        tok = tok.strip()
-        if not tok:
-            continue
-        try:
-            out.append(int(tok))
-        except Exception:
-            pass
-    return out
-
-GCS_EXPORTS_PREFIX    = _env("GCS_EXPORTS_PREFIX")
-GCS_MONITORING_PREFIX = _env("GCS_MONITORING_PREFIX")
-MON_TZ                = _env("MON_TZ", "Europe/Paris")
-MON_LAST_DAYS         = _env_int("MON_LAST_DAYS", 14)
-MON_REF_DAYS          = _env_int("MON_REF_DAYS", 28)
-FORECAST_HORIZONS     = _env_list_int("FORECAST_HORIZONS", "15,60")  # (non utilisé ici)
-
-# Sanity checks GCS
-if not (GCS_EXPORTS_PREFIX and GCS_EXPORTS_PREFIX.startswith("gs://")):
-    raise RuntimeError("GCS_EXPORTS_PREFIX missing or invalid")
-if not (GCS_MONITORING_PREFIX and GCS_MONITORING_PREFIX.startswith("gs://")):
-    raise RuntimeError("GCS_MONITORING_PREFIX missing or invalid")
+SCHEMA_VERSION = "1.4"  # 1.4 = exclut coords/temps des features de drift + garde-fous robustes
 
 # ──────────────────────────────────────────────────────────────────────────────
 # GCS helpers
@@ -108,7 +43,7 @@ def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datet
     bucket = client.bucket(bkt)
     blobs = list(client.list_blobs(bucket, prefix=key_prefix.strip("/") + "/"))
     pat = re.compile(r"events_(\d{4}-\d{2}-\d{2})\.parquet$")
-    out: List["storage.Blob"] = []
+    out = []
     for bl in blobs:
         m = pat.search(bl.name)
         if not m:
@@ -151,8 +86,8 @@ EXCLUDE_EXACT = {
     "tbin_utc", "ts", "timestamp",
 }
 EXCLUDE_PATTERNS = [
-    r".*_(sin|cos)$",
-    r"^(hour|minute|dow)(_|$)",
+    r".*_(sin|cos)$",           # encodages cycliques éventuels
+    r"^(hour|minute|dow)(_|$)", # colonnes temporelles dérivées
 ]
 
 def _is_time_or_coord(col: str) -> bool:
@@ -304,7 +239,7 @@ def _compute_drift(events: pd.DataFrame, current_days: int, reference_days: int,
             and pd.api.types.is_numeric_dtype(d[c])
             and not _is_time_or_coord(c)
         ]
-        # On garde lat/lon séparément pour la carte des zones
+        # On garde lat/lon séparément pour la carte des zones, mais on ne les met pas dans num_cols
         keep = ["date_local","station_id"] + num_cols + [c for c in ("lat","lon") if c in d.columns]
         return d[keep].groupby(["date_local","station_id"], dropna=True).mean(numeric_only=True).reset_index()
 
@@ -342,9 +277,7 @@ def _compute_drift(events: pd.DataFrame, current_days: int, reference_days: int,
     # EMA quotidienne sur occ_ratio (si dispo)
     ema_df = pd.DataFrame(columns=["date_local","psi_ema"])
     if "occ_ratio" in events.columns:
-        by_day = df.groupby("date_local")["occ_ratio"].apply(
-            lambda s: float(np.nanmean(pd.to_numeric(s, errors='coerce')))
-        ).reset_index()
+        by_day = df.groupby("date_local")["occ_ratio"].apply(lambda s: float(np.nanmean(pd.to_numeric(s, errors='coerce')))).reset_index()
         by_day = by_day.sort_values("date_local")
         alpha = 2 / (7 + 1.0)
         ema, last = [], None
@@ -431,15 +364,25 @@ def _compute_drift(events: pd.DataFrame, current_days: int, reference_days: int,
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main() -> int:
-    # Fenêtre de lecture sur GCS = >= max(MON_LAST_DAYS, MON_REF_DAYS, 7)
-    now = datetime.now(timezone.utc)
-    window_days = max(int(MON_LAST_DAYS), int(MON_REF_DAYS), 7)
-    start = (now - timedelta(days=window_days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    print(f"[data.drift] window UTC: {start.date()} → {now.date()} (days={window_days})")
+    EXPORTS_PREFIX = os.environ.get("GCS_EXPORTS_PREFIX")
+    MON_PREFIX     = os.environ.get("GCS_MONITORING_PREFIX")
+    if not (EXPORTS_PREFIX and EXPORTS_PREFIX.startswith("gs://")):
+        raise RuntimeError("GCS_EXPORTS_PREFIX missing or invalid")
+    if not (MON_PREFIX and MON_PREFIX.startswith("gs://")):
+        raise RuntimeError("GCS_MONITORING_PREFIX missing or invalid")
 
-    blobs = _list_event_blobs(GCS_EXPORTS_PREFIX, start, now)
+    CUR_DAYS = int(os.environ.get("DRIFT_CURRENT_DAYS", "7"))
+    REF_DAYS = int(os.environ.get("DRIFT_REFERENCE_DAYS", "28"))
+    TZNAME   = os.environ.get("DRIFT_TZ", "Europe/Paris")
+
+    now = datetime.now(timezone.utc)
+    WINDOW_DAYS = max(CUR_DAYS, REF_DAYS, 7)
+    start = (now - timedelta(days=WINDOW_DAYS - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    print(f"[data.drift] window UTC: {start.date()} → {now.date()} (days={WINDOW_DAYS})")
+
+    blobs = _list_event_blobs(EXPORTS_PREFIX, start, now)
     if not blobs:
-        print("[data.drift] no event blobs in window — nothing to do")
+        print("[data.drift] no event blobs in window — nothing to do]")
         return 0
 
     frames: List[pd.DataFrame] = []
@@ -461,14 +404,9 @@ def main() -> int:
         return 0
 
     ev_norm = _ensure_events(ev)
-    res = _compute_drift(ev_norm, current_days=int(MON_LAST_DAYS), reference_days=int(MON_REF_DAYS), tz=MON_TZ)
+    res = _compute_drift(ev_norm, current_days=CUR_DAYS, reference_days=REF_DAYS, tz=TZNAME)
 
-    # Normalise le préfixe monitoring (ajoute /monitoring si absent)
-    mon_base = GCS_MONITORING_PREFIX.rstrip("/")
-    if not mon_base.endswith("/monitoring"):
-        mon_base = mon_base + "/monitoring"
-    out_prefix = f"{mon_base}/data/drift/latest"
-
+    out_prefix = MON_PREFIX.rstrip("/") + "/monitoring/data/drift/latest"
     files = {
         "psi_by_feature.json":       res["psi_df"].to_dict(orient="records"),
         "ks_by_feature.json":        res["ks_df"].to_dict(orient="records"),

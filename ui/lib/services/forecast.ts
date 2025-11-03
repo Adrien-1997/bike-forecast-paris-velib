@@ -1,75 +1,74 @@
 // ui/lib/services/forecast.ts
-// Centralized forecast service: batch fetching + normalization
+// Centralized forecast service: GET-only + normalization
 
-import { json, selectForecastRows } from '@/lib/http'
+import { json as httpJson, selectForecastRows } from '@/lib/http'
 import type { Forecast } from '@/lib/types/types'
 
 // ───────────────────────────────
-// Helpers
+// Safe JSON fetch wrapper
 // ───────────────────────────────
 
 /**
- * Split a large array into chunks (max n elements per chunk).
+ * Safe JSON fetch:
+ * - returns fallback [] on non-JSON / empty body
+ * - retries by parsing .text() if content-type is wrong
  */
-const chunk = <T,>(arr: T[], n = 600) =>
-  Array.from({ length: Math.ceil(arr.length / n) }, (_, i) =>
-    arr.slice(i * n, i * n + n)
-  )
-
-// ───────────────────────────────
-// Core batch fetcher
-// ───────────────────────────────
-
-/**
- * Fetch forecast predictions for a list of station_ids at a given horizon.
- * Calls the API in chunks of 600 stations max per request.
- *
- * @param stationIds - list of station IDs
- * @param h - forecast horizon in minutes (default 15)
- */
-export async function getForecastBatch(
-  stationIds: string[],
-  h = 15
-): Promise<Forecast[]> {
-  const ids = Array.from(new Set(stationIds.map(String)))
-  if (!ids.length) return []
-
-  const parts = chunk(ids, 600)
-  const out: Forecast[] = []
-
-  for (const part of parts) {
+async function safeJson<T = any>(
+  url: string,
+  init?: RequestInit,
+  fallback: T = [] as unknown as T
+): Promise<T> {
+  try {
+    return await httpJson<T>(url, init)
+  } catch {
     try {
-      // ✅ POST + query ?h=...
-      const payload = await json<any>(`/forecast/batch?h=${h}`, {
-        method: 'POST',
-        body: JSON.stringify({ station_ids: part }), // correct field name
+      const res = await fetch(url, {
+        ...init,
+        headers: {
+          'content-type': 'application/json',
+          ...(init?.headers || {}),
+        },
       })
-
-      // ✅ Normalize payload regardless of shape
-      const rows = selectForecastRows(payload, h)
-      if (Array.isArray(rows)) out.push(...(rows as Forecast[]))
-    } catch (err) {
-      console.error('[getForecastBatch] failed for chunk', err)
-      throw err
+      const txt = await res.text().catch(() => '')
+      if (!txt) return fallback
+      try {
+        return JSON.parse(txt) as T
+      } catch {
+        return fallback
+      }
+    } catch {
+      return fallback
     }
   }
-
-  return out
 }
 
 // ───────────────────────────────
-// Convenience single horizon fetcher
+// Core: GET-only forecast
 // ───────────────────────────────
 
 /**
- * Shortcut to fetch the latest available forecast for a given horizon.
+ * Fetch the latest forecast for a given horizon (15 or 60).
+ * Returns the normalized array of rows.
  */
 export async function getLatestForecast(h = 15): Promise<Forecast[]> {
-  try {
-    const payload = await json<any>(`/forecast/latest?h=${h}`, { method: 'GET' })
-    return selectForecastRows(payload, h)
-  } catch (err) {
-    console.error('[getLatestForecast] error', err)
-    return []
-  }
+  const payload = await safeJson<any>(`/forecast/latest?h=${h}`, { method: 'GET' })
+  const rows = selectForecastRows(payload, h)
+  return Array.isArray(rows) ? (rows as Forecast[]) : []
+}
+
+/**
+ * Fetch latest forecast once and filter client-side by station_ids (if provided).
+ * This replaces the old POST /forecast/batch behavior.
+ */
+export async function getForecastFiltered(
+  stationIds: string[] | null | undefined,
+  h = 15
+): Promise<Forecast[]> {
+  const all = await getLatestForecast(h)
+  if (!stationIds?.length) return all
+  const wanted = new Set(stationIds.map(String))
+  return all.filter(r => {
+    const sid = (r as any)?.station_id ?? (r as any)?.stationcode
+    return sid != null && wanted.has(String(sid))
+  })
 }

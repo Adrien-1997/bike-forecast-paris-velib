@@ -24,7 +24,7 @@ const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ssr: false,
   loading: () => (
     <div style={{ height: 320, display: "grid", placeItems: "center", opacity: 0.7 }}>
-      Loading chart…
+      Chargement du graphique…
     </div>
   ),
 });
@@ -148,11 +148,11 @@ const MapView = dynamic(async () => {
     }, []);
 
     return (
-      <div className="map-wrap" style={{ position: "relative", width: "100%", height: 520 }}>
+      <div className="map-wrap h-520" style={{ position: "relative", width: "100%", height: "100%" }}>
         <MapContainer
           center={[latMed, lonMed]}
           zoom={12}
-          className="leaflet-container"
+          className="tile-bg"
           style={{ width: "100%", height: "100%" }}
         >
           <TileLayer
@@ -177,17 +177,13 @@ const MapView = dynamic(async () => {
                 radius={rad}
                 pathOptions={{ color: col, weight: 0.8, fillColor: col, fillOpacity: 0.8 }}
               >
-                <Tooltip>
+                <Tooltip className="tooltip-dark">
                   <div style={{ display: "grid", gap: 4 }}>
                     <div><b>{r.name ?? r.station_id}</b></div>
                     {Number.isFinite(cap) && <div>cap≈{cap | 0}</div>}
                     <div>cluster: {r.cluster ?? "—"}</div>
-                    <a
-                      href={`/monitoring/network/dynamics?station_id=${encodeURIComponent(r.station_id)}`}
-                      style={{ textDecoration: "underline" }}
-                    >
-                      View dynamics →
-                    </a>
+                    {/* lien désactivé (règle: stations non cliquables) */}
+                    <div className="small" style={{ opacity: 0.7 }}>Voir dynamique (lien désactivé)</div>
                   </div>
                 </Tooltip>
               </CircleMarker>
@@ -195,40 +191,19 @@ const MapView = dynamic(async () => {
           })}
         </MapContainer>
 
-        <div
-          style={{
-            position: "absolute",
-            right: 8,
-            bottom: 8,
-            zIndex: 1000,
-            background: "rgba(255,255,255,0.92)",
-            color: "#111",
-            borderRadius: 10,
-            padding: "8px 10px",
-            fontSize: 12,
-            boxShadow: "0 2px 10px rgba(0,0,0,0.15)",
-            border: "1px solid #0001",
-            pointerEvents: "auto",
-          }}
-        >
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Clusters</div>
+        {/* Légende clusters (harmonisée) */}
+        <div className="cluster-legend" style={{ right: 8, bottom: 8 }}>
+          <div className="cluster-legend__title">Clusters</div>
           {uniq.map((c) => (
-            <div key={String(c)} style={{ display: "flex", alignItems: "center", gap: 6, margin: "2px 0" }}>
+            <div key={String(c)} className="cluster-legend__row">
               <span
-                style={{
-                  width: 12,
-                  height: 12,
-                  borderRadius: 999,
-                  background: colorOfCluster(c, uniq),
-                  border: "1px solid #0002",
-                  display: "inline-block",
-                  flex: "0 0 auto",
-                }}
+                className="cluster-legend__dot"
+                style={{ background: colorOfCluster(c, uniq) }}
               />
               <span>Cluster {c}</span>
             </div>
           ))}
-          <div style={{ opacity: 0.7, marginTop: 6 }}>{valid.length} stations</div>
+          <div className="cluster-legend__meta">{valid.length} stations</div>
         </div>
       </div>
     );
@@ -250,7 +225,7 @@ export default function NetworkStationsPage() {
   const [sizeByCapacity, setSizeByCapacity] = useState<boolean>(true);
   const [autoFit, setAutoFit] = useState<boolean>(true);
 
-  // ✅ LoadingBar status (aligned with overview.tsx)
+  // ✅ LoadingBar status (aligned with overview.tsx / dynamics.tsx)
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
   /* // CSV export (désactivé pour le moment)
@@ -302,7 +277,13 @@ export default function NetworkStationsPage() {
         const failures = [rKpis, rCent, rStats].filter(
           (r): r is PromiseRejectedResult => r.status === "rejected"
         );
-        setError(failures.length ? failures.map((f) => String((f.reason && (f.reason.message ?? f.reason)) || "request failed")).join(" | ") : null);
+        setError(
+          failures.length
+            ? failures
+                .map((f) => String((f.reason && (f.reason.message ?? f.reason)) || "request failed"))
+                .join(" | ")
+            : null
+        );
 
         // Build clusterRows from stats7
         if (s7 && Array.isArray(s7.rows)) {
@@ -396,27 +377,28 @@ export default function NetworkStationsPage() {
   return (
     <div className="monitoring">
       <Head>
-        <title>Monitoring — Network / Stations</title>
-        <meta name="description" content="Clusters map + 24h profiles (centroids) and recent distributions." />
+        <title>Monitoring — Réseau / Stations</title>
+        <meta name="description" content="Clusters, carte et distributions par station." />
       </Head>
 
       {/* Main content (header/footer injected by _app.tsx) */}
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
-          title="Network — Stations"
-          subtitle="Clusters, map and distributions"
+          title="Réseau — Stations"
+          subtitle="Clusters, carte et distributions"
           generatedAt={generatedAt}
           extraActions={[
-            { label: "Overview", href: "/monitoring/network/overview" },
-            { label: "Dynamics", href: "/monitoring/network/dynamics" },
+            { label: "Aperçu", href: "/monitoring/network/overview" },
+            { label: "Dynamiques", href: "/monitoring/network/dynamics" },
           ]}
         />
 
         <LoadingBar status={barStatus} />
+        {error && <div className="alert error" style={{ marginTop: 8 }}>{error}</div>}
 
         {/* ───────────────── KPIs (KpiBar) ───────────────── */}
         <section className="mt-4">
-          <h2>Clustering summary</h2>
+          <h2>Résumé du clustering</h2>
 
           <KpiBar
             dense
@@ -429,17 +411,17 @@ export default function NetworkStationsPage() {
           />
 
           <div className="kpi-bar-meta">
-            Window: {kpis?.window_days ?? "—"} days · Schema v{kpis?.schema_version ?? "—"}
+            Fenêtre : {kpis?.window_days ?? "—"} j · Schéma v{kpis?.schema_version ?? "—"}
           </div>
         </section>
 
         {/* Map */}
         <section className="mt-6">
-          <h2>Stations map — Clusters</h2>
+          <h2>Carte des stations — Clusters</h2>
           <div className="filters">
             <input
               className="input"
-              placeholder="Search a station…"
+              placeholder="Rechercher une station…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -448,7 +430,7 @@ export default function NetworkStationsPage() {
               value={clusterFilter ?? ""}
               onChange={(e) => setClusterFilter(e.target.value === "" ? null : Number(e.target.value))}
             >
-              <option value="">All clusters</option>
+              <option value="">Tous clusters</option>
               {Array.from(new Set(clusterRows.map((r) => r.cluster).filter((v) => v != null)))
                 .sort((a: any, b: any) => Number(a) - Number(b))
                 .map((c: any) => (
@@ -457,7 +439,7 @@ export default function NetworkStationsPage() {
             </select>
             <label className="check">
               <input type="checkbox" checked={sizeByCapacity} onChange={(e) => setSizeByCapacity(e.target.checked)} />
-              Size = capacity
+              Taille = capacité
             </label>
             <label className="check">
               <input type="checkbox" checked={autoFit} onChange={(e) => setAutoFit(e.target.checked)} />
@@ -467,125 +449,117 @@ export default function NetworkStationsPage() {
           </div>
 
           <div className="map-block">
-            <div className="map-wrap" style={{ width: "100%", height: 520 }}>
-              {filteredRows.length ? (
-                <MapView rows={filteredRows} sizeByCapacity={sizeByCapacity} autoFit={autoFit} />
-              ) : (
-                <div className="empty">No cluster/coordinate data available.</div>
-              )}
-            </div>
+            <MapView rows={filteredRows} sizeByCapacity={sizeByCapacity} autoFit={autoFit} />
           </div>
           <div className="figure-note small">
-            Basemap: Carto Light (no labels). Color encodes the cluster; point size ≈ estimated capacity.
+            Basemap : Carto Light (no labels). La couleur encode le cluster ; la taille ≈ capacité estimée.
           </div>
         </section>
 
         {/* Centroids */}
         <section className="mt-6">
-          <h2>24h profiles — Centroids</h2>
+          <h2>Profils 24 h — Centroids</h2>
           <div className="card plot-card">
-            <h3>Mean 24-hour occupancy profile by cluster (ratio)</h3>
+            <h3>Profil moyen d’occupation 24 h par cluster (ratio)</h3>
             {centroidTraces.length ? (
-              <>
-                <Plot
-                  data={centroidTraces as Plotly.Data[]}
-                  layout={chartLayout({
-                    height: 380,
-                    xaxis: { title: { text: "Hour (HH:MM)" } },
-                    yaxis: { title: { text: "Occupancy (ratio)" }, rangemode: "tozero" },
-                  })}
-                  config={chartConfig}
-                  className="plot plot--lg"
-                />
-              </>
+              <Plot
+                data={centroidTraces as Plotly.Data[]}
+                layout={chartLayout({
+                  height: 380,
+                  xaxis: { title: { text: "Heure (HH:MM)" } },
+                  yaxis: { title: { text: "Occupation (ratio)" }, rangemode: "tozero" },
+                })}
+                config={chartConfig}
+                className="plot plot--lg"
+              />
             ) : (
-              <div className="empty">Centroids unavailable.</div>
+              <div className="empty">Centroids indisponibles.</div>
             )}
           </div>
           <div className="figure-note small">
-            Each series is the cluster centroid over 24h; X-axis labels come from the provided `x_labels` or default to HH:00.
+            Chaque série est le centroïde du cluster sur 24 h ; les labels X proviennent de `x_labels` ou par défaut HH:00.
           </div>
         </section>
 
         {/* Distributions */}
         <section className="mt-6">
-          <h2>Recent indicators — distributions</h2>
+          <h2>Indicateurs récents — distributions</h2>
           <div className="grid-2">
             <div className="card plot-card">
-              <h3>Coverage over last 7 days — share of time (%)</h3>
+              <h3>Couverture sur 7 jours — part du temps (%)</h3>
               {coverageAll.length ? (
                 <Plot
                   data={[hist(coverageAll, "coverage", 24)] as Plotly.Data[]}
                   layout={chartLayout({
                     height: 280,
-                    xaxis: { title: { text: "Coverage (%)" }, range: [0, 100] },
-                    yaxis: { title: { text: "Stations (count)" } },
+                    xaxis: { title: { text: "Couverture (%)" }, range: [0, 100] },
+                    yaxis: { title: { text: "Stations (nombre)" } },
                   })}
                   config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
-                <div className="empty">No coverage data.</div>
+                <div className="empty">Pas de données de couverture.</div>
               )}
             </div>
 
             <div className="card plot-card">
-              <h3>Bike count volatility σ — last 7 days</h3>
+              <h3>Volatilité σ des vélos — 7 derniers jours</h3>
               {volatilityAll.length ? (
                 <Plot
-                  data={[boxY(volatilityAll, "σ(bikes)")] as Plotly.Data[]}
+                  data={[boxY(volatilityAll, "σ(vélos)")] as Plotly.Data[]}
                   layout={chartLayout({
                     height: 280,
-                    yaxis: { title: { text: "σ bikes / station (7d)" }, rangemode: "tozero" },
+                    yaxis: { title: { text: "σ vélos / station (7 j)" }, rangemode: "tozero" },
                   })}
                   config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
-                <div className="empty">No volatility data.</div>
+                <div className="empty">Pas de données de volatilité.</div>
               )}
             </div>
 
             <div className="card plot-card">
-              <h3>Penury — share of time over last 7 days (%)</h3>
+              <h3>Pénurie — part du temps (%) sur 7 jours</h3>
               {penuryPct.length ? (
                 <Plot
-                  data={[hist(penuryPct, "% penury", 24)] as Plotly.Data[]}
+                  data={[hist(penuryPct, "% pénurie", 24)] as Plotly.Data[]}
                   layout={chartLayout({
                     height: 280,
-                    xaxis: { title: { text: "Percentage of time (%)" }, range: [0, 100] },
-                    yaxis: { title: { text: "Stations (count)" } },
+                    xaxis: { title: { text: "Pourcentage du temps (%)" }, range: [0, 100] },
+                    yaxis: { title: { text: "Stations (nombre)" } },
                   })}
                   config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
-                <div className="empty">No penury data.</div>
+                <div className="empty">Pas de données de pénurie.</div>
               )}
             </div>
 
             <div className="card plot-card">
-              <h3>Saturation — share of time over last 7 days (%)</h3>
+              <h3>Saturation — part du temps (%) sur 7 jours</h3>
               {saturationPct.length ? (
                 <Plot
                   data={[hist(saturationPct, "% saturation", 24)] as Plotly.Data[]}
                   layout={chartLayout({
                     height: 280,
-                    xaxis: { title: { text: "Percentage of time (%)" }, range: [0, 100] },
-                    yaxis: { title: { text: "Stations (count)" } },
+                    xaxis: { title: { text: "Pourcentage du temps (%)" }, range: [0, 100] },
+                    yaxis: { title: { text: "Stations (nombre)" } },
                   })}
                   config={chartConfig}
                   className="plot plot--sm"
                 />
               ) : (
-                <div className="empty">No saturation data.</div>
+                <div className="empty">Pas de données de saturation.</div>
               )}
             </div>
           </div>
 
           {stats7Doc && (
             <div className="figure-note small">
-              Schema v{stats7Doc.schema_version} — generated {stats7Doc.generated_at}
+              Schéma v{stats7Doc.schema_version} — généré {stats7Doc.generated_at}
             </div>
           )}
         </section>

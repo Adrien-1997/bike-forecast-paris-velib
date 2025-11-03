@@ -464,10 +464,8 @@ def main() -> int:
     if events.empty:
         print("[build_datasets] events empty after day filter — exit 0")
         return 0
-    events_main  = f"{EXPORTS_PREFIX.rstrip('/')}/events.parquet"
     events_dated = f"{EXPORTS_PREFIX.rstrip('/')}/events_{day}.parquet"
     _write_gcs_parquet(events, events_dated)
-    _copy_gcs(events_dated, events_main)
 
     # PERF + y_pred_int
     perf_base = _build_perf_base(events, horizons_min=HORIZONS)  # base à partir des events DU JOUR
@@ -482,10 +480,8 @@ def main() -> int:
     if perf.empty:
         print("[build_datasets] perf empty — nothing written")
         return 0
-    perf_main  = f"{EXPORTS_PREFIX.rstrip('/')}/perf.parquet"
     perf_dated = f"{EXPORTS_PREFIX.rstrip('/')}/perf_{day}.parquet"
     _write_gcs_parquet(perf, perf_dated)
-    _copy_gcs(perf_dated, perf_main)
 
     print("[build_datasets] done")
     return 0

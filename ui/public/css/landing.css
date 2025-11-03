@@ -106,6 +106,10 @@ body::before{
   --halo-b: rgba(29,127,255,.30);
   --halo-mix: linear-gradient(180deg, rgba(255,255,255,.14), rgba(29,127,255,.16));
 }
+:root { --header-offset: calc(var(--header-h) + 50px); } /* ou 2px si tu veux un léger air */
+@media (max-width: 740px){
+  :root { --header-offset: calc(var(--header-h) + -70px); }
+}
 
 @media (prefers-color-scheme:light){
   :root{
@@ -273,8 +277,9 @@ section > .glass:not(:first-child){ margin-top: var(--g3); }
 
 /* ---------------------- HERO ---------------------- */
 .hero{
-  position:relative; padding:84px 0 34px;
-  min-block-size: calc(100svh - var(--header-h) - var(--safe-top));
+  position:relative;
+  padding:56px 0 24px;             /* réduit l’espace sous le header */
+  min-block-size: auto;            /* plus de contrainte plein écran */
 }
 .hero-grid{display:grid; grid-template-columns:1.1fr .9fr; gap:var(--g6); align-items:center}
 .eyebrow{display:inline-flex; gap:.5rem; align-items:center; margin-bottom:.8rem}
@@ -290,7 +295,7 @@ section > .glass:not(:first-child){ margin-top: var(--g3); }
     var(--panel-2);
   backdrop-filter:saturate(150%) blur(14px);
   -webkit-backdrop-filter:saturate(150%) blur(14px);
-  line-height:0;                 /* <<< supprime l'espace baseline */
+  line-height:0;
 }
 .embed:hover{ box-shadow:none; transform:none; }
 .embed .skeleton{
@@ -300,7 +305,7 @@ section > .glass:not(:first-child){ margin-top: var(--g3); }
 }
 @keyframes shimmer{0%{background-position:0 0}100%{background-position:200% 0}}
 .embed > iframe{
-  display:block;                /* <<< évite le baseline gap */
+  display:block;
   width:100%;
   height:68vh;
   min-height:380px;
@@ -465,7 +470,10 @@ footer{padding:40px 0 calc(40px + var(--safe-bot)); border-top:1px solid var(--b
   .features{grid-template-columns:repeat(2,1fr)}
   .steps{grid-template-columns:repeat(2,1fr)}
   .embed > iframe{height:64vh}
-  .hero{ padding: 76px 0 28px; min-block-size: calc(100svh - var(--header-h) - var(--safe-top)); }
+  .hero{
+    padding:52px 0 22px;       /* réduit encore en tablet */
+    min-block-size:auto;
+  }
   h1{ line-height: 1.06; }
   .lead{ max-width: 65ch; }
   .cta { gap: .6rem; }
@@ -478,7 +486,10 @@ footer{padding:40px 0 calc(40px + var(--safe-bot)); border-top:1px solid var(--b
 
   .features,.cols-2{grid-template-columns:1fr}
   .steps{grid-template-columns:1fr}
-  .hero{padding:72px 0 26px; min-block-size: calc(100svh - var(--header-h) - var(--safe-top) - 4vh);}
+  .hero{
+    padding:46px 0 20px;       /* compact en mobile */
+    min-block-size:auto;
+  }
   .embed{margin-top:18px}
   .embed > iframe{height:58vh; min-height:360px}
   section{ min-block-size: calc(100svh - var(--header-h) - var(--safe-top) - 4vh); }
@@ -662,4 +673,365 @@ section .container > .glass.prose.mt-2{
 }
 @media (max-width: 640px) {
   .floatingchat-container { bottom: 80px !important; }
+}
+
+/* =================== PATCH UNIFIÉ =================== */
+
+/* 1) Support Cards — alignées exactement sur .container */
+.landing .container .support-cards{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: var(--g3);
+  width:100%;
+  margin:0;
+  padding:0;
+  justify-items: stretch;
+  align-items: stretch;
+}
+.landing .container .support-cards > *{
+  margin:0;
+  width:100%;
+  max-width:none;
+}
+.landing .container .support-cards .card{ height:100%; }
+
+@media (max-width: 980px){
+  .landing .container .support-cards{ grid-template-columns: 1fr; }
+}
+
+/* 2) Monitoring grid — centrée comme les autres sections */
+.monitoring-showcase{
+  display: grid;
+  grid-template-columns: 1fr;            /* une seule colonne */
+  grid-auto-rows: minmax(0, max-content);
+  gap: var(--g3);
+  align-items: stretch;
+  justify-items: center;
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+.card--map, .card--explain, .card--perf{
+  width: 100%;
+  max-width: 960px;
+  margin-inline: auto;
+}
+.map-wrap{ height: clamp(320px, 44vh, 520px); }
+
+/* Map */
+.map-wrap{
+  width:100%;
+  height: clamp(320px, 42vh, 520px);
+  border-radius:12px;
+  overflow:hidden;
+}
+
+/* Mobile : pile verticale centrée */
+@media (max-width: 980px){
+  .monitoring-showcase{
+    grid-template-columns:1fr;
+    gap:var(--g3);
+    padding:0 20px;
+  }
+  .card--map, .card--explain, .card--perf{
+    grid-column:1 !important;
+    grid-row:auto !important;
+    width:100%;
+    max-width:720px;
+    margin-inline:auto;
+  }
+  .map-wrap{ height: clamp(280px, 48vh, 420px); }
+}
+@media (max-width: 540px){
+  .card--map, .card--explain, .card--perf{ max-width:540px; }
+  .map-wrap{ height: clamp(260px, 52vh, 380px); }
+}
+
+/* 3) Hero — spacing + anti-overflow */
+.hero{ padding:56px 0 24px !important; min-block-size:auto !important; }
+@media (max-width:740px){ .hero{ padding:52px 0 22px !important; } }
+
+/* Empêche tout débordement horizontal du hero */
+.hero-grid > *{ min-width:0; }
+.hero-card{ min-width:0; }
+
+/* Ceinture & bretelles : pas de scroll horizontal en mobile */
+@media (max-width:740px){
+  html, body, .page{ overflow-x: clip; }
+}
+
+/* 4) Section Support (droite) — la carte prend toute la colonne */
+#support .grid-2{ align-items:start; }
+#support .grid-2 > *{ min-width:0; }
+#support .support-cards{
+  display:contents;
+  margin:0 !important;
+  padding:0 !important;
+}
+#support .support-cards > figure,
+#support .support-cards > .card{
+  margin:0 !important;
+  width:100% !important;
+  max-width:none !important;
+  height:100%;
+}
+
+/* 5) FAQ — grille + responsive */
+.faq-grid{
+  display:grid;
+  grid-template-columns:2fr 1fr;
+  align-items:flex-start;
+  gap:var(--g3);
+  width:100%;
+  max-width:var(--content-max);
+  margin:0 auto;
+  padding:0 24px;
+}
+.faq-questions{ display:flex; flex-direction:column; gap:var(--g2); }
+.faq-grid aside.glass.prose{ margin:0; }
+@media (max-width:960px){
+  .faq-grid{
+    grid-template-columns:1fr;
+    gap:var(--g2);
+    padding:0 20px;
+  }
+  .faq-grid aside.glass.prose{ margin-top:0; }
+}
+
+/* 6) Meta line (petit texte sous KPI) */
+.meta-line{
+  margin-top:6px;
+  font-size:.95rem;
+  color:var(--text-dim);
+}
+
+/* 7) Eyebrow — version mobile ajustée AU TEXTE (unique) */
+@media (max-width:520px){
+  .eyebrow{
+    display:flex;
+    align-items:center;
+    flex-wrap:wrap;              /* retour à la ligne si besoin */
+    gap:.5rem .6rem;
+    margin-bottom:.6rem;
+  }
+  .eyebrow .ping{
+    flex-shrink:0;
+    width:8px; height:8px; border-radius:50%;
+    background:var(--ok);
+    box-shadow:0 0 0 6px rgba(34,197,94,.15);
+  }
+  .eyebrow .chip{
+    flex:0 0 auto;               /* largeur = contenu */
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    padding:.30rem .70rem;
+    font-size:.86rem;
+    line-height:1.1;
+    border-radius:999px;
+    white-space:nowrap;           /* pas de saut dans le texte */
+  }
+}
+
+/* 8) Sections ≥ 100svh (plein écran garanti) */
+section.panel{ min-block-size:100vh; }          /* fallback */
+@supports (min-height:100svh){
+  section.panel{ min-block-size:100svh; }
+}
+@supports (min-height:100dvh){
+  section.panel{ min-block-size:100dvh; }
+}
+
+/* Default demo frame size (non-fullscreen) */
+/* Default demo size (non-fullscreen) */
+#demo .embed{
+  position: relative;   /* ensures absolute children can fill it */
+  width: 100%;
+  min-height: 60svh;    /* ⬅️ increase here (e.g., 74–78svh on desktop) */
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--panel, #111827);
+}
+
+/* Let the iframe fill the wrapper outside fullscreen too */
+#demo .embed iframe{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+
+/* Fullscreen states for the demo wrapper */
+.embed:fullscreen,
+.embed:-webkit-full-screen {
+  inset: 0 !important;
+  position: fixed !important;
+  z-index: 9999 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  background: var(--bg, #0b1220) !important;
+}
+
+/* Make the iframe fill the fullscreen area */
+.embed:fullscreen iframe,
+.embed:-webkit-full-screen iframe {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  border: 0 !important;
+  display: block !important;
+}
+
+/* Fallback when Fullscreen API applies but :fullscreen styles fail */
+.embed.is-fs {
+  inset: 0 !important;
+  position: fixed !important;
+  z-index: 9999 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  background: var(--bg, #0b1220) !important;
+}
+.embed.is-fs iframe {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  border: 0 !important;
+  display: block !important;
+}
+
+
+/* ==========================================================================
+   LANDING MAP — identique à monitoring/overview
+   ========================================================================== */
+
+/* Map container fills card fully */
+.landing .card.card--map { line-height: 0; display: flex; flex-direction: column; }
+.landing .card.card--map > *:not(.cap):not(.ratio) {
+  padding: 0 !important; margin: 0 !important; border: 0 !important; border-radius: 0 !important;
+}
+.landing .card.card--map .map-wrap {
+  --map-h: clamp(360px, 50vh, 640px);
+  position: relative !important;
+  width: 100% !important; height: var(--map-h) !important;
+  flex: 1 1 auto; overflow: visible !important; background: transparent !important;
+}
+.landing .card.card--map .leaflet-container {
+  position: absolute !important; inset: 0 !important;
+  width: 100% !important; height: 100% !important;
+  border: 0 !important; background: transparent !important;
+}
+
+/* Zoom buttons */
+.landing .card.card--map .leaflet-control-zoom a {
+  background: color-mix(in srgb, var(--panel,#0f172a) 88%, #000 12%) !important;
+  color: var(--text,#e6eaf2) !important;
+  border: 1px solid var(--border, rgba(255,255,255,.12)) !important;
+  border-radius: 10px !important; box-shadow: none !important;
+}
+
+/* Attribution (bottom-left) */
+.landing .card.card--map .leaflet-control-attribution {
+  position: absolute !important;
+  left: 8px !important; bottom: 8px !important;
+  z-index: 1000 !important;
+  padding: 4px 8px !important; font-size: 11px !important; line-height: 1.1 !important;
+  border-radius: 12px !important; border: 1px solid rgba(255,255,255,.10) !important;
+  background: rgba(13,18,30,.86) !important; color: #e6eaf2 !important;
+  list-style: none !important;
+}
+.landing .card.card--map .leaflet-control-attribution *::before,
+.landing .card.card--map .leaflet-control-attribution *::after { content: none !important; }
+.landing .card.card--map .leaflet-control-attribution a {
+  color: inherit !important; text-decoration: underline; text-underline-offset: 2px;
+}
+
+/* Legend (bottom-right, white glass) */
+.landing .card.card--map .cluster-legend {
+  position: absolute !important;
+  right: 12px !important; bottom: 12px !important;
+  z-index: 1101 !important;                /* above attribution */
+  min-width: 160px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #ffffff !important;          /* always white */
+  color: #111827 !important;
+  border: 1px solid rgba(0,0,0,.12);
+  box-shadow: 0 10px 24px rgba(0,0,0,.12), 0 2px 8px rgba(0,0,0,.06);
+}
+.landing .cluster-legend .title { font-weight: 800; margin-bottom: 6px; }
+.landing .cluster-legend .row   { display:flex; align-items:center; gap:8px; margin:4px 0; }
+.landing .cluster-legend .dot   { width:12px; height:12px; border-radius:50%; border:1px solid rgba(0,0,0,.15); }
+.landing .cluster-legend .dot--pen{ background:#ef4444; }
+.landing .cluster-legend .dot--sat{ background:#3b82f6; }
+.landing .cluster-legend .dot--ok { background:#10b981; }
+.landing .cluster-legend .note   { opacity: .85; margin-top: 4px; font-size: 11px; }
+.landing .cluster-legend .ts     { margin-top: 6px; font-size: 11px; opacity: .7; }
+
+/* Mobile safety */
+@media (max-width:740px){
+  .landing .card.card--map,
+  .landing .card.card--map .map-wrap,
+  .landing .card.card--map .leaflet-container { overflow-x: clip !important; }
+}
+
+
+/* ================== MONITORING SHOWCASE — largeur unifiée ================== */
+/* Le conteneur occupe la même largeur que .container, et les figures prennent 100% */
+.monitoring-showcase{
+  display: grid;
+  grid-template-columns: 1fr;               /* pile verticalement */
+  gap: var(--g3);
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 0 24px;                           /* même gutter que .container */
+}
+
+/* Assure la même largeur pour TOUTES les figures de la zone */
+.monitoring-showcase > figure.card{
+  width: 100%;
+  max-width: 100%;
+  margin: 0;                                 /* pas d’offset parasite */
+}
+
+/* Les cartes “map” et “plot” n’ont pas de contrainte spéciale de largeur */
+.monitoring-showcase .card--map,
+.monitoring-showcase .plot-card,
+.monitoring-showcase .card--perf{
+  width: 100%;
+}
+
+/* Plotly: width 100%, height safe (min 320px), inner containers fill parent */
+.monitoring-showcase .plot{
+  display:block;
+  width:100% !important;
+  min-height:320px;              /* ← ensures visible height */
+}
+.monitoring-showcase .plot .plot-container,
+.monitoring-showcase .plot .svg-container{
+  width:100% !important;
+  height:100% !important;        /* ← no more auto (was collapsing) */
+}
+/* Texte Plotly en clair sur fond sombre */
+.monitoring-showcase .plot text,
+.monitoring .plot text {
+  fill: #e6eaf2 !important;
+  color: #e6eaf2 !important;
+}
+
+
+/* Mobile: même logique, juste gutter un peu réduit */
+@media (max-width: 980px){
+  .monitoring-showcase{ padding: 0 20px; }
 }

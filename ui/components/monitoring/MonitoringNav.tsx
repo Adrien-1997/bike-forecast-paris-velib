@@ -11,7 +11,7 @@ const GROUPS: Group[] = [
     items: [
       { label: "Aperçu", href: "/monitoring/network/overview" },
       { label: "Stations", href: "/monitoring/network/stations" },
-      { label: "Dynamique", href: "/monitoring/network/dynamics" },
+      { label: "Dynamiques", href: "/monitoring/network/dynamics" },
     ],
   },
   {
@@ -54,10 +54,16 @@ export default function MonitoringNav({
     if (!generatedAt) return null;
     const ts = new Date(generatedAt).getTime();
     if (Number.isNaN(ts)) return null;
+
     const ageMs = Date.now() - ts;
-    const frais = ageMs <= 24 * 60 * 60 * 1000;
+    const ageDays = ageMs / (1000 * 60 * 60 * 24);
+
+    let state: "ok" | "warn" | "err" = "ok";
+    if (ageDays > 14) state = "err";
+    else if (ageDays > 7) state = "warn";
+
     const label = new Date(ts).toLocaleString("fr-FR");
-    return { label, frais };
+    return { label, state };
   }, [generatedAt]);
 
   return (
@@ -70,7 +76,7 @@ export default function MonitoringNav({
           {genInfo && (
             <span className="mn-meta inline">
               <span
-                className={`dot ${genInfo.frais ? "dot--ok" : "dot--stale"}`}
+                className={`dot dot--${genInfo.state}`}
                 aria-hidden="true"
               />
               Généré le : {genInfo.label}
@@ -80,7 +86,11 @@ export default function MonitoringNav({
       </div>
 
       {/* ───────────── Barre de navigation ───────────── */}
-      <div className="toolbar-wrap" role="menubar" aria-label="Sections du monitoring">
+      <div
+        className="toolbar-wrap"
+        role="menubar"
+        aria-label="Sections du monitoring"
+      >
         <div className="groups">
           {GROUPS.map((group) => {
             const groupActive = isGroupActive(pathname, group);
@@ -99,8 +109,8 @@ export default function MonitoringNav({
                   }
                   aria-controls={`dropdown-${group.label}`}
                   aria-haspopup="true"
-                  aria-expanded={undefined} // ouverture gérée par CSS (pas de persistance)
-                  onMouseDown={(e) => e.preventDefault()} // ❗ empêche le focus “collant” au clic
+                  aria-expanded={undefined}
+                  onMouseDown={(e) => e.preventDefault()}
                 >
                   {group.label}
                 </button>
@@ -141,7 +151,7 @@ export default function MonitoringNav({
                   href={a.href}
                   className={active ? "btn btn--primary" : "btn btn--ghost"}
                   aria-current={active ? "page" : undefined}
-                  onMouseDown={(e) => e.preventDefault()} // idem : pas de focus sticky
+                  onMouseDown={(e) => e.preventDefault()}
                 >
                   {a.label}
                 </Link>

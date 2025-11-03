@@ -10,18 +10,31 @@ try:
 except Exception as e:
     raise RuntimeError("google-cloud-storage is required for job locking") from e
 
-# === ENV attendu ===
-# - JOB : ingest | compact_daily | compact_monthly | latest_7d | build_serving_forecast
-#         | build_features_4h (alias) | build_latest (alias)
-#         | train_model | export_training_base | export_training_base_to_gcs
-#         | export_data_health | push_hf
-# - GCS_LOCK           : gs://.../velib/locks/job.lock  (optionnel)
-# - PYTHON_BIN         : binaire python (optionnel, défaut: "python")
-# - DRY_RUN           : 1|0 (affiche la commande sans l'exécuter)
+# ============================================================================
+# ENV attendu
+# ----------------------------------------------------------------------------
+# - JOB :
+#     Ingestion & parquet-first
+#       • ingest
+#       • compact_daily
+#       • compact_monthly
+#       • build_serving_forecast        (alias: build_features_4h)
+#
+#     Training / exports
+#       • train_model
+#       • export_training_base
+#
+#     Monitoring (JSON artifacts)
+#       • monitoring_pipeline           (alias: monitoring)
+#
+# - GCS_LOCK            : gs://.../velib/locks/job.lock  (optionnel)
+# - PYTHON_BIN          : binaire python (optionnel, défaut: "python")
+# - DRY_RUN             : 1|0 (affiche la commande sans l'exécuter)
 #
 # Aides au calcul de date (pour compact_daily / compact_monthly) :
-# - DAY                : YYYY-MM-DD (prioritaire si présent)
-# - DAY_OFFSET         : entier (ex: -1 → veille UTC ; +1 → demain UTC). Ignoré si DAY est défini.
+# - DAY                 : YYYY-MM-DD (prioritaire si présent)
+# - DAY_OFFSET          : entier (ex: -1 → veille UTC ; +1 → demain UTC). Ignoré si DAY est défini.
+# ============================================================================
 
 JOB        = (os.environ.get("JOB", "ingest") or "ingest").strip()
 PYTHON_BIN = os.environ.get("PYTHON_BIN") or "python"
@@ -52,38 +65,38 @@ def lock_blob(client: storage.Client, lock_uri: str | None):
 
 def _dispatch_command(job: str) -> List[str]:
     """
-    Construit la commande Python **par module** (-m), arbo service.jobs.* :
+    Construit la commande Python **par module** (-m), arbo service.jobs.* ou service.core.* :
       - service.jobs.ingest
       - service.jobs.compact_daily
       - service.jobs.compact_monthly
-      - service.jobs.latest_7d
       - service.jobs.build_serving_forecast
       - service.jobs.train_model
       - service.jobs.export_training_base
       - service.jobs.export_training_base_to_gcs
-      - service.jobs.export_data_health
-      - service.jobs.push_hf
-    Compat alias:
-      - build_features_4h → build_serving_forecast
-      - build_latest      → latest_7d
+      - service.core.monitoring_pipeline            ← orchestration monitoring
+
+    Alias compat:
+      - monitoring         → monitoring_pipeline
     """
     alias: Dict[str, str] = {
-        "build_features_4h": "build_serving_forecast",
-        "build_latest": "latest_7d",
+        "monitoring": "monitoring_pipeline",
     }
     normalized = alias.get(job, job)
 
     modules = {
+        # parquet-first
         "ingest":                       "service.jobs.ingest",
         "compact_daily":                "service.jobs.compact_daily",
         "compact_monthly":              "service.jobs.compact_monthly",
-        "latest_7d":                    "service.jobs.latest_7d",
         "build_serving_forecast":       "service.jobs.build_serving_forecast",
+
+        # training / exports
         "train_model":                  "service.jobs.train_model",
         "export_training_base":         "service.jobs.export_training_base",
         "export_training_base_to_gcs":  "service.jobs.export_training_base_to_gcs",
-        "export_data_health":           "service.jobs.export_data_health",
-        "push_hf":                      "service.jobs.push_hf",
+
+        # monitoring
+        "monitoring_pipeline":          "service.core.monitoring_pipeline",
     }
     if normalized not in modules:
         raise ValueError(f"unknown JOB={job}")
@@ -102,7 +115,6 @@ def _maybe_set_day_env(job: str):
         return
 
     if os.environ.get("DAY"):
-        # l'utilisateur a déjà fixé DAY explicitement
         return
 
     offset_env = os.environ.get("DAY_OFFSET")
@@ -144,13 +156,30 @@ def main() -> int:
         # Echo utile debug (sans secrets)
         keys_to_echo = [
             "JOB", "PYTHONPATH",
+            # parquet-first
             "GCS_RAW_PREFIX", "GCS_DAILY_PREFIX", "GCS_MONTHLY_PREFIX",
-            "GCS_SERVING_PREFIX", "SERVING_FORECAST_PREFIX", "GCS_MONITORING_PREFIX",
-            "GCS_EXPORTS_PREFIX",
+            "GCS_SERVING_PREFIX", "SERVING_FORECAST_PREFIX", "GCS_EXPORTS_PREFIX",
+            # models / forecast
+            "GCS_MODEL_URI_T15", "GCS_MODEL_URI_T60",
+            "FORECAST_HORIZONS", "WINDOW_HOURS", "WITH_FORECAST", "NOW_UTC_ISO",
+            # monitoring roots
+            "GCS_MONITORING_PREFIX",
+            # time helpers
             "DAY", "DAY_OFFSET",
+            # training (si utilisé)
             "MODEL_TYPE", "HORIZON_BINS",
+            # monitoring pipeline knobs
+            "STEPS", "CONTINUE_ON_ERROR", "DRY_RUN",
+            "MODEL_URI_15", "MODEL_URI_60", "TZ_APP",
+            "MON_LAST_DAYS", "MON_REF_DAYS",
+            "OVERVIEW_LAST_DAYS", "DYNAMICS_LAST_DAYS", "NETWORK_WINDOW_DAYS",
+            "PERF_LAST_DAYS", "LOOKBACK_DAYS",
         ]
-        echo = " ".join(f"{k}={os.environ.get(k)}" for k in keys_to_echo if os.environ.get(k) is not None)
+        echo = " ".join(
+            f"{k}={os.environ.get(k)}"
+            for k in keys_to_echo
+            if os.environ.get(k) is not None
+        )
         if echo:
             print(f"[env] {echo}")
 

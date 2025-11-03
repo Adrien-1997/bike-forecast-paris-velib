@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getStations } from "@/lib/services/stations";
-import { getForecastBatch } from "@/lib/services/forecast";
+import { getForecastFiltered } from "@/lib/services/forecast";
 import { getWeather } from "@/lib/services/weather";
 import { computeBadges } from "@/lib/services/badges";
 
@@ -28,11 +28,15 @@ const keyFor = (obj: any): string | null => {
   return null;
 };
 
-// normalisation forecast: array direct OU bundle { data: {"15":[...]}, ... }
-function normalizeForecastRows(payload: any, horizon = 15): any[] {
+// normalisation forecast: array direct OU bundle { data: {"15":[...]}, "60":[...] }
+function normalizeForecastRows(payload: any, horizon = 60): any[] {
   if (Array.isArray(payload)) return payload;
   if (payload?.data?.[String(horizon)] && Array.isArray(payload.data[String(horizon)])) {
     return payload.data[String(horizon)];
+  }
+  const hKey = `h${horizon}`;
+  if (payload?.data?.[hKey] && Array.isArray(payload.data[hKey])) {
+    return payload.data[hKey];
   }
   if (Array.isArray(payload?.predictions)) return payload.predictions;
   return [];
@@ -79,7 +83,7 @@ const latestIso = (rows: any[], keyA: string, keyB?: string): string | null => {
 
 /* ───────── Hook principal ───────── */
 
-export function useAppData(horizonMin = 15, refreshMs = 300_000) {
+export function useAppData(horizonMin = 60, refreshMs = 300_000) {
   const [stations, setStations] = useState<Station[]>([]);
   const [forecast, setForecast] = useState<Forecast[] | any[]>([]);
   const [badges, setBadges] = useState<any>(null);
@@ -104,7 +108,7 @@ export function useAppData(horizonMin = 15, refreshMs = 300_000) {
       const keys = Array.from(
         new Set((st ?? []).map((s) => keyFor(s as any)).filter(Boolean) as string[])
       );
-      const raw = keys.length ? await getForecastBatch(keys, horizonMin) : [];
+      const raw = keys.length ? await getForecastFiltered(keys, horizonMin) : [];
       if (!alive.current) return;
 
       const fcRows = normalizeForecastRows(raw, horizonMin);
@@ -203,8 +207,8 @@ export function useAppData(horizonMin = 15, refreshMs = 300_000) {
   /* ───────── export ───────── */
   return {
     stations,
-    forecast,          // rows normalisés
-    badges,            // { weather, freshness: {age_minutes}, meta: {pred_ts_utc, target_ts_utc, forecast_hour, freshness_min} }
+    forecast,
+    badges,
     kpis,
     loading,
     error,

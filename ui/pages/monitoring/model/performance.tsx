@@ -152,17 +152,17 @@ const SnapshotMap = dynamic(async () => {
                   )}
                   {Number.isFinite(Number(r.mae_model)) && (
                     <div>
-                      MAE modèle: <b>{Number(r.mae_model).toFixed(2)}</b>
+                      MAE modèle : <b>{Number(r.mae_model).toFixed(2)}</b>
                     </div>
                   )}
                   {Number.isFinite(Number(r.mae_baseline)) && (
                     <div>
-                      MAE base: <b>{Number(r.mae_baseline).toFixed(2)}</b>
+                      MAE base : <b>{Number(r.mae_baseline).toFixed(2)}</b>
                     </div>
                   )}
                   {Number.isFinite(Number(r.lift_pct)) && (
                     <div>
-                      Lift: <b>{Number(r.lift_pct).toFixed(1)}%</b>
+                      Lift : <b>{Number(r.lift_pct).toFixed(1)}%</b>
                     </div>
                   )}
                 </div>
@@ -208,7 +208,7 @@ function fmtInt(x?: number | string | null) {
 }
 const toStr = (x: any) => (x == null ? "—" : String(x));
 
-function useQueryParamH(defaultH = 15): [number, (h: number) => void] {
+function useQueryParamH(defaultH = 60): [number, (h: number) => void] {
   const [h, setH] = useState(defaultH);
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -242,7 +242,7 @@ function getLatLng(meta?: StationMeta | null): [number, number] | null {
 
 /* ───────────────────────── Page ───────────────────────── */
 export default function ModelPerformancePage() {
-  const [h, setH] = useQueryParamH(15);
+  const [h, setH] = useQueryParamH(60);
 
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [kpis, setKpis] = useState<KPIs | null>(null);
@@ -332,22 +332,22 @@ export default function ModelPerformancePage() {
       Number.isFinite(Number(kpis?.lift_vs_baseline)) ? Number(kpis!.lift_vs_baseline) * 100 : null;
 
     return [
-      { label: "Stations",       value: kpis?.n_stations,          fmt: (v) => fmtInt(v) },
-      { label: "Lignes (n)",     value: kpis?.n_rows,              fmt: (v) => fmtInt(v) },
-      { label: "MAE — Modèle",   value: kpis?.mae_model,           fmt: (v) => fmtNum(v, 2) },
-      { label: "MAE — Baseline", value: kpis?.mae_baseline,        fmt: (v) => fmtNum(v, 2) },
-      { label: "Lift vs baseline", value: liftPct,                 fmt: (v) => fmtPct(v, 1) },
-      { label: "Coverage préd.",   value: kpis?.coverage_pred_pct, fmt: (v) => fmtPct(v, 1) },
+      { label: "Stations",         value: kpis?.n_stations,          fmt: (v) => fmtInt(v) },
+      { label: "Lignes (n)",       value: kpis?.n_rows,              fmt: (v) => fmtInt(v) },
+      { label: "MAE — Modèle",     value: kpis?.mae_model,           fmt: (v) => fmtNum(v, 2) },
+      { label: "MAE — Baseline",   value: kpis?.mae_baseline,        fmt: (v) => fmtNum(v, 2) },
+      { label: "Lift vs baseline", value: liftPct,                   fmt: (v) => fmtPct(v, 1) },
+      { label: "Coverage préd.",   value: kpis?.coverage_pred_pct,   fmt: (v) => fmtPct(v, 1) },
     ];
   }, [kpis]);
 
   const metaParts: string[] = [];
   const schemaV = kpis?.schema_version ?? manifest?.schema_version;
-  if (schemaV != null) metaParts.push(`Schema v${schemaV}`);
-  metaParts.push(`Intervalle: ${toStr(kpis?.ts_min_utc ?? "—")} → ${toStr(kpis?.ts_max_utc ?? "—")} (UTC)`);
+  if (schemaV != null) metaParts.push(`Schéma v${schemaV}`);
+  metaParts.push(`Intervalle : ${toStr(kpis?.ts_min_utc ?? "—")} → ${toStr(kpis?.ts_max_utc ?? "—")} (UTC)`);
   const winDays = kpis?.window_days ?? manifest?.window_days;
-  if (winDays != null) metaParts.push(`Fenêtre: ${winDays} j`);
-  if (generatedAt) metaParts.push(`generated ${generatedAt}`);
+  if (winDays != null) metaParts.push(`Fenêtre : ${winDays} j`);
+  if (generatedAt) metaParts.push(`généré ${generatedAt}`);
   const metaLine = metaParts.join(" · ");
 
   /* ───────── Courbes (line plots) ───────── */
@@ -483,7 +483,7 @@ export default function ModelPerformancePage() {
   return (
     <div className="monitoring">
       <Head>
-        <title>Monitoring — Model / Performance</title>
+        <title>Monitoring — Modèle / Performance</title>
         <meta
           name="description"
           content="Comparatif modèle vs baseline, lift, séries MAE, découpes, série 24 h et carte des stations."
@@ -492,10 +492,10 @@ export default function ModelPerformancePage() {
 
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
-          title="Model — Performance"
+          title="Modèle — Performance"
           subtitle={`MAE/RMSE vs baseline, lift, séries & stations (h=${h} min)`}
           generatedAt={generatedAt ?? undefined}
-          extraActions={[{ label: "Explainability", href: "/monitoring/model/explainability" }]}
+          extraActions={[{ label: "Explicabilité", href: "/monitoring/model/explainability" }]}
         />
 
         <LoadingBar status={barStatus} />

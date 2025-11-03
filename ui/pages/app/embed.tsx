@@ -6,10 +6,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // UI
 import BadgesBar from "@/components/app/Badges";
 import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBar";
+import HorizonToggle from "@/components/common/HorizonToggle";
 
 // Data
 import { computeBadges } from "@/lib/services/badges";
-import { getForecastBatch } from "@/lib/services/forecast";
+import { getForecastFiltered } from "@/lib/services/forecast";
 import { getStations } from "@/lib/services/stations";
 import { getWeather } from "@/lib/services/weather";
 
@@ -34,15 +35,6 @@ const keyFor = (obj: any): string | null => {
   if (id != null && String(id).trim() !== "") return String(id);
   return null;
 };
-
-function normalizeForecastRows(payload: any, horizon = 15): any[] {
-  if (Array.isArray(payload)) return payload;
-  if (payload && payload.data) {
-    const k = String(horizon);
-    if (Array.isArray(payload.data[k])) return payload.data[k];
-  }
-  return [];
-}
 
 const parisHHmmAt = (iso?: string | null): string => {
   if (!iso) return "—";
@@ -87,70 +79,109 @@ function AppEmbedPage() {
   const [userPos, setUserPos] = useState<[number, number] | null>(null);
   const userCenteredOnce = useRef(false);
   const mapRef = useRef<LeafletMap | null>(null);
-  const H = 15;
+
+  // ⬇️ Horizon contrôlé par l'interrupteur (par défaut sur 60 min)
+  const [H, setH] = useState<number>(60);
 
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
+  // Charge météo + stations une fois (elles ne dépendent pas de H)
   useEffect(() => {
     let alive = true;
-    const loadOnce = async () => {
+    const boot = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        const weather = await getWeather();
+        const [weather, st] = await Promise.all([getWeather(), getStations()]);
         if (!alive) return;
 
-        const st = await getStations();
-        if (!alive) return;
         setStations(st ?? []);
 
-        const keys = Array.from(
-          new Set((st ?? []).map((s) => keyFor(s as any)).filter(Boolean) as string[])
-        );
-        const raw = keys.length ? await getForecastBatch(keys, H) : [];
-        if (!alive) return;
+        // badges météo init (les timestamps de forecast seront ajoutés après le fetch des prévisions)
+        const base = computeBadges(weather ?? null, null);
+        setBadges({
+          weather: base?.weather ?? null,
+          freshness: { age_minutes: null },
+          meta: {
+            ...(base?.meta || {}),
+            pred_ts_utc: null,
+            target_ts_utc: null,
+            forecast_hour: "—",
+            freshness_min: null,
+          },
+        });
+      } catch (err: any) {
+        if (alive) setError(String(err?.message ?? err));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    };
+    boot();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
-        const fcRows = normalizeForecastRows(raw, H);
+  // Fetch des prévisions — dépend de H et des stations disponibles
+  useEffect(() => {
+    let alive = true;
+    let timer: number | null = null;
+
+    const run = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        // Liste des IDs pour filtrer côté client
+        const keys = Array.from(
+          new Set((stations ?? []).map((s) => keyFor(s as any)).filter(Boolean) as string[])
+        );
+
+        const fcRows = keys.length ? await getForecastFiltered(keys, H) : [];
+        if (!alive) return;
         setForecast(fcRows);
 
+        // Met à jour les badges avec les horodatages forecast
         const latestBin = latestIso(fcRows, "tbin_latest", "tbin_utc");
         const latestPredTs = latestIso(fcRows, "pred_ts_utc");
         const latestTarget = latestIso(fcRows, "target_ts_utc");
-
         const forecastHourParis = parisHHmmAt(latestTarget);
         const ageMin = ageMinutes(latestBin);
 
-        const base = computeBadges(weather ?? null, latestPredTs);
-        setBadges({
-          weather: base?.weather ?? null,
+        setBadges((prev: any) => ({
+          ...(prev || {}),
           freshness: { age_minutes: ageMin ?? null },
           meta: {
-            ...(base?.meta || {}),
+            ...(prev?.meta || {}),
             pred_ts_utc: latestPredTs ?? null,
             target_ts_utc: latestTarget ?? null,
             forecast_hour: forecastHourParis,
             freshness_min: ageMin ?? null,
           },
-        });
+        }));
       } catch (err: any) {
-        console.error("[loadOnce]", err);
         if (alive) setError(String(err?.message ?? err));
       } finally {
         if (alive) setLoading(false);
       }
     };
 
-    loadOnce();
-    const id = setInterval(loadOnce, 5 * 60 * 1000);
+    // Exécute tout de suite si on a déjà des stations
+    if (stations.length) run();
+
+    // Rafraîchit toutes les 5 minutes à horizon constant
+    timer = window.setInterval(run, 5 * 60 * 1000);
+
     return () => {
       alive = false;
-      clearInterval(id);
+      if (timer) window.clearInterval(timer);
     };
-  }, []);
+  }, [H, stations]);
 
+  // Geoloc
   useEffect(() => {
     if (typeof navigator !== "undefined" && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -250,7 +281,7 @@ function AppEmbedPage() {
         <MapView
           stations={stationsWithGeo as Station[]}
           forecast={forecast as Forecast[]}
-          mode="t15"
+          mode={H === 60 ? "t60" : "t15"}
           center={center}
           userPos={userPos}
           setMapInstance={(m: LeafletMap) => {
@@ -259,14 +290,30 @@ function AppEmbedPage() {
         />
 
         <aside className="panel side-panel">
+          {/* Badges (KPI étiquettes) */}
           <div className="badges" style={{ marginBottom: 8 }}>
             {badges ? <BadgesBar data={badges} /> : <LoadingBar status={barStatus} />}
-            {error && (
-              <div className="small" style={{ color: "#ef4444", marginTop: 6 }}>
-                {error}
-              </div>
-            )}
           </div>
+
+          {/* Interrupteur SOUS les badges */}
+          <div className="hz-wrap" style={{ display: "flex", alignItems: "center", margin: "4px 0 12px" }}>
+            <HorizonToggle
+              value={H}
+              onChange={setH}
+              ariaLabel="Horizon de prévision"
+              leftValue={15}
+              rightValue={60}
+              leftLabel="15 min"
+              rightLabel="60 min"
+              dense
+            />
+          </div>
+
+          {error && (
+            <div className="small" style={{ color: "#ef4444", margin: "6px 0 10px" }}>
+              {error}
+            </div>
+          )}
 
           <div className="kpi">
             <div className="card">
@@ -284,7 +331,7 @@ function AppEmbedPage() {
           </div>
 
           <h3 style={{ margin: "20px 0 10px", fontSize: "1rem" }}>
-            Stations proches · prévision {forecastHourParis}
+            Stations proches · prévision {forecastHourParis} ({H} min)
           </h3>
 
           <div className="list">

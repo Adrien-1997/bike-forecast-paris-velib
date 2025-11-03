@@ -4,8 +4,18 @@ command = "npm run build"
 publish = ".next"
 
 [build.environment]
+# API (public)
 NEXT_PUBLIC_API_BASE = "https://velib-api-160046094975.europe-west1.run.app"
-NEXT_PUBLIC_API_TOKEN = "6z3TKcP;vW?3X3g(@s9D)7-Rie+5!9Gu"
+
+# ⚠️ Ne mets pas de secrets en NEXT_PUBLIC_* : exposés au client !
+# Si ce token est privé, enlève la ligne suivante et passe-le côté proxy/server.
+# NEXT_PUBLIC_API_TOKEN = "…"
+
+# ✅ STRIPE (public au build)
+NEXT_PUBLIC_STRIPE_MONTHLY_5 = "https://buy.stripe.com/14A7sM2pzdaY5Kd4nc4Ja03"
+NEXT_PUBLIC_STRIPE_DON_5      = "https://buy.stripe.com/6oU00kfclc6U3C5g5U4Ja02"
+NEXT_PUBLIC_STRIPE_DON_10     = "https://buy.stripe.com/5kQ3cw0hr1sgdcFcTI4Ja00"
+NEXT_PUBLIC_STRIPE_DON_20     = "https://buy.stripe.com/28E4gA8NXfj60pT9Hw4Ja01"
 
 [[plugins]]
 package = "@netlify/plugin-nextjs"

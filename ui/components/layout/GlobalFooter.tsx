@@ -14,7 +14,7 @@ export default function GlobalFooter({
   social = [
     {
       href: "https://www.linkedin.com/in/adrien-morel/",
-      label: "Suivez Adrien Morel sur LinkedIn",
+      label: "Suivez moi sur LinkedIn",
       icon: (
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512" aria-hidden="true" focusable="false">
           <path

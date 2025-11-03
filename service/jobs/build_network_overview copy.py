@@ -18,24 +18,12 @@ try:
 except Exception as e:
     raise RuntimeError("google-cloud-storage requis") from e
 
-SCHEMA_VERSION = "1.3"  # 1.2 → 1.3 (ENV unifié MON_*, manifest, LATEST only)
-
-# ──────────────────────────────────────────────────────────────────────────────
-# ENV helpers (unifiés)
-# ──────────────────────────────────────────────────────────────────────────────
-def _env(name: str, default=None):
-    v = os.environ.get(name)
-    return v if (v is not None and v != "") else default
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(_env(name, default))
-    except Exception:
-        return default
+SCHEMA_VERSION = "1.2"  # ajout day_for_today_utc + JSON safe
 
 # ──────────────────────────────────────────────────────────────────────────────
 # GCS helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _split(gs: str) -> Tuple[str, str]:
     assert gs.startswith("gs://"), f"bad GCS uri: {gs}"
     b, k = gs[5:].split("/", 1)
@@ -65,8 +53,8 @@ def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datet
     out.sort(key=lambda b: b.name)
     return out
 
-def _upload_json_gs(obj: dict, gs_uri: str, log_prefix: str = "network.overview"):
-    # JSON safe: remplace NaN/±Inf par null
+def _upload_json_gs(obj: dict, gs_uri: str):
+    # JSON "safe": remplace NaN/±Inf par null
     def _san(o):
         if isinstance(o, dict):
             return {k: _san(v) for k, v in o.items()}
@@ -80,11 +68,12 @@ def _upload_json_gs(obj: dict, gs_uri: str, log_prefix: str = "network.overview"
     bkt, key = _split(gs_uri)
     data = json.dumps(safe, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     storage.Client().bucket(bkt).blob(key).upload_from_string(data, content_type="application/json")
-    print(f"[{log_prefix}] wrote → {gs_uri} ({len(data):,} bytes)")
+    print(f"[network.overview] wrote → {gs_uri} ({len(data):,} bytes)")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Core helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
     lower = {c.lower(): c for c in df.columns}
     def any_of(*cands):
@@ -357,17 +346,18 @@ def _stations_tension(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: 
 # ──────────────────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────────────────
+
 def main() -> int:
-    EXPORTS_PREFIX = _env("GCS_EXPORTS_PREFIX")    # gs://bucket/velib/exports
-    MON_PREFIX     = _env("GCS_MONITORING_PREFIX") # gs://bucket/velib (ou .../monitoring)
-    if not (EXPORTS_PREFIX and str(EXPORTS_PREFIX).startswith("gs://")):
+    EXPORTS_PREFIX = os.environ.get("GCS_EXPORTS_PREFIX")    # gs://bucket/velib/exports
+    MON_PREFIX     = os.environ.get("GCS_MONITORING_PREFIX") # gs://bucket/monitoring  (ou gs://bucket/velib)
+    if not (EXPORTS_PREFIX and EXPORTS_PREFIX.startswith("gs://")):
         raise RuntimeError("GCS_EXPORTS_PREFIX manquant ou invalide")
-    if not (MON_PREFIX and str(MON_PREFIX).startswith("gs://")):
+    if not (MON_PREFIX and MON_PREFIX.startswith("gs://")):
         raise RuntimeError("GCS_MONITORING_PREFIX manquant ou invalide")
 
-    TZNAME    = _env("MON_TZ", _env("OVERVIEW_TZ", "Europe/Paris"))
-    LAST_DAYS = _env_int("MON_LAST_DAYS", _env_int("OVERVIEW_LAST_DAYS", 7))
-    REF_DAYS  = _env_int("MON_REF_DAYS", _env_int("OVERVIEW_REF_DAYS", 28))
+    TZNAME       = os.environ.get("OVERVIEW_TZ", "Europe/Paris")
+    LAST_DAYS    = int(os.environ.get("OVERVIEW_LAST_DAYS", "7"))
+    REF_DAYS     = int(os.environ.get("OVERVIEW_REF_DAYS", "28"))
 
     now = datetime.now(timezone.utc)
     # Fenêtre de lecture : max(LAST_DAYS, REF_DAYS, 7) pour tout calcul
@@ -377,24 +367,8 @@ def main() -> int:
 
     # 1) Lire les parquets évènementiels dans la fenêtre
     blobs = _list_event_blobs(EXPORTS_PREFIX, start, now)
-    mon_base = MON_PREFIX.rstrip("/")
-    if not mon_base.endswith("/monitoring"):
-        mon_base = mon_base + "/monitoring"
-    base_latest = f"{mon_base}/network/overview/latest"
-
     if not blobs:
         print("[network.overview] no event blobs in window — nothing to do")
-        # publier un manifest minimal pour latest
-        manifest = {
-            "schema_version": SCHEMA_VERSION,
-            "generated_at": now.isoformat().replace("+00:00","Z"),
-            "latest_prefix": base_latest,
-            "window_days": int(LAST_DAYS),
-            "tz": TZNAME,
-            "sources": {"exports_prefix": EXPORTS_PREFIX},
-            "artifacts": [],
-        }
-        _upload_json_gs(manifest, f"{base_latest}/manifest.json")
         return 0
 
     frames: List[pd.DataFrame] = []
@@ -420,7 +394,7 @@ def main() -> int:
     for c in [cols["ts"], cols["station"]]:
         if c is None: raise RuntimeError("colonnes minimales manquantes")
 
-    # TZ-AWARE UTC parsing
+    # TZ-AWARE UTC parsing (fix tz-naive vs tz-aware mix)
     ev[cols["ts"]] = pd.to_datetime(ev[cols["ts"]], utc=True, errors="coerce")
     ev[cols["station"]] = ev[cols["station"]].astype("string")
 
@@ -440,7 +414,7 @@ def main() -> int:
     # 3) Univers de stations (sur la fenêtre)
     ts_loc_all = _to_local(ev[cols["ts"]], TZNAME)
     tmax = ts_loc_all.max()
-    uni_start = tmax - pd.Timedelta(days=WINDOW_DAYS)
+    uni_start = tmax - pd.Pandas.Timedelta(days=WINDOW_DAYS) if hasattr(pd, "Pandas") else tmax - pd.Timedelta(days=WINDOW_DAYS)
     station_universe = (
         ev.loc[(ts_loc_all >= uni_start) & (ts_loc_all <= tmax), cols["station"]]
         .astype(str).dropna().unique().tolist()
@@ -460,48 +434,53 @@ def main() -> int:
     kpis["volatility_today"] = vol
     kpis["last_days"] = LAST_DAYS
     kpis["ref_days"] = REF_DAYS
-    kpis["day_for_today_utc"] = day_for_today_utc.strftime("%Y-%m-%d")
 
     # Courbes & comparatifs en UTC (jour choisi)
     today_curve_doc, ref_median_doc = _today_vs_median_utc(ev, cols, TZNAME, REF_DAYS, day_for_today_utc)
     kpi_bars_doc = _kpis_today_vs_lags_utc(ev, cols, day_for_today_utc)
     tension_doc = _stations_tension(ev, cols, TZNAME, LAST_DAYS)
 
-    # 5) Uploads (LATEST only + manifest)
-    _upload_json_gs(kpis,                           f"{base_latest}/kpis.json")
-    _upload_json_gs(dist.to_dict(orient="records"), f"{base_latest}/snapshot_distribution.json")
-    _upload_json_gs(today_curve_doc,                f"{base_latest}/today_curve.json")
-    _upload_json_gs(ref_median_doc,                 f"{base_latest}/ref_median_curve.json")
-    _upload_json_gs(kpi_bars_doc,                   f"{base_latest}/kpis_today_vs_lags.json")
+    # 5) Uploads (latest + versionnés) — avec normalisation du préfixe
+    mon_base = MON_PREFIX.rstrip("/")
+    if not mon_base.endswith("/monitoring"):
+        mon_base = mon_base + "/monitoring"
+
+    base_alias = f"{mon_base}/network/overview/latest"
+    base_ver   = f"{mon_base}/network/overview/{now.strftime('%Y-%m-%dT%H-%M-%SZ')}"
+
+    # KPIs & distributions
+    _upload_json_gs(kpis,                                   f"{base_alias}/kpis.json")
+    _upload_json_gs(dist.to_dict(orient="records"),         f"{base_alias}/snapshot_distribution.json")
+
+    # Courbes / docs
+    _upload_json_gs(today_curve_doc,                        f"{base_alias}/today_curve.json")
+    _upload_json_gs(ref_median_doc,                         f"{base_alias}/ref_median_curve.json")
+    _upload_json_gs(kpi_bars_doc,                           f"{base_alias}/kpis_today_vs_lags.json")
+
+    # Carte snapshot (rows)
     _upload_json_gs({
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
         "rows": map_df.to_dict(orient="records"),
-    }, f"{base_latest}/snapshot_map.json")
-    _upload_json_gs(tension_doc,                    f"{base_latest}/stations_tension.json")
+    }, f"{base_alias}/snapshot_map.json")
 
-    # Manifest top-level (pour la page)
-    manifest = {
+    # Stations en tension
+    _upload_json_gs(tension_doc,                            f"{base_alias}/stations_tension.json")
+
+    # Versionnés
+    _upload_json_gs(kpis,                                   f"{base_ver}/kpis.json")
+    _upload_json_gs(dist.to_dict(orient="records"),         f"{base_ver}/snapshot_distribution.json")
+    _upload_json_gs(today_curve_doc,                        f"{base_ver}/today_curve.json")
+    _upload_json_gs(ref_median_doc,                         f"{base_ver}/ref_median_curve.json")
+    _upload_json_gs(kpi_bars_doc,                           f"{base_ver}/kpis_today_vs_lags.json")
+    _upload_json_gs({
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
-        "latest_prefix": base_latest,
-        "window_days": int(LAST_DAYS),
-        "tz": TZNAME,
-        "sources": {"exports_prefix": EXPORTS_PREFIX},
-        "artifacts": [
-            "kpis.json",
-            "snapshot_distribution.json",
-            "today_curve.json",
-            "ref_median_curve.json",
-            "kpis_today_vs_lags.json",
-            "snapshot_map.json",
-            "stations_tension.json",
-        ],
-        "day_for_today_utc": day_for_today_utc.strftime("%Y-%m-%d"),
-    }
-    _upload_json_gs(manifest, f"{base_latest}/manifest.json")
+        "rows": map_df.to_dict(orient="records"),
+    }, f"{base_ver}/snapshot_map.json")
+    _upload_json_gs(tension_doc,                            f"{base_ver}/stations_tension.json")
 
-    print("[network.overview] done (latest only)")
+    print("[network.overview] done")
     return 0
 
 if __name__ == "__main__":

@@ -1,4 +1,53 @@
-# service/jobs/build_serving_forecast.py
+# ==================================================================================================
+#  build_serving_forecast.py
+#  ──────────────────────────────────────────────────────────────────────────────
+#  Builds 4-hour (5-minute bins) features and produces short-horizon forecasts
+#  (e.g., 15min, 60min) from configured GCS models.
+#
+#  • Read   : raw data from GCS_RAW_PREFIX (hour-partitioned parquet files)
+#  • Models : loaded from GCS_MODEL_URI_T15 / GCS_MODEL_URI_T60 (and future horizons)
+#  • Output : ONE JSON PER HORIZON:
+#             {SERVING_FORECAST_PREFIX}/h15/latest.json
+#             {SERVING_FORECAST_PREFIX}/h60/latest.json
+#
+#  Example of per-horizon output (latest.json):
+#  {
+#    "generated_at": "2025-11-01T17:55:00Z",
+#    "horizon_min": 15,
+#    "data": [ {...}, {...} ]
+#  }
+#
+# ==================================================================================================
+#  ENVIRONMENT VARIABLES
+#  ──────────────────────────────────────────────────────────────────────────────
+#
+#  GCS_RAW_PREFIX              = gs://velib-forecast-472820_cloudbuild/velib/bronze
+#  SERVING_FORECAST_PREFIX     = gs://velib-forecast-472820_cloudbuild/velib/serving/forecast
+#
+#  GCS_MODEL_URI_T15           = gs://velib-forecast-472820_cloudbuild/velib/models/h15/latest.joblib
+#  GCS_MODEL_URI_T60           = gs://velib-forecast-472820_cloudbuild/velib/models/h60/latest.joblib
+#
+#  FORECAST_HORIZONS           = 15,60           # horizons in minutes (comma-separated)
+#  WINDOW_HOURS                = 4               # historical window to compute features
+#  WITH_FORECAST               = 1               # 1/true to run inference & upload JSONs
+#
+#  (optional) NOW_UTC_ISO      = 2025-11-01T17:59:00Z   # fixed clock for testing
+#
+# ==================================================================================================
+#  Example execution (Cloud Run Job or local):
+#
+#  python -m service.jobs.build_serving_forecast
+#
+#  Cloud Run (excerpt):
+#  gcloud run jobs execute serving-forecast \
+#    --set-env-vars="GCS_RAW_PREFIX=gs://velib-forecast-472820_cloudbuild/velib/bronze,\
+#                    SERVING_FORECAST_PREFIX=gs://velib-forecast-472820_cloudbuild/velib/serving/forecast,\
+#                    GCS_MODEL_URI_T15=gs://velib-forecast-472820_cloudbuild/velib/models/h15/latest.joblib,\
+#                    GCS_MODEL_URI_T60=gs://velib-forecast-472820_cloudbuild/velib/models/h60/latest.joblib,\
+#                    FORECAST_HORIZONS=15,60,\
+#                    WITH_FORECAST=1"
+# ==================================================================================================
+
 from __future__ import annotations
 import os, sys, shutil, json
 from pathlib import Path
@@ -55,7 +104,7 @@ WINDOW_HOURS = int(os.environ.get("WINDOW_HOURS", "4"))
 LAG_MAX_BINS = 48
 WINDOW_BINS = max(WINDOW_HOURS * 60 // BIN_MINUTES, LAG_MAX_BINS + 1)
 
-WITH_FORECAST = str(os.environ.get("WITH_FORECAST", "1")).lower() in ("1","true","yes")
+WITH_FORECAST = str(os.environ.get("WITH_FORECAST", "1")).lower() in ("1", "true", "yes")
 SERVING_FORECAST_PREFIX = os.environ.get("SERVING_FORECAST_PREFIX")
 FORECAST_HORIZONS = os.environ.get("FORECAST_HORIZONS", "15,60")
 
@@ -112,7 +161,7 @@ def _download_gs_files(cli: storage.Client, uris: List[str], dest_dir: Path) -> 
 # ─────────────────────────────────────────────
 #  IO / normalization
 # ─────────────────────────────────────────────
-BASE_COLS = list(TRAIN_BASE_COLUMNS)  # aligne avec training
+BASE_COLS = list(TRAIN_BASE_COLUMNS)  # aligned with training
 
 def _to_naive_utc(series: pd.Series) -> pd.Series:
     dt = pd.to_datetime(series, utc=True, errors="coerce")
@@ -131,27 +180,27 @@ def _read_concat_parquets(files: List[Path]) -> pd.DataFrame:
 
     df = pd.concat(dfs, ignore_index=True)
 
-    # typer/normaliser temps
+    # time typing/normalization
     if "ts_utc" in df.columns:
         df["ts_utc"] = _to_naive_utc(df["ts_utc"])
     if "tbin_utc" in df.columns:
         df["tbin_utc"] = _to_naive_utc(df["tbin_utc"])
 
-    # numériques (ne PAS toucher station_id)
-    for c in ["bikes","capacity","mechanical","ebike"]:
+    # numerics (do NOT touch station_id)
+    for c in ["bikes", "capacity", "mechanical", "ebike"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
-    for c in ["lat","lon","temp_C","precip_mm","wind_mps"]:
+    for c in ["lat", "lon", "temp_C", "precip_mm", "wind_mps"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # texte
+    # text
     if "status" in df.columns:
         df["status"] = df["status"].astype("string")
     if "name" in df.columns:
         df["name"] = df["name"].astype("string")
 
-    # ── station_id robuste ─────────────────────────────────────────────
+    # robust station_id
     if "station_id" not in df.columns:
         if "stationcode" in df.columns:
             df["station_id"] = df["stationcode"].astype("string")
@@ -163,12 +212,12 @@ def _read_concat_parquets(files: List[Path]) -> pd.DataFrame:
         m_empty = df["station_id"].isna() | (df["station_id"].str.strip() == "")
         df.loc[m_empty, "station_id"] = sc
 
-    # dédoublonnage
-    if set(["station_id","tbin_utc","ts_utc"]).issubset(df.columns):
-        df = df.sort_values(["station_id","tbin_utc","ts_utc"])
-        df = df.groupby(["station_id","tbin_utc"], as_index=False, dropna=True).tail(1).reset_index(drop=True)
+    # de-dup
+    if set(["station_id", "tbin_utc", "ts_utc"]).issubset(df.columns):
+        df = df.sort_values(["station_id", "tbin_utc", "ts_utc"])
+        df = df.groupby(["station_id", "tbin_utc"], as_index=False, dropna=True).tail(1).reset_index(drop=True)
 
-    # force présence colonnes attendues
+    # ensure expected columns
     for c in BASE_COLS:
         if c not in df.columns:
             df[c] = pd.NA
@@ -180,8 +229,8 @@ def _read_concat_parquets(files: List[Path]) -> pd.DataFrame:
 # ─────────────────────────────────────────────
 def _build_one_station_full(st_df: pd.DataFrame) -> pd.Series:
     """
-    Calcule un set complet "proche training" mais condensé en une seule ligne (dernier bin).
-    Hypothèse: st_df contient une fenêtre historique de >= 48 bins (4h).
+    Builds a compact, training-like feature vector (one row) for the last bin.
+    Assumes st_df has >= 48 bins (4 hours) historical data.
     """
     st_df = st_df.sort_values("tbin_utc").copy()
 
@@ -195,17 +244,17 @@ def _build_one_station_full(st_df: pd.DataFrame) -> pd.Series:
     # lags
     def lag_last(s: pd.Series, n: int):
         return s.shift(n).iloc[-1] if len(s) >= (n + 1) else np.nan
-    lag_set = (1,2,3,6,12,24,48)
+    lag_set = (1, 2, 3, 6, 12, 24, 48)
     lag_vals = {f"lag_bikes_{L}": lag_last(bikes, L) for L in lag_set}
 
-    # rollings (sur bikes) en évitant le leak (on décale d'1 bin)
+    # rollings (avoid leak → shift by 1)
     roll_vals: Dict[str, float] = {}
-    for W in (3,6,12):
+    for W in (3, 6, 12):
         s_shift = bikes.shift(1)
-        roll_vals[f"roll_mean_{W}"] = s_shift.rolling(W, min_periods=max(1, W//2)).mean().iloc[-1]
-        roll_vals[f"roll_std_{W}"]  = s_shift.rolling(W, min_periods=max(1, W//2)).std().iloc[-1]
+        roll_vals[f"roll_mean_{W}"] = s_shift.rolling(W, min_periods=max(1, W // 2)).mean().iloc[-1]
+        roll_vals[f"roll_std_{W}"]  = s_shift.rolling(W, min_periods=max(1, W // 2)).std().iloc[-1]
 
-    # tendances 12 bins
+    # trends (12 bins)
     def _slope_per_5m(ts: pd.Series, y: pd.Series) -> float:
         t = pd.to_datetime(ts, errors="coerce")
         m = t.notna() & y.notna()
@@ -224,7 +273,7 @@ def _build_one_station_full(st_df: pd.DataFrame) -> pd.Series:
         (win_occ["bikes"] / win_occ["capacity"].where(win_occ["capacity"] > 0))
     ) if {"bikes","capacity"}.issubset(win_occ.columns) else np.nan
 
-    # ratios & météo lag
+    # ratios & weather (lag 1)
     occ_ratio_bin = (cur.get("bikes", np.nan) / cur.get("capacity", np.nan)) if pd.notna(cur.get("capacity", np.nan)) and cur.get("capacity", 0) > 0 else np.nan
     temp_C    = pd.to_numeric(st_df["temp_C"], errors="coerce")
     precip_mm = pd.to_numeric(st_df["precip_mm"], errors="coerce")
@@ -233,7 +282,7 @@ def _build_one_station_full(st_df: pd.DataFrame) -> pd.Series:
     precip_mm_lag1 = lag_last(precip_mm, 1)
     wind_mps_lag1  = lag_last(wind_mps, 1)
 
-    # calendaires via cal_features.add_time_features (UTC + Paris)
+    # calendar features (UTC + Paris)
     cal = pd.DataFrame({"tbin_utc": [tbin_latest]})
     cal = add_time_features(cal, ts_col="tbin_utc", add_paris_derived=True).iloc[0].to_dict()
 
@@ -257,8 +306,8 @@ def _build_one_station_full(st_df: pd.DataFrame) -> pd.Series:
         "wind_mps_lag1":   wind_mps_lag1,
         "trend_nb_12b":    trend_nb_12b,
         "trend_occ_12b":   trend_occ_12b,
-        "status":          status,     # encodé en status_code ensuite
-        # calendaires
+        "status":          status,     # encoded to status_code later
+        # calendar
         "hour":        cal.get("hour"),
         "minute":      cal.get("minute"),
         "dow":         cal.get("dow"),
@@ -277,7 +326,7 @@ def _build_one_station_full(st_df: pd.DataFrame) -> pd.Series:
     return pd.Series(out)
 
 def _build_features(df: pd.DataFrame, start_tbin: datetime, end_tbin: datetime) -> pd.DataFrame:
-    # fenêtre d’historique pour calculer les features
+    # select historical window to compute features
     m = (df["tbin_utc"] >= start_tbin) & (df["tbin_utc"] <= end_tbin)
     cols_needed = [
         "tbin_utc","station_id","bikes","capacity","mechanical","ebike","status",
@@ -287,7 +336,7 @@ def _build_features(df: pd.DataFrame, start_tbin: datetime, end_tbin: datetime) 
     if dfw.empty:
         return pd.DataFrame()
 
-    # ⚠️ on fixe station_id à partir de la clé du groupby (et pas des valeurs de colonnes)
+    # Important: set station_id from groupby key (not from column values possibly altered)
     def _build_with_key(g: pd.DataFrame) -> pd.Series:
         out = _build_one_station_full(g)
         out["station_id"] = str(g.name) if g.name is not None else pd.NA
@@ -306,18 +355,17 @@ def _build_features(df: pd.DataFrame, start_tbin: datetime, end_tbin: datetime) 
                .reset_index(drop=True)
         )
 
-    # Typage final
+    # final typing
     feats["station_id"]  = feats["station_id"].astype("string")
     feats["tbin_latest"] = pd.to_datetime(feats["tbin_latest"], errors="coerce")
 
-    # Encodage status_code global
+    # encode status_code
     if "status" in feats.columns:
         cats = sorted([s for s in feats["status"].dropna().unique()])
         status_map = {s: i for i, s in enumerate(cats)}
         feats["status_code"] = feats["status"].map(status_map).astype("Int64")
         feats = feats.drop(columns=["status"])
 
-    # (optionnel) petit log pour contrôle
     try:
         print("[features] sample station_id:", feats["station_id"].head(3).tolist())
     except Exception:
@@ -363,7 +411,7 @@ def _records_jsonable(df: pd.DataFrame) -> list[dict]:
 #  Main
 # ─────────────────────────────────────────────
 def main() -> int:
-    # 0) now / fenêtre de calcul
+    # 0) now / feature window
     if "NOW_UTC_ISO" in os.environ:
         now_utc = datetime.fromisoformat(os.environ["NOW_UTC_ISO"].replace("Z", "+00:00")).astimezone(timezone.utc)
     else:
@@ -398,17 +446,18 @@ def main() -> int:
         print("[features_4h] no features → no forecast", flush=True)
         return 0
 
-    # 4) inference → JSON consolidé
+    # 4) inference → per-horizon JSONs
     if not WITH_FORECAST:
         print("[forecast] WITH_FORECAST disabled — nothing to do", flush=True)
         return 0
     if not SERVING_FORECAST_PREFIX:
-        raise RuntimeError("SERVING_FORECAST_PREFIX is required to write latest_forecast.json")
+        raise RuntimeError("SERVING_FORECAST_PREFIX is required to write latest.json")
 
     def _model_uri_for(hmin: int) -> str | None:
         if hmin == 15 and GCS_MODEL_URI_T15: return GCS_MODEL_URI_T15
         if hmin == 60 and GCS_MODEL_URI_T60: return GCS_MODEL_URI_T60
-        return None  # horizon non configuré → on skip
+        # future horizons can be added here (e.g., 120 → GCS_MODEL_URI_T120)
+        return None  # horizon not configured → skip
 
     horizons_min = [int(x.strip()) for x in FORECAST_HORIZONS.split(",") if x.strip()]
     consolidated: Dict[str, list] = {}
@@ -424,7 +473,7 @@ def main() -> int:
         preds = predict_from_features_df(
             feats_df=feats,
             model_uri=uri,
-            horizon_bins=max(1, hmin // 5),
+            horizon_bins=max(1, hmin // 5),  # 15→3 bins, 60→12 bins
             model_alias=None,
         )
 
@@ -433,20 +482,20 @@ def main() -> int:
             consolidated[str(hmin)] = []
             continue
 
-        # Réindexer pour alignement positionnel sûr
+        # positional realignment (safety)
         preds = preds.reset_index(drop=True).copy()
         feats_idx = feats.reset_index(drop=True).copy()
 
-        # station_id : forcer depuis feats (string)
+        # ensure station_id comes from feats (string)
         preds["station_id"] = feats_idx["station_id"].astype("string")
 
-        # tbin_latest & capacity_bin utiles au front
+        # include useful fields for UI
         if "tbin_latest" not in preds.columns:
             preds["tbin_latest"] = feats_idx["tbin_latest"].values
         if "capacity_bin" not in preds.columns and "capacity_bin" in feats_idx.columns:
             preds["capacity_bin"] = feats_idx["capacity_bin"].values
 
-        # horizon + horodatage d'exécution + version du modèle
+        # meta fields
         preds["horizon_min"] = hmin
         preds["pred_ts_utc"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         if "model_version" not in preds.columns:
@@ -455,7 +504,7 @@ def main() -> int:
             except Exception:
                 preds["model_version"] = f"model_h{hmin}"
 
-        # prédiction entière : arrondi, borne à ≥ 0
+        # integer bike prediction if only float present
         if "bikes_pred_int" not in preds.columns and "bikes_pred" in preds.columns:
             preds["bikes_pred_int"] = (
                 np.rint(pd.to_numeric(preds["bikes_pred"], errors="coerce"))
@@ -469,21 +518,20 @@ def main() -> int:
         except Exception:
             pass
 
-        recs = _records_jsonable(preds)
-        consolidated[str(hmin)] = recs
+        consolidated[str(hmin)] = _records_jsonable(preds)
 
-    bundle = {
-        "generated_at": generated_at,
-        "horizons": horizons_min,
-        "data": consolidated,
-    }
+    # 5) upload per horizon: serving/h15/latest.json, serving/h60/latest.json
+    for hmin, recs in consolidated.items():
+        sub_bundle = {
+            "generated_at": generated_at,
+            "horizon_min": int(hmin),
+            "data": recs,
+        }
+        dest_uri = f"{SERVING_FORECAST_PREFIX.rstrip('/')}/h{hmin}/latest.json"
+        _upload_bytes(cli, json.dumps(sub_bundle, ensure_ascii=False).encode("utf-8"), dest_uri)
+        print(f"[forecast] uploaded → {dest_uri}", flush=True)
 
-    _upload_bytes(
-        cli,
-        json.dumps(bundle, ensure_ascii=False).encode("utf-8"),
-        f"{SERVING_FORECAST_PREFIX.rstrip('/')}/latest_forecast.json"
-    )
-    print(f"[forecast] uploaded SINGLE JSON: latest_forecast.json", flush=True)
+    print(f"[forecast] done: {len(consolidated)} horizons uploaded", flush=True)
     return 0
 
 if __name__ == "__main__":

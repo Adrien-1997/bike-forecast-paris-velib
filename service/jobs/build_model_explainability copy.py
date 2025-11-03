@@ -1,33 +1,46 @@
 # service/jobs/build_model_explainability.py
 """
 Vélib' Forecast — Model Explainability (LATEST only, XGBoost native FI)
-Unifié ENV : MON_TZ / MON_LAST_DAYS / MON_HORIZONS
+======================================================================
 
-Requis:
+Génère des artefacts d'explicabilité légers à partir des exports de performance :
+- residuals (hist/qq/acf/hétéro/épisodes)
+- calibration (régression, binnings, by_hour, biais par station)
+- uncertainty (coverage via bandes fournies, sigma, ou quantiles de résidus)
+- feature_importance (***native XGBoost get_score*** : gain/weight/cover + shares)
+
+Publication :
+  {GCS_MONITORING_PREFIX}/monitoring/model/explainability/latest/h{H}/
++ manifest top-level à :
+  {GCS_MONITORING_PREFIX}/monitoring/model/explainability/latest/manifest.json
+
+ENV requis :
 - GCS_EXPORTS_PREFIX          gs://.../velib/exports
-- GCS_MONITORING_PREFIX       gs://.../velib  (ajout auto /monitoring)
+- GCS_MONITORING_PREFIX       gs://.../velib
 
-Unifiés (comme les autres jobs) :
-- MON_TZ                      ex: "Europe/Paris"          [def="Europe/Paris"]
-- MON_LAST_DAYS               entier, fenêtre de perf      [def=10 si absent]
-- MON_HORIZONS                ex: "15,60" (minutes)        [def="15"]
+ENV optionnels :
+- EXPLAIN_TZ                  default "Europe/Paris"
+- EXPLAIN_HORIZONS            ex: "15,60" (minutes) — si absent → "15"
+- EXPLAIN_WINDOW_DAYS         entier, 0 = pas de fenêtre (par défaut 0)
 
-Compat (fallback si MON_* absent) :
-- EXPLAIN_TZ, EXPLAIN_WINDOW_DAYS, EXPLAIN_HORIZONS, PERF_HORIZONS, FORECAST_HORIZONS
+Tuning residuals (léger) :
+- EXPLAIN_QQ_POINTS           default 512
+- EXPLAIN_HIST_BINS           default 60
+- EXPLAIN_ACF_NLAGS           default 144
+- EXPLAIN_EPISODES_TOPK       default 64
 
-Modèles :
-- MODEL_URI_{H}               ex: MODEL_URI_15, MODEL_URI_60
+Uncertainty :
+- EXPLAIN_PI_NOMINAL          default 0.90
+
+Feature Importance (XGBoost natif) :
+- EXPLAIN_FI_TOPK_TO_PUBLISH  default 60 (0 = tout)
 - MODEL_URI                   si un seul horizon
+- MODEL_URI_{H}               ex: MODEL_URI_15, MODEL_URI_60
 - MODEL_URI_TEMPLATE          ex: "gs://.../models/h{H}/latest.joblib"
 
-Tuning résidus/incertitude/FI :
-- EXPLAIN_QQ_POINTS, EXPLAIN_HIST_BINS, EXPLAIN_ACF_NLAGS, EXPLAIN_EPISODES_TOPK
-- EXPLAIN_PI_NOMINAL
-- EXPLAIN_FI_TOPK_TO_PUBLISH
-
-Sortie : latest only (pas de dossier daté)
+Sortie : latest only (AUCUN dossier timestampé ici).
+Exit code 0 si succès (même si entrée vide).
 """
-
 from __future__ import annotations
 import os, re, sys, json
 from io import BytesIO
@@ -36,7 +49,11 @@ from datetime import datetime, timezone, timedelta
 
 import numpy as np
 import pandas as pd
-from pandas.api.types import is_numeric_dtype, is_bool_dtype, is_datetime64_any_dtype
+from pandas.api.types import (
+    is_numeric_dtype,
+    is_bool_dtype,
+    is_datetime64_any_dtype,
+)
 
 # ────────────────────────── Dépendances I/O ──────────────────────────
 try:
@@ -55,60 +72,19 @@ try:
 except Exception as e:
     raise RuntimeError("xgboost et joblib requis pour la FI native") from e
 
+
 # ────────────────────────── Constantes & schéma ──────────────────────
-SCHEMA_VERSION = "1.5"
+SCHEMA_VERSION = "1.5"   # 1.4 (surrogate) → 1.5 (XGB native only)
 BIN_MIN = 5
 
-# Tuning (inchangé)
 RESID_QQ_POINTS     = int(os.environ.get("EXPLAIN_QQ_POINTS", "512"))
 RESID_HIST_BINS     = int(os.environ.get("EXPLAIN_HIST_BINS", "60"))
 RESID_ACF_NLAGS     = int(os.environ.get("EXPLAIN_ACF_NLAGS", "144"))
 RESID_EPISODES_TOPK = int(os.environ.get("EXPLAIN_EPISODES_TOPK", "64"))
-FI_TOPK_TO_PUBLISH  = int(os.environ.get("EXPLAIN_FI_TOPK_TO_PUBLISH", "60"))
 
-# ────────────────────────── ENV unifié ───────────────────────────────
-def _env(name: str, default=None):
-    v = os.environ.get(name)
-    return v if (v is not None and v != "") else default
+WINDOW_DAYS = int(os.environ.get("EXPLAIN_WINDOW_DAYS", "0"))
+FI_TOPK_TO_PUBLISH = int(os.environ.get("EXPLAIN_FI_TOPK_TO_PUBLISH", "60"))
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(_env(name, default))
-    except Exception:
-        return default
-
-def _parse_horizons() -> List[int]:
-    # Priorité MON_HORIZONS, sinon compat : EXPLAIN_HORIZONS / PERF_HORIZONS / FORECAST_HORIZONS
-    raw = (
-        _env("MON_HORIZONS")
-        or _env("EXPLAIN_HORIZONS")
-        or _env("PERF_HORIZONS")
-        or _env("FORECAST_HORIZONS")
-        or "15"
-    )
-    hs = []
-    for x in str(raw).split(","):
-        x = x.strip()
-        if not x: 
-            continue
-        try:
-            v = int(x)
-            if v > 0:
-                hs.append(v)
-        except Exception:
-            pass
-    return sorted(list(set(hs))) or [15]
-
-MON_TZ         = _env("MON_TZ", _env("EXPLAIN_TZ", "Europe/Paris"))
-MON_LAST_DAYS  = _env_int("MON_LAST_DAYS", _env_int("EXPLAIN_WINDOW_DAYS", 10))
-MON_HORIZONS   = _parse_horizons()
-
-GCS_EXPORTS_PREFIX    = _env("GCS_EXPORTS_PREFIX")
-GCS_MONITORING_PREFIX = _env("GCS_MONITORING_PREFIX")
-if not (GCS_EXPORTS_PREFIX and str(GCS_EXPORTS_PREFIX).startswith("gs://")):
-    raise RuntimeError("GCS_EXPORTS_PREFIX manquant ou invalide")
-if not (GCS_MONITORING_PREFIX and str(GCS_MONITORING_PREFIX).startswith("gs://")):
-    raise RuntimeError("GCS_MONITORING_PREFIX manquant ou invalide")
 
 # ────────────────────────── Helpers GCS/Parquet ──────────────────────
 def _split(gs: str) -> Tuple[str, str]:
@@ -146,6 +122,7 @@ def _upload_json_gs(obj: object, gs_uri: str):
     storage.Client().bucket(b).blob(k).upload_from_string(data, content_type="application/json")
     print(f"[model.explain] wrote → {gs_uri} ({len(data):,} bytes)")
 
+
 # ────────────────────────── Lecture perf ─────────────────────────────
 def _read_latest_perf(exports_prefix: str) -> Tuple[pd.DataFrame, Optional[str]]:
     base = exports_prefix.rstrip("/")
@@ -173,6 +150,7 @@ def _read_latest_perf(exports_prefix: str) -> Tuple[pd.DataFrame, Optional[str]]
     day = m.group(1) if m else None
     df = _read_parquet_blob_to_df(last)
     return df, day
+
 
 # ────────────────────────── Colonnes & horizons ──────────────────────
 def _pick_cols(perf: pd.DataFrame) -> Dict[str, Optional[str]]:
@@ -231,6 +209,7 @@ def _normalize_hbin_series(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> 
         return (m / BIN_MIN).round().astype("Int64")
     return pd.Series([pd.NA] * len(df), index=df.index, dtype="Int64")
 
+
 # ────────────────────────── Utils (stats) ────────────────────────────
 def _group_apply(gb, func):
     try:
@@ -282,6 +261,7 @@ def _acf(values: pd.Series, nlags: int = RESID_ACF_NLAGS) -> List[float]:
         num = (x.iloc[:-k or None] * x.shift(k).iloc[:-k or None]).sum() if k > 0 else denom
         acf[k] = num / denom
     return _round_list(acf.tolist())
+
 
 # ────────────────────────── Residuals ────────────────────────────────
 def build_residuals_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], tz: str) -> Dict[str, object]:
@@ -339,6 +319,7 @@ def build_residuals_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], tz:
                 for _, r in episodes_df.iterrows()]
 
     return {**base_doc, "hist": hist, "qq": {"th": th, "emp": emp}, "acf": acf_vals, "hetero": hetero, "episodes": episodes}
+
 
 # ────────────────────────── Calibration ──────────────────────────────
 def build_calibration_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], tz: str) -> Dict[str, object]:
@@ -433,6 +414,7 @@ def build_calibration_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], t
     })
     return out
 
+
 # ────────────────────────── Uncertainty ──────────────────────────────
 def build_uncertainty_doc(perf: pd.DataFrame, cols: Dict[str, Optional[str]]) -> Dict[str, object]:
     out = {"schema_version": SCHEMA_VERSION,
@@ -487,7 +469,7 @@ def build_uncertainty_doc(perf: pd.DataFrame, cols: Dict[str, Optional[str]]) ->
             return out
 
         qlo = (1.0 - NOM) / 2.0; qhi = 1.0 - qlo
-        tz = MON_TZ
+        tz = os.environ.get("EXPLAIN_TZ", "Europe/Paris")
         used["hour"] = used["ts"].dt.tz_convert(tz).dt.hour
         try:
             grp = used.groupby("hour")
@@ -506,6 +488,7 @@ def build_uncertainty_doc(perf: pd.DataFrame, cols: Dict[str, Optional[str]]) ->
 
     out.update({"method": "none", "nominal": None, "coverage": None})
     return out
+
 
 # ────────────────────────── Feature Importance (XGB) ─────────────────
 def _load_joblib_from_gcs(gs_uri: str):
@@ -536,11 +519,13 @@ def _extract_booster(obj) -> xgb.Booster:
     raise TypeError(f"Cannot extract Booster from type={type(obj)}")
 
 def _resolve_model_uri(hmin: int, horizons: List[int]) -> Optional[str]:
+    # 1) MODEL_URI_{H}
     env_key = f"MODEL_URI_{hmin}"
-    if os.environ.get(env_key): 
-        return os.environ[env_key]
+    if os.environ.get(env_key): return os.environ[env_key]
+    # 2) MODEL_URI si un seul horizon
     if len(horizons) == 1 and os.environ.get("MODEL_URI"):
         return os.environ["MODEL_URI"]
+    # 3) MODEL_URI_TEMPLATE avec {H}
     templ = os.environ.get("MODEL_URI_TEMPLATE")
     if templ and "{H" in templ:
         return templ.replace("{H}", str(hmin)).replace("{h}", str(hmin))
@@ -597,39 +582,45 @@ def build_feature_importance_doc_native_xgb(hmin: int, horizons: List[int]) -> D
     except Exception as e:
         return {**base, "method": "get_score_error", "notes": [str(e)]}
 
+
 # ────────────────────────── Publication latest ───────────────────────
 def _publish_latest(base_alias: str, horizon_min: int, payloads: Dict[str, dict]) -> None:
     hdir = f"h{int(horizon_min)}"
     for name, obj in payloads.items():
         _upload_json_gs(obj, f"{base_alias}/{hdir}/{name}.json")
 
+
 # ────────────────────────── Main ─────────────────────────────────────
 def main() -> int:
-    # Audit d'env (beau header)
-    print("[env] GCS_EXPORTS_PREFIX=", GCS_EXPORTS_PREFIX)
-    print("[env] GCS_MONITORING_PREFIX=", GCS_MONITORING_PREFIX)
-    print("[env] MON_TZ=", MON_TZ, " MON_LAST_DAYS=", MON_LAST_DAYS, " MON_HORIZONS=", ",".join(map(str, MON_HORIZONS)))
+    EXPORTS_PREFIX = os.environ.get("GCS_EXPORTS_PREFIX")
+    MON_PREFIX     = os.environ.get("GCS_MONITORING_PREFIX")
+    if not (EXPORTS_PREFIX and EXPORTS_PREFIX.startswith("gs://")):
+        raise RuntimeError("GCS_EXPORTS_PREFIX manquant ou invalide")
+    if not (MON_PREFIX and MON_PREFIX.startswith("gs://")):
+        raise RuntimeError("GCS_MONITORING_PREFIX manquant ou invalide")
 
-    mon_base = GCS_MONITORING_PREFIX.rstrip("/")
+    TZNAME   = os.environ.get("EXPLAIN_TZ", "Europe/Paris")
+    HORIZONS = [int(x.strip()) for x in os.environ.get("EXPLAIN_HORIZONS", "15").split(",") if x.strip()]
+
+    now = datetime.now(timezone.utc)
+
+    mon_base = MON_PREFIX.rstrip("/")
     if not mon_base.endswith("/monitoring"):
         mon_base = mon_base + "/monitoring"
     base_alias = f"{mon_base}/model/explainability/latest"
 
-    print(f"[model.explain] reading perf from {GCS_EXPORTS_PREFIX}")
-    perf, perf_day = _read_latest_perf(GCS_EXPORTS_PREFIX)
-    now = datetime.now(timezone.utc)
-
+    print(f"[model.explain] reading perf from {EXPORTS_PREFIX}")
+    perf, perf_day = _read_latest_perf(EXPORTS_PREFIX)
     if perf.empty:
         print("[model.explain] perf is empty — nothing to do")
+        # On publie tout de même un manifest vide pour la page
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "generated_at": now.isoformat().replace("+00:00","Z"),
             "latest_prefix": base_alias,
-            "window_days": (int(MON_LAST_DAYS) if MON_LAST_DAYS > 0 else None),
+            "window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None),
             "horizons": [],
             "horizons_info": [],
-            "tz": MON_TZ,
-            "sources": {"exports_prefix": GCS_EXPORTS_PREFIX},
         }
         _upload_json_gs(manifest, f"{base_alias}/manifest.json")
         return 0
@@ -637,13 +628,13 @@ def main() -> int:
     cols = _pick_cols(perf)
     perf = _normalize_types(perf, cols)
 
-    if MON_LAST_DAYS and MON_LAST_DAYS > 0:
-        cutoff = now - timedelta(days=MON_LAST_DAYS)
+    if WINDOW_DAYS and WINDOW_DAYS > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=WINDOW_DAYS)
         ts_all = pd.to_datetime(perf[cols["ts"]], utc=True, errors="coerce")
         before = len(perf)
         perf = perf.loc[ts_all >= cutoff].copy()
         after = len(perf)
-        print(f"[model.explain] window_days={MON_LAST_DAYS} → kept {after:,}/{before:,} rows since {cutoff.isoformat()}")
+        print(f"[model.explain] window_days={WINDOW_DAYS} → kept {after:,}/{before:,} rows since {cutoff.isoformat()}")
 
     perf["__hbin"] = _normalize_hbin_series(perf, cols)
 
@@ -653,7 +644,7 @@ def main() -> int:
     n_stations = int(perf[cols["station"]].nunique())
 
     available_hbins = sorted([int(x) for x in pd.Series(perf["__hbin"].dropna().unique()).tolist() if pd.notna(x)])
-    requested_hbins = sorted(list(set([max(1, int(round(h / BIN_MIN))) for h in MON_HORIZONS])))
+    requested_hbins = sorted(list(set([max(1, int(round(h / BIN_MIN))) for h in HORIZONS])))
     target_hbins = [hb for hb in requested_hbins if hb in available_hbins] if available_hbins else ([] if requested_hbins else [])
 
     manifests_items: List[Dict[str, object]] = []
@@ -672,7 +663,7 @@ def main() -> int:
             overview = {
                 "schema_version": SCHEMA_VERSION,
                 "generated_at": now.isoformat().replace("+00:00","Z"),
-                "tz": MON_TZ,
+                "tz": TZNAME,
                 "anchor_day_perf": perf_day,
                 "perf_rows": int(len(sub)),
                 "perf_stations": int(sub[cols["station"]].nunique()),
@@ -681,13 +672,13 @@ def main() -> int:
                 "has_y_pred": bool(cols["y_pred"]),
                 "has_uncertainty": bool(cols["ylo"] and cols["yhi"] or cols.get("sigma")),
                 "horizon_min": hmin,
-                "window_days": (int(MON_LAST_DAYS) if MON_LAST_DAYS > 0 else None),
+                "window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None),
             }
 
-            residuals_doc   = build_residuals_docs(sub, cols, MON_TZ) | {"horizon_min": hmin, "window_days": (int(MON_LAST_DAYS) if MON_LAST_DAYS > 0 else None)}
-            calibration_doc = build_calibration_docs(sub, cols, MON_TZ) | {"horizon_min": hmin, "window_days": (int(MON_LAST_DAYS) if MON_LAST_DAYS > 0 else None)}
-            uncertainty_doc = build_uncertainty_doc(sub, cols)         | {"horizon_min": hmin, "window_days": (int(MON_LAST_DAYS) if MON_LAST_DAYS > 0 else None)}
-            fi_doc          = build_feature_importance_doc_native_xgb(hmin, MON_HORIZONS)
+            residuals_doc   = build_residuals_docs(sub, cols, TZNAME) | {"horizon_min": hmin, "window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None)}
+            calibration_doc = build_calibration_docs(sub, cols, TZNAME) | {"horizon_min": hmin, "window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None)}
+            uncertainty_doc = build_uncertainty_doc(sub, cols)         | {"horizon_min": hmin, "window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None)}
+            fi_doc          = build_feature_importance_doc_native_xgb(hmin, HORIZONS)
 
             payloads: Dict[str, dict] = {
                 "overview": overview,
@@ -705,13 +696,13 @@ def main() -> int:
             })
 
     else:
-        fallback_targets = (MON_HORIZONS if MON_HORIZONS else [15])
+        fallback_targets = (HORIZONS if HORIZONS else [15])
         print(f"[model.explain] aucun champ d'horizon exploitable — fallback sous h{{H}} pour H={fallback_targets}")
 
         overview_global = {
             "schema_version": SCHEMA_VERSION,
             "generated_at": now.isoformat().replace("+00:00","Z"),
-            "tz": MON_TZ,
+            "tz": os.environ.get("EXPLAIN_TZ", "Europe/Paris"),
             "anchor_day_perf": perf_day,
             "perf_rows": n_rows,
             "perf_stations": n_stations,
@@ -719,16 +710,16 @@ def main() -> int:
             "ts_max_perf": (ts_max.isoformat().replace("+00:00","Z") if pd.notna(ts_max) else None),
             "has_y_pred": bool(cols["y_pred"]),
             "has_uncertainty": bool(cols["ylo"] and cols["yhi"] or cols.get("sigma")),
-            "window_days": (int(MON_LAST_DAYS) if MON_LAST_DAYS > 0 else None),
+            "window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None),
         }
 
-        residuals_doc   = build_residuals_docs(perf, cols, MON_TZ) | {"window_days": (int(MON_LAST_DAYS) if MON_LAST_DAYS > 0 else None)}
-        calibration_doc = build_calibration_docs(perf, cols, MON_TZ) | {"window_days": (int(MON_LAST_DAYS) if MON_LAST_DAYS > 0 else None)}
-        uncertainty_doc = build_uncertainty_doc(perf, cols)         | {"window_days": (int(MON_LAST_DAYS) if MON_LAST_DAYS > 0 else None)}
+        residuals_doc   = build_residuals_docs(perf, cols, TZNAME) | {"window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None)}
+        calibration_doc = build_calibration_docs(perf, cols, TZNAME) | {"window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None)}
+        uncertainty_doc = build_uncertainty_doc(perf, cols)         | {"window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None)}
 
         for H in fallback_targets:
             hmin = int(H)
-            fi_doc = build_feature_importance_doc_native_xgb(hmin, MON_HORIZONS)
+            fi_doc = build_feature_importance_doc_native_xgb(hmin, HORIZONS)
             payloads: Dict[str, dict] = {
                 "overview": overview_global | {"horizon_min": hmin},
                 "residuals": residuals_doc  | {"horizon_min": hmin},
@@ -747,15 +738,14 @@ def main() -> int:
         "schema_version": SCHEMA_VERSION,
         "generated_at": now.isoformat().replace("+00:00","Z"),
         "latest_prefix": base_alias,
-        "window_days": (int(MON_LAST_DAYS) if MON_LAST_DAYS > 0 else None),
+        "window_days": (int(WINDOW_DAYS) if WINDOW_DAYS > 0 else None),
         "horizons": [int(it["horizon_min"]) for it in manifests_items],
         "horizons_info": manifests_items,
-        "tz": MON_TZ,
-        "sources": {"exports_prefix": GCS_EXPORTS_PREFIX},
     }
     _upload_json_gs(manifest, f"{base_alias}/manifest.json")
     print("[model.explain] done (latest only)")
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

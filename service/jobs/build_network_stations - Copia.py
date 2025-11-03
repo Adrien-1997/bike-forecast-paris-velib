@@ -23,26 +23,14 @@ try:
     from sklearn.cluster import KMeans  # type: ignore
     from sklearn.metrics import silhouette_score, davies_bouldin_score  # type: ignore
 except Exception:
-    raise RuntimeError("scikit-learn requis (pip install scikit-learn)")
+    raise RuntimeError("scikit-learn requis (pip install scikit-learn)")  # explicite
 
-SCHEMA_VERSION = "1.2"  # 1.1 -> 1.2: LATEST only, manifest, ENV unifiés, JSON safe
-
-# ──────────────────────────────────────────────────────────────────────────────
-# ENV helpers (unifiés)
-# ──────────────────────────────────────────────────────────────────────────────
-def _env(name: str, default=None):
-    v = os.environ.get(name)
-    return v if (v is not None and v != "") else default
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(_env(name, default))
-    except Exception:
-        return default
+SCHEMA_VERSION = "1.1"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # GCS helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _split(gs: str) -> Tuple[str, str]:
     assert gs.startswith("gs://"), f"bad GCS uri: {gs}"
     b, k = gs[5:].split("/", 1)
@@ -72,24 +60,16 @@ def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datet
     out.sort(key=lambda b: b.name)
     return out
 
-def _json_safe(o):
-    if isinstance(o, dict):
-        return {k: _json_safe(v) for k, v in o.items()}
-    if isinstance(o, list):
-        return [_json_safe(v) for v in o]
-    if isinstance(o, float):
-        return float(o) if np.isfinite(o) else None
-    return o
-
-def _upload_json_gs(obj: dict, gs_uri: str, log_prefix: str = "network.stations"):
+def _upload_json_gs(obj: dict, gs_uri: str):
     bkt, key = _split(gs_uri)
-    data = json.dumps(_json_safe(obj), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    data = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     storage.Client().bucket(bkt).blob(key).upload_from_string(data, content_type="application/json")
-    print(f"[{log_prefix}] wrote → {gs_uri} ({len(data):,} bytes)")
+    print(f"[network.stations] wrote → {gs_uri} ({len(data):,} bytes)")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Core helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _safe_occ_ratio(df: pd.DataFrame) -> pd.Series:
     if "occ_ratio" in df.columns and not pd.isna(df["occ_ratio"]).all():
         s = pd.to_numeric(df["occ_ratio"], errors="coerce")
@@ -129,6 +109,7 @@ def _qhour_labels() -> List[str]:
 # ──────────────────────────────────────────────────────────────────────────────
 # PCA (optionnelle)
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _pca_first2(profiles: List[List[float]]) -> Tuple[np.ndarray, np.ndarray, Tuple[float, float]]:
     X = np.asarray(profiles, dtype=np.float64)  # (N,24)
     mu = np.nanmean(X, axis=0, keepdims=True)
@@ -146,7 +127,9 @@ def _pca_first2(profiles: List[List[float]]) -> Tuple[np.ndarray, np.ndarray, Tu
 # ──────────────────────────────────────────────────────────────────────────────
 # Clustering helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _impute_col_mean(X: np.ndarray) -> np.ndarray:
+    """Impute NaN by column means (simple and stable for 0..1 ratios)."""
     X = X.copy()
     col_means = np.nanmean(X, axis=0)
     idxs = np.where(np.isnan(X))
@@ -166,9 +149,12 @@ def _run_kmeans_auto(X: np.ndarray, k_forced: Optional[int] = None,
     best_centroids = None
     best_dbi = None
 
+    # fonction pour fitter un KMeans robuste
     def _fit_k(k: int):
+        # n_init=10 (sklearn>=1.4 autorise 'auto', mais restons compatibles)
         km = KMeans(n_clusters=k, random_state=random_state, n_init=10)
         labels = km.fit_predict(X_imp)
+        # silhouette exige au moins 2 clusters et pas de singleton total
         sil = silhouette_score(X_imp, labels) if len(set(labels)) > 1 else -1.0
         dbi = davies_bouldin_score(X_imp, labels)
         cents = km.cluster_centers_
@@ -191,6 +177,7 @@ def _run_kmeans_auto(X: np.ndarray, k_forced: Optional[int] = None,
             print(f"[warn] KMeans k={k} failed: {e}")
 
     if best_labels is None:
+        # fallback trivial: 1 cluster (pas idéal mais évite le crash)
         km = KMeans(n_clusters=1, random_state=random_state, n_init=10).fit(X_imp)
         return km.labels_, 1, None, None, km.cluster_centers_
 
@@ -199,22 +186,22 @@ def _run_kmeans_auto(X: np.ndarray, k_forced: Optional[int] = None,
 # ──────────────────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────────────────
+
 def main() -> int:
-    EXPORTS_PREFIX = _env("GCS_EXPORTS_PREFIX")     # gs://bucket/velib/exports
-    MON_PREFIX     = _env("GCS_MONITORING_PREFIX")  # gs://bucket/velib (ou .../monitoring)
-    if not (EXPORTS_PREFIX and str(EXPORTS_PREFIX).startswith("gs://")):
+    EXPORTS_PREFIX = os.environ.get("GCS_EXPORTS_PREFIX")    # gs://bucket/velib/exports
+    MON_PREFIX     = os.environ.get("GCS_MONITORING_PREFIX") # gs://bucket/monitoring
+    if not (EXPORTS_PREFIX and EXPORTS_PREFIX.startswith("gs://")):
         raise RuntimeError("GCS_EXPORTS_PREFIX manquant ou invalide")
-    if not (MON_PREFIX and str(MON_PREFIX).startswith("gs://")):
+    if not (MON_PREFIX and MON_PREFIX.startswith("gs://")):
         raise RuntimeError("GCS_MONITORING_PREFIX manquant ou invalide")
 
-    # Unification ENV (fallbacks sur anciens noms)
-    WINDOW_DAYS   = _env_int("MON_LAST_DAYS", _env_int("NETWORK_WINDOW_DAYS", 14))
-    STATIONS_MAX  = _env_int("STATIONS_MAX", 3000)
-    MIN_BINS_KEEP = _env_int("MIN_BINS_KEEP", 50)
-    K_FORCED      = _env("NETWORK_K")
+    WINDOW_DAYS   = int(os.environ.get("NETWORK_WINDOW_DAYS", "14"))
+    STATIONS_MAX  = int(os.environ.get("STATIONS_MAX", "3000"))
+    MIN_BINS_KEEP = int(os.environ.get("MIN_BINS_KEEP", "50"))
+    K_FORCED      = os.environ.get("NETWORK_K")  # optionnel
     K_FORCED_INT  = int(K_FORCED) if (K_FORCED and K_FORCED.isdigit()) else None
-    K_MIN         = _env_int("NETWORK_K_MIN", 2)
-    K_MAX         = _env_int("NETWORK_K_MAX", 8)
+    K_MIN         = int(os.environ.get("NETWORK_K_MIN", "2"))
+    K_MAX         = int(os.environ.get("NETWORK_K_MAX", "8"))
 
     now = datetime.now(timezone.utc)
     start = (now - timedelta(days=WINDOW_DAYS - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -222,24 +209,8 @@ def main() -> int:
 
     # 1) Lire les parquets évènementiels dans la fenêtre
     blobs = _list_event_blobs(EXPORTS_PREFIX, start, now)
-
-    # Base LATEST only (normalisée)
-    mon_base = MON_PREFIX.rstrip("/")
-    if not mon_base.endswith("/monitoring"):
-        mon_base = mon_base + "/monitoring"
-    base_latest = f"{mon_base}/network/stations/latest"
-
     if not blobs:
         print("[network.stations] no event blobs in window — nothing to do")
-        manifest = {
-            "schema_version": SCHEMA_VERSION,
-            "generated_at": now.isoformat().replace("+00:00","Z"),
-            "latest_prefix": base_latest,
-            "window_days": int(WINDOW_DAYS),
-            "sources": {"exports_prefix": EXPORTS_PREFIX},
-            "artifacts": [],
-        }
-        _upload_json_gs(manifest, f"{base_latest}/manifest.json")
         return 0
 
     frames: List[pd.DataFrame] = []
@@ -260,24 +231,16 @@ def main() -> int:
         print("[network.stations] events empty — nothing to do")
         return 0
 
-    # colonnes minimales et types (robuste)
+    # colonnes minimales et types
     need = {"tbin_utc","station_id","bikes","capacity","lat","lon","name","is_penury","is_saturation","occ_ratio"}
     for c in need:
         if c not in ev.columns:
             ev[c] = pd.NA
-
-    ev["tbin_utc"]      = pd.to_datetime(ev["tbin_utc"], utc=True, errors="coerce")
-    ev["station_id"]    = ev["station_id"].astype("string")
-    ev["bikes"]         = pd.to_numeric(ev["bikes"], errors="coerce")
-    ev["capacity"]      = pd.to_numeric(ev["capacity"], errors="coerce")
-    ev["lat"]           = pd.to_numeric(ev["lat"], errors="coerce")
-    ev["lon"]           = pd.to_numeric(ev["lon"], errors="coerce")
-    ev["name"]          = ev["name"].astype("string")
-    ev["is_penury"]     = pd.to_numeric(ev["is_penury"], errors="coerce")
+    ev["tbin_utc"]   = pd.to_datetime(ev["tbin_utc"], errors="coerce")
+    ev["station_id"] = ev["station_id"].astype("string")
+    ev["is_penury"]  = pd.to_numeric(ev["is_penury"], errors="coerce")
     ev["is_saturation"] = pd.to_numeric(ev["is_saturation"], errors="coerce")
-
     ev = ev.dropna(subset=["tbin_utc","station_id"]).copy()
-    ev = ev[(ev["tbin_utc"] >= pd.Timestamp(start)) & (ev["tbin_utc"] <= pd.Timestamp(now))].copy()
 
     n_days = _days_span(ev)
 
@@ -349,25 +312,23 @@ def main() -> int:
             labels, k_effective, sil_score, dbi_score, centroids_mat = _run_kmeans_auto(
                 X, k_forced=K_FORCED_INT, k_min=K_MIN, k_max=K_MAX, random_state=42
             )
+            # Propager les labels vers recs
             for idx, lab in zip(rec_idxs, labels):
                 recs[idx]["cluster"] = int(lab)
         except Exception as e:
             print(f"[warn] clustering failed, continue without clusters: {e}")
 
     # 4) PCA (optionnelle) pour la visualisation
-    generated_at = now.isoformat().replace("+00:00","Z")
-    x_labels = _qhour_labels()
-
     pca_scatter = {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": generated_at,
+        "generated_at": now.isoformat().replace("+00:00","Z"),
         "var_ratio": None,
         "points": []  # [{station_id,name,cluster,PC1,PC2}]
     }
     pca_circle = {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": generated_at,
-        "feature_names": x_labels,
+        "generated_at": now.isoformat().replace("+00:00","Z"),
+        "feature_names": _qhour_labels(),
         "components": None,
         "var_ratio": None
     }
@@ -397,12 +358,17 @@ def main() -> int:
             print(f"[warn] PCA failed: {e}")
 
     # 5) Centroids JSON (un item par cluster, sinon profil moyen réseau)
+    x_labels = _qhour_labels()
+    generated_at = now.isoformat().replace("+00:00", "Z")
+
     if centroids_mat is not None and labels is not None and k_effective and k_effective >= 1:
+        # centroids_mat est (k,24) dans l'espace imputé/standard — on le laisse tel quel (moyennes horaires 0..1)
         centroids_payload = []
         for k in range(k_effective):
             y = [float(v) if np.isfinite(v) else None for v in centroids_mat[k].tolist()]
             centroids_payload.append({"cluster": int(k), "y": y})
     else:
+        # fallback: centroid global (moyenne positionnelle)
         valid_profiles = [r["profile"] for r in recs if isinstance(r.get("profile"), list)]
         centroid = []
         for i in range(24):
@@ -425,10 +391,10 @@ def main() -> int:
         "k_effective": int(k_effective) if k_effective else None,
         "silhouette": round(float(sil_score), 6) if sil_score is not None else None,
         "davies_bouldin": round(float(dbi_score), 6) if dbi_score is not None else None,
-        "window_days": int(WINDOW_DAYS)
+        "window_days": WINDOW_DAYS
     }
 
-    # Table preview (tronquée)
+    # Table preview
     rows_preview = []
     for r in recs[: min(1000, len(recs))]:
         rows_preview.append({
@@ -447,30 +413,23 @@ def main() -> int:
         "rows": rows_preview
     }
 
-    # 6) Uploads — LATEST only + manifest
-    _upload_json_gs(kpis,        f"{base_latest}/kpis.json")
-    _upload_json_gs(centroids,   f"{base_latest}/centroids.json")
-    _upload_json_gs(pca_scatter, f"{base_latest}/pca_scatter.json")
-    _upload_json_gs(pca_circle,  f"{base_latest}/pca_circle.json")
-    _upload_json_gs(stats7,      f"{base_latest}/stats7.json")
+    # 6) Uploads (latest + versionnés)
+    base_alias = f"{MON_PREFIX.rstrip('/')}/monitoring/network/stations/latest"
+    base_ver   = f"{MON_PREFIX.rstrip('/')}/monitoring/network/stations/{now.strftime('%Y-%m-%dT%H-%M-%SZ')}"
 
-    manifest = {
-        "schema_version": SCHEMA_VERSION,
-        "generated_at": generated_at,
-        "latest_prefix": base_latest,
-        "window_days": int(WINDOW_DAYS),
-        "sources": {"exports_prefix": EXPORTS_PREFIX},
-        "artifacts": [
-            "kpis.json",
-            "centroids.json",
-            "pca_scatter.json",
-            "pca_circle.json",
-            "stats7.json"
-        ],
-    }
-    _upload_json_gs(manifest, f"{base_latest}/manifest.json")
+    _upload_json_gs(kpis,        f"{base_alias}/kpis.json")
+    _upload_json_gs(centroids,   f"{base_alias}/centroids.json")
+    _upload_json_gs(pca_scatter, f"{base_alias}/pca_scatter.json")
+    _upload_json_gs(pca_circle,  f"{base_alias}/pca_circle.json")
+    _upload_json_gs(stats7,      f"{base_alias}/stats7.json")
 
-    print("[network.stations] done (latest only)")
+    _upload_json_gs(kpis,        f"{base_ver}/kpis.json")
+    _upload_json_gs(centroids,   f"{base_ver}/centroids.json")
+    _upload_json_gs(pca_scatter, f"{base_ver}/pca_scatter.json")
+    _upload_json_gs(pca_circle,  f"{base_ver}/pca_circle.json")
+    _upload_json_gs(stats7,      f"{base_ver}/stats7.json")
+
+    print("[network.stations] done")
     return 0
 
 if __name__ == "__main__":

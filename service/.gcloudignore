@@ -1,8 +1,21 @@
-﻿.venv
+﻿# --- Exclusions locales ---
+.venv
 **/__pycache__/
 **/.DS_Store
+
+# --- Dossiers volumineux / artefacts ---
 logs/**
 data/**
 exports/**
+
+# --- Fichiers de données lourds ---
 *.duckdb
 *.parquet
+
+# --- Autorisations explicites (si tu veux forcer certains dossiers utiles) ---
+!core/
+!service/
+!tools/
+!requirements.txt
+!cloudbuild.yaml
+!.dockerignore

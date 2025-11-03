@@ -4,11 +4,13 @@
    =================================================================== */
 
 /* ===== Z-layers + header height token ===== */
-:root{
+:root {
   --z-backdrop: 10000;
-  --z-drawer:   10010;
-  --z-header:     100;
-  --header-h:      60px; /* ⬅️ header un peu plus bas qu’avant (70px) */
+  --z-drawer:   10030;  /* drawer au-dessus de tout */
+  --z-header:   10020;  /* header au-dessus du backdrop (burger cliquable) */
+  --header-h:      60px; /* header compact */
+  /* Position top du mobile-drawer (override possible par page) */
+  --header-top: calc(var(--header-h) + var(--safe-top, 0px));
 }
 
 /* ===== Base: liens nav jamais soulignés ===== */
@@ -17,8 +19,11 @@
 .site-header .nav-trigger:focus-visible { text-decoration: none !important; }
 
 /* =================== HEADER sticky =================== */
-.site-header{
-  position: sticky; top: 0; z-index: var(--z-header);
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-header);
+  min-height: var(--header-h);
   padding-top: var(--safe-top, 0px);
   backdrop-filter: saturate(120%) blur(10px);
   background: linear-gradient(180deg, rgba(11,18,32,.85), rgba(11,18,32,.55) 70%, transparent);
@@ -26,18 +31,24 @@
   box-shadow: 0 10px 24px rgba(0,0,0,.22);
   will-change: transform, background;
   transition: transform .22s ease, background .25s ease, box-shadow .25s ease;
+  overscroll-behavior: contain;
 }
-.site-header::after{
-  content:""; position:absolute; inset:auto 0 0 0; height:2px; opacity:.9;
+.site-header::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 2px;
+  opacity: .9;
   background: linear-gradient(90deg, transparent, var(--primary), var(--primary-2), transparent);
 }
 
 /* Auto-hide */
-.site-header.autohide{ transform: translateY(0); }
-.site-header.autohide.is-hidden{ transform: translateY(calc(-100% - var(--safe-top, 0px))); }
+.site-header.autohide { transform: translateY(0); }
+.site-header.autohide.is-hidden { transform: translateY(calc(-100% - var(--safe-top, 0px))); }
+body.menu-open .site-header.autohide { transform: translateY(0) !important; }
 
-@media (prefers-color-scheme: light){
-  .site-header{
+@media (prefers-color-scheme: light) {
+  .site-header {
     background: linear-gradient(180deg, rgba(255,255,255,.9), rgba(255,255,255,.7) 70%, transparent);
     border-bottom: 1px solid var(--ring, rgba(0,0,0,.10));
     box-shadow: 0 8px 18px rgba(0,0,0,.06);
@@ -45,146 +56,262 @@
 }
 
 /* =================== Layout container (compact) =================== */
-.site-header .container.nav{
+.site-header .container.nav {
   max-width: var(--content-max, 1200px);
   margin: 0 auto;
   padding: 10px max(18px, env(safe-area-inset-left));
   padding-right: max(18px, env(safe-area-inset-right));
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: var(--header-h);
 }
 
-/* =================== Branding (compact) =================== */
-.site-header .brand{
-  display:inline-flex; align-items:center; gap:10px;
-  color: var(--text, #e6eaf2); text-decoration:none !important;
+/* =================== Branding =================== */
+.site-header .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text, #e6eaf2);
+  text-decoration: none !important;
 }
-.site-header .brand .mark{ width:32px; height:32px; display:grid; place-items:center; } /* ⬅️ 36→32 */
-.site-header .brandtext{
-  display:inline-flex; gap:6px; font-weight:700; letter-spacing:.2px; text-transform:lowercase;
-  font-size: clamp(15px, 1.4vw, 20px); /* ⬅️ légèrement réduit */
+.site-header .brand .mark { width: 32px; height: 32px; display: grid; place-items: center; }
+.site-header .brandtext {
+  display: inline-flex;
+  gap: 6px;
+  font-weight: 700;
+  letter-spacing: .2px;
+  text-transform: lowercase;
+  font-size: clamp(15px, 1.4vw, 20px);
   color: var(--text, #e6eaf2);
 }
-.site-header .brand-velo{ color: var(--primary, #ff6a00); }
-.site-header .brand-sep{ opacity:.6; color: inherit; }
-.site-header .brand-paris{ color: var(--primary-2, #1d7fff); }
+.site-header .brand-velo { color: var(--primary, #ff6a00); }
+.site-header .brand-sep { opacity: .6; color: inherit; }
+.site-header .brand-paris { color: var(--primary-2, #1d7fff); }
 
 /* =================== Desktop nav (≥980px) =================== */
-.site-header .nav-desktop{ display:none; }
-@media (min-width:980px){
-  .site-header .nav-desktop{ display:block; }
-  .site-header .nav-desktop ul{ display:flex; gap:16px; align-items:center; margin:0; padding:0; list-style:none; }
+.site-header .nav-desktop { display: none; }
+@media (min-width: 980px) {
+  .site-header .nav-desktop { display: block; }
+  .site-header .nav-desktop ul {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
 }
 
-/* =================== Liens nav =================== */
+/* =================== NAV "FLAT" — retire tout encerclement =================== */
 .site-header .nav-trigger{
-  position:relative; display:inline-flex; align-items:center;
-  padding:7px 10px;  /* ⬅️ 8x12 → 7x10 */
-  border-radius:12px; color: var(--muted, #9ca3af); border:none;
-  transition: transform .15s ease, background-color .15s ease, color .15s ease;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 0 !important;          /* vertical only (pas de pastille) */
+  border: 0 !important;
+  border-radius: 0 !important;
+  color: var(--muted, #9ca3af);
+  background: transparent !important;
+  box-shadow: none !important;
+  transition: color .15s ease, background-color .15s ease, padding .15s ease;
 }
 .site-header .nav-trigger:hover{
   color: var(--text, #e6eaf2);
-  background: color-mix(in srgb, var(--panel, #0f172a) 42%, transparent);
-}
-.site-header .nav-trigger.active{
-  color: var(--text, #e6eaf2);
-  background: color-mix(in srgb, var(--primary-2, #1d7fff) 14%, transparent);
-}
-@media (prefers-color-scheme: light){
-  .site-header .nav-trigger{ color: var(--muted, #4b5563); }
-  .site-header .nav-trigger:hover{ background: color-mix(in srgb, #000 6%, transparent); }
-  .site-header .nav-trigger.active{ background: color-mix(in srgb, var(--primary-2) 18%, transparent); }
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
-/* =================== Burger (2 traits, sans cadre) =================== */
-.site-header .burger{
-  display:inline-flex; align-items:center; justify-content:center;
-  width:auto; height:auto; padding:8px; /* ⬅️ 10→8 */
-  border-radius:8px; border:none; background:transparent; box-shadow:none;
+/* ✅ Voile bleu UNIQUEMENT sur l’élément actif (desktop) */
+.site-header .nav-desktop .nav-trigger.active{
+  color: var(--text, #e6eaf2);
+  background: rgba(29,127,255,0.18) !important;
+  border: 0 !important;
+  border-radius: 12px !important;   /* ← add !important */
+  padding: 7px 12px !important;
+  box-shadow: none !important;
+}
+
+/* Focus nav : indicateur discret, sans halo */
+.site-header .nav-trigger:focus-visible{
+  outline: none !important;
+  box-shadow: none !important;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+@media (prefers-color-scheme: light) {
+  .site-header .nav-trigger { color: var(--muted, #4b5563); }
+}
+
+/* =================== Burger (SVG blanc, sans halo) =================== */
+.site-header .burger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  height: auto;
+  padding: 8px;
+  border: none;
+  background: transparent;      /* pas d'encerclement */
+  box-shadow: none;             /* pas d'ombre */
+  border-radius: 0;             /* pas de forme ronde */
   transition: transform .15s ease;
-  backdrop-filter:none!important; -webkit-backdrop-filter:none!important;
-  position:relative; z-index: 999;
+  position: relative;
+  z-index: 999;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
-.site-header .burger .icon svg{ display:none!important; }
-.site-header .burger .icon{
-  position:relative; width:26px; height:18px; display:block; color: var(--text, #e6eaf2);
+.site-header .burger:hover { background: transparent; box-shadow: none; }
+
+/* Icône toujours blanche */
+.site-header .burger .icon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: #ffffff;               /* blanc forcé (dark & light) */
 }
-.site-header .burger .icon::before,
-.site-header .burger .icon::after{
-  content:""; position:absolute; left:0; right:0; height:2px; border-radius:2px;
-  background: currentColor; transform-origin:center;
-  transition: transform .18s ease, opacity .18s ease, top .18s ease, bottom .18s ease;
+
+/* Le SVG utilise la couleur courante */
+.site-header .burger .icon svg {
+  display: block;
+  width: 28px;
+  height: 28px;
 }
-.site-header .burger .icon::before{ top:4px; }
-.site-header .burger .icon::after{ bottom:4px; }
-.site-header .burger.close .icon::before{ top:50%; transform:translateY(-50%) rotate(45deg); }
-.site-header .burger.close .icon::after{ bottom:auto; top:50%; transform:translateY(-50%) rotate(-45deg); }
-.site-header .burger:hover .icon{ color:#ffffff; }
-@media (prefers-color-scheme: light){
-  .site-header .burger .icon{ color:#1f2937; }
-  .site-header .burger:hover .icon{ color:#111827; }
+.site-header .burger .icon svg rect { fill: currentColor; }
+
+/* Transitions (lines ↔ cross) */
+.site-header .burger .icon svg .lines,
+.site-header .burger .icon svg .cross {
+  transition: opacity .18s ease, transform .18s ease;
+  transform-origin: center;
 }
-@media (min-width:980px){ .site-header .burger{ display:none; } }
+.site-header .burger .icon svg .lines { opacity: 1; }
+.site-header .burger .icon svg .cross { opacity: 0; transform: scale(0.95); }
+.site-header .burger.close .icon svg .lines { opacity: 0; transform: scale(0.96); }
+.site-header .burger.close .icon svg .cross { opacity: 1; transform: rotate(0deg) scale(1); }
+
+/* Pas d'anneau focus sur le burger */
+.site-header .burger:focus-visible { outline: none; box-shadow: none; }
+
+/* Cacher le burger en desktop */
+@media (min-width: 980px) { .site-header .burger { display: none; } }
 
 /* =================== Mobile drawer =================== */
-.site-header .mobile-drawer{
+.site-header .mobile-drawer {
   position: fixed;
-  inset: calc(var(--header-h) + var(--safe-top, 0px)) 0 auto 0;
-  translate: 0 -6px; /* un poil plus nerveux */
-  opacity:0; pointer-events:none;
+  left: 0; right: 0;
+  top: var(--header-top);       /* <— piloté par la variable */
+  opacity: 0;
+  pointer-events: none;
   transition: opacity .18s ease, translate .18s ease;
-  z-index: var(--z-drawer); /* au-dessus du backdrop */
+  z-index: var(--z-drawer);
+  max-height: calc(100dvh - var(--header-top));
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
-.site-header .mobile-drawer.open{ opacity:1; translate:0 0; pointer-events:auto; }
+.site-header .mobile-drawer.open {
+  opacity: 1;
+  translate: 0 0;
+  pointer-events: auto;
+}
 
-.site-header .mobile-nav{
+/* Contenu du drawer */
+.site-header .mobile-nav {
   margin: 8px 12px 14px;
-  border-radius: 14px; padding: 10px;
+  border-radius: 14px;
+  padding: 10px;
   background: color-mix(in srgb, var(--panel, #0f172a) 92%, transparent);
   border: 1px solid var(--ring, rgba(255,255,255,.14));
   box-shadow: var(--shadow, 0 10px 30px rgba(0,0,0,.35));
   backdrop-filter: blur(10px) saturate(140%);
 }
-.site-header .mobile-nav ul{ display:grid; gap:6px; list-style:none; margin:0; padding:6px; }
-.site-header .mobile-nav .nav-trigger{ width:100%; padding:12px 14px; border-radius:12px; border:none; }
-.site-header .mobile-nav .nav-trigger:hover{ background: color-mix(in srgb, var(--panel, #0f172a) 52%, transparent); }
-@media (prefers-color-scheme: light){
-  .site-header .mobile-nav{
+.site-header .mobile-nav ul {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+}
+
+/* Liens "flat" par défaut dans le drawer (zéro pastille) */
+.site-header .mobile-nav .nav-trigger{
+  width: 100%;
+  padding: 12px 0 !important;  /* vertical only */
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+.site-header .mobile-nav .nav-trigger:hover{
+  background: transparent !important;
+}
+
+/* ✅ Voile bleu UNIQUEMENT sur l’actif (drawer) */
+.site-header .mobile-nav .nav-trigger.active{
+  background: rgba(29,127,255,0.18) !important;
+  border-radius: 10px !important;   /* ← add !important */
+  padding: 12px 12px !important;
+  box-shadow: none !important;
+}
+
+@media (prefers-color-scheme: light) {
+  .site-header .mobile-nav {
     background: linear-gradient(180deg, rgba(255,255,255,.94), rgba(255,255,255,.84));
     border-color: var(--ring, rgba(0,0,0,.10));
     box-shadow: 0 12px 28px rgba(0,0,0,.12), 0 2px 8px rgba(0,0,0,.06);
   }
-  .site-header .mobile-nav .nav-trigger:hover{ background: rgba(0,0,0,.05); }
+  .site-header .mobile-nav .nav-trigger:hover {
+    background: transparent !important;
+  }
 }
 
-/* =================== Backdrop global (floute la page, pas le menu) =================== */
-.backdrop{
-  position: fixed; inset: 0;
+/* =================== Backdrop global =================== */
+.backdrop {
+  position: fixed;
+  inset: 0;
   background: rgba(11,18,32,0.45);
   backdrop-filter: blur(14px) saturate(120%);
   -webkit-backdrop-filter: blur(14px) saturate(120%);
-  opacity: 0; pointer-events: none;
+  opacity: 0;
+  pointer-events: none;
   transition: opacity .18s ease;
-  z-index: var(--z-backdrop); /* sous le drawer */
+  z-index: var(--z-backdrop);
   border: 0;
+  appearance: none;
 }
-.backdrop.visible{ opacity:1; pointer-events:auto; }
-@media (prefers-color-scheme: light){
-  .backdrop{
+.backdrop.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (prefers-color-scheme: light) {
+  .backdrop {
     background: rgba(255,255,255,0.55);
     backdrop-filter: blur(14px) saturate(160%);
     -webkit-backdrop-filter: blur(14px) saturate(160%);
   }
 }
 
-/* =================== A11y focus =================== */
-.site-header .nav-trigger:focus-visible,
-.site-header .burger:focus-visible{
-  outline:none; box-shadow: 0 0 0 3px rgba(29,127,255,.35); border-radius: 12px;
+/* =================== Reduced motion & fallback =================== */
+@media (prefers-reduced-motion: reduce) {
+  .site-header .mobile-drawer,
+  .backdrop,
+  .site-header.autohide { transition: none; }
 }
 
-/* =================== Reduced motion & @supports =================== */
-@media (prefers-reduced-motion: reduce){
-  .site-header .mobile-drawer, .backdrop, .site-header.autohide{ transition: none; }
+@supports not (backdrop-filter: blur(8px)) {
+  .site-header { background: rgba(11,18,32,.92); }
 }
-@supports not (backdrop-filter: blur(8px)){ .site-header{ background: rgba(11,18,32,.92); } }
+
+/* =================== Z-index sécurité =================== */
+body.menu-open .mobile-drawer { z-index: var(--z-drawer); }
+body.menu-open .site-header  { z-index: var(--z-header); }
+body.menu-open .backdrop     { z-index: var(--z-backdrop); }
+
+/* =================== Patch /app =================== */
+body.menu-open .app-wrapper iframe {
+  pointer-events: none !important;
+  touch-action: none !important;
+}

@@ -3,7 +3,7 @@ import { useCallback } from "react";
 import type { KeyboardEvent } from "react";
 
 type Props = {
-  value: number;              // 15 ou 60
+  value?: number;             // 15 ou 60 (défaut : 60)
   onChange: (v: number) => void;
   leftValue?: number;         // défaut 15
   rightValue?: number;        // défaut 60
@@ -14,7 +14,7 @@ type Props = {
 };
 
 export default function HorizonToggle({
-  value,
+  value = 60,                 // ← 60 min par défaut
   onChange,
   leftValue = 15,
   rightValue = 60,

@@ -4,7 +4,7 @@
 # ➜ VERSION "LATEST ONLY" (aucun dossier versionné horodaté)
 #
 # Inputs  (GCS):
-#   GCS_EXPORTS_PREFIX/perf_YYYY-MM-DD.parquet  (plusieurs fichiers dans la fenêtre)
+#   GCS_EXPORTS_PREFIX/perf_YYYY-MM-DD.parquet
 #
 # Outputs (GCS JSON — LATEST ONLY):
 #   <MONITORING_BASE>/model/performance/latest/manifest.json
@@ -16,22 +16,20 @@
 #   <MONITORING_BASE>/model/performance/latest/h{H}/by_cluster.json  (optional)
 #   <MONITORING_BASE>/model/performance/latest/h{H}/lift_curve.json
 #   <MONITORING_BASE>/model/performance/latest/h{H}/hist_residuals.json
-#   <MONITORING_BASE>/model/performance/latest/h{H}/station_timeseries.json   # 24h
+#   <MONITORING_BASE>/model/performance/latest/h{H}/station_timeseries.json   # NEW
 #
 # ENV (required):
 #   GCS_EXPORTS_PREFIX     = gs://<bucket>/velib/exports
 #   GCS_MONITORING_PREFIX  = gs://<bucket>/velib
 #
-# ENV unifiés (comme les autres jobs) :
-#   MON_TZ            = Europe/Paris      (fallback PERF_TZ, default "Europe/Paris")
-#   MON_LAST_DAYS     = 14                (fallback PERF_LAST_DAYS, default 14)
-#   MON_HORIZONS      = "15"              (CSV; fallback PERF_HORIZONS / FORECAST_HORIZONS)
-#
-# ENV optionnels (inchangés) :
+# ENV (optional):
+#   PERF_TZ              = Europe/Paris
+#   PERF_LAST_DAYS       = 14
+#   PERF_HORIZONS        = "15"          (CSV like "15,60")
 #   PERF_RESID_BINS      = 40
-#   PERF_TOP_STATIONS    = 10             (réservé pour usages futurs)
+#   PERF_TOP_STATIONS    = 10
 #   PERF_CLUSTERS_CSV    = gs://.../station_clusters.csv  (mapping station_id,cluster)
-#   PERF_TS_MIN_POINTS   = 24             # min points requis sur 24h pour le timeseries
+#   PERF_TS_MIN_POINTS   = 24            # NEW: min points required within 24h window
 #
 # Run:
 #   python -m service.jobs.build_model_performance
@@ -57,39 +55,8 @@ except Exception as e:
     raise RuntimeError("google-cloud-storage required") from e
 
 
-SCHEMA_VERSION = "1.1"  # 1.0 → 1.1 (ENV unifié MON_* + manifest enrichi)
+SCHEMA_VERSION = "1.0"  # initial schema for model/performance JSONs
 BIN_MIN = 5             # 5-minute cadence (pipeline invariant)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# ENV helpers (unifiés)
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _env(name: str, default=None):
-    v = os.environ.get(name)
-    return v if (v is not None and v != "") else default
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(_env(name, default))
-    except Exception:
-        return default
-
-def _parse_horizons() -> List[int]:
-    # Priorité MON_HORIZONS, fallback PERF_HORIZONS / FORECAST_HORIZONS
-    raw = _env("MON_HORIZONS") or _env("PERF_HORIZONS") or _env("FORECAST_HORIZONS") or "15"
-    hs: List[int] = []
-    for x in str(raw).split(","):
-        x = x.strip()
-        if not x:
-            continue
-        try:
-            v = int(x)
-            if v > 0:
-                hs.append(v)
-        except Exception:
-            pass
-    return sorted(list(set(hs))) or [15]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -129,9 +96,12 @@ def _list_perf_blobs(exports_prefix: str, start_date: datetime, end_date: dateti
 def _upload_json_gs(obj: dict, gs_uri: str):
     """Upload JSON with NaN/Inf sanitized to null."""
     def _san(o):
-        if isinstance(o, dict):  return {k: _san(v) for k, v in o.items()}
-        if isinstance(o, list):  return [_san(v) for v in o]
-        if isinstance(o, float): return float(o) if np.isfinite(o) else None
+        if isinstance(o, dict):
+            return {k: _san(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [_san(v) for v in o]
+        if isinstance(o, float):
+            return float(o) if np.isfinite(o) else None
         return o
 
     safe = _san(obj)
@@ -180,6 +150,7 @@ def _detect_perf_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
     sid = any_of("station_id", "stationcode", "id", "station")
     ytrue = any_of("y_true", "y", "target", "bikes_true", "nb_velos_bin")
     ypred_int = any_of("y_pred_int", "bikes_pred_int")
+    # float fallback if int missing
     ypred_float = any_of("y_pred", "bikes_pred", "yhat", "prediction", "pred")
     ybase = any_of("y_baseline_persist", "y_pred_baseline", "baseline", "persist")
     cap = any_of("capacity", "cap", "num_docks_total", "dock_count")
@@ -220,16 +191,20 @@ def _select_pred_series(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.
         return pd.to_numeric(df[cols["y_pred_int"]], errors="coerce")
     if cols["y_pred_float"] and cols["y_pred_float"] in df.columns:
         return pd.to_numeric(df[cols["y_pred_float"]], errors="coerce")
+    # no predictions → NaNs
     return pd.Series([np.nan] * len(df), index=df.index, dtype="float64")
 
 def _normalize_horizon_bin(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.Series:
     """Return a Series 'hbin' of integer horizon bins."""
     if cols["horizon_bins"] and cols["horizon_bins"] in df.columns:
         s = pd.to_numeric(df[cols["horizon_bins"]], errors="coerce")
-        return s.round().astype("Int64")
+        s = s.round().astype("Int64")
+        return s
     if cols["horizon_min"] and cols["horizon_min"] in df.columns:
         m = pd.to_numeric(df[cols["horizon_min"]], errors="coerce")
-        return (m / BIN_MIN).round().astype("Int64")
+        s = (m / BIN_MIN).round().astype("Int64")
+        return s
+    # fallback unknown
     return pd.Series([pd.NA] * len(df), index=df.index, dtype="Int64")
 
 
@@ -448,6 +423,8 @@ def _build_residual_hist(df: pd.DataFrame, cols: Dict[str, Optional[str]], bins:
     if not mask.any():
         return {"schema_version": SCHEMA_VERSION, "bins": [], "counts": [], "n": 0}
     err = (y_true[mask] - y_pred[mask]).astype("float64").to_numpy()
+
+    # symmetric range around 0 using 99th percentile of |err| to avoid heavy tails
     max_abs = float(np.nanpercentile(np.abs(err), 99)) if err.size else 1.0
     if not np.isfinite(max_abs) or max_abs == 0:
         max_abs = 1.0
@@ -478,7 +455,7 @@ def _build_station_timeseries_24h(df: pd.DataFrame, min_points: int, tzname: str
     ts_max = pd.to_datetime(df["__tbin"], utc=True, errors="coerce").max()
     if pd.isna(ts_max):
         ts_max = datetime.now(timezone.utc)
-    end_utc = ts_max.replace(minute=0, second=0, microsecond=0)
+    end_utc = ts_max.replace(minute=0, second=0, microsecond=0)  # align to hour
     start_utc = end_utc - timedelta(hours=24)
 
     w = (pd.to_datetime(df["__tbin"], utc=True, errors="coerce") >= start_utc) & \
@@ -494,12 +471,14 @@ def _build_station_timeseries_24h(df: pd.DataFrame, min_points: int, tzname: str
     counts = sub.groupby("__sid")["__tbin"].count().reset_index(name="n")
     eligible = counts[counts["n"] >= int(min_points)]
     if eligible.empty:
+        # take the one with max points
         sid = counts.sort_values("n", ascending=False).iloc[0]["__sid"]
     else:
         sid = random.choice(eligible["__sid"].tolist())
 
     s = sub[sub["__sid"] == sid].sort_values("__tbin")
 
+    # ── conversions robustes ────────────────────────────────────────────────
     ts = pd.to_datetime(s["__tbin"], utc=True, errors="coerce")
 
     def _series_to_num_list(x: pd.Series) -> list[Optional[float]]:
@@ -515,7 +494,7 @@ def _build_station_timeseries_24h(df: pd.DataFrame, min_points: int, tzname: str
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "h": int(horizon_min),
         "station_id": str(sid),
-        "name": None,
+        "name": None,           # optionnel si tu veux enrichir plus tard
         "tz": tzname,
         "ts": [t.strftime("%Y-%m-%dT%H:%M:%SZ") for t in ts if pd.notna(t)],
         "y_true": y_true,
@@ -565,45 +544,28 @@ def _publish_latest(base_alias: str, horizon_min: int, payloads: Dict[str, dict]
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main() -> int:
-    EXPORTS_PREFIX = _env("GCS_EXPORTS_PREFIX")
-    MON_PREFIX     = _env("GCS_MONITORING_PREFIX")
-    if not (EXPORTS_PREFIX and str(EXPORTS_PREFIX).startswith("gs://")):
+    EXPORTS_PREFIX = os.environ.get("GCS_EXPORTS_PREFIX")     # gs://.../velib/exports
+    MON_PREFIX     = os.environ.get("GCS_MONITORING_PREFIX")  # gs://.../velib (or .../monitoring)
+    if not (EXPORTS_PREFIX and EXPORTS_PREFIX.startswith("gs://")):
         raise RuntimeError("GCS_EXPORTS_PREFIX missing or invalid")
-    if not (MON_PREFIX and str(MON_PREFIX).startswith("gs://")):
+    if not (MON_PREFIX and MON_PREFIX.startswith("gs://")):
         raise RuntimeError("GCS_MONITORING_PREFIX missing or invalid")
 
-    # ENV unifiés + fallbacks
-    TZNAME        = _env("MON_TZ", _env("PERF_TZ", "Europe/Paris"))
-    LAST_DAYS     = _env_int("MON_LAST_DAYS", _env_int("PERF_LAST_DAYS", 14))
-    HORIZONS      = _parse_horizons()
-
-    # Optionnels (inchangés)
-    RESID_BINS    = _env_int("PERF_RESID_BINS", 40)
-    CLUSTERS_URI  = _env("PERF_CLUSTERS_CSV", None)
-    TS_MIN_POINTS = _env_int("PERF_TS_MIN_POINTS", 24)
+    TZNAME         = os.environ.get("PERF_TZ", "Europe/Paris")
+    LAST_DAYS      = int(os.environ.get("PERF_LAST_DAYS", "14"))
+    RESID_BINS     = int(os.environ.get("PERF_RESID_BINS", "40"))
+    HORIZONS       = [int(x.strip()) for x in os.environ.get("PERF_HORIZONS", "15").split(",") if x.strip()]
+    CLUSTERS_URI   = os.environ.get("PERF_CLUSTERS_CSV", None)
+    TS_MIN_POINTS  = int(os.environ.get("PERF_TS_MIN_POINTS", "24"))  # NEW
 
     now = datetime.now(timezone.utc)
     start, end = _compute_window(now, LAST_DAYS)
-    print(f"[env] MON_TZ={TZNAME} MON_LAST_DAYS={LAST_DAYS} MON_HORIZONS={','.join(map(str,HORIZONS))}")
-    print(f"[model.performance] window UTC: {start.date()} → {end.date()} | horizons={HORIZONS}")
+    print(f"[model.performance] window UTC: {start.date()} → {end.date()} (days={LAST_DAYS}) | horizons={HORIZONS}")
 
     # Read perf blobs in window
     blobs = _list_perf_blobs(EXPORTS_PREFIX, start, end)
     if not blobs:
         print("[model.performance] no perf_* blobs in window — nothing to do")
-        mon_base = _ensure_mon_base(MON_PREFIX)
-        base_alias = f"{mon_base}/model/performance/latest"
-        manifest = {
-            "schema_version": SCHEMA_VERSION,
-            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
-            "window_days": int(LAST_DAYS),
-            "latest_prefix": base_alias,
-            "horizons": [],
-            "horizons_info": [],
-            "tz": TZNAME,
-            "sources": {"exports_prefix": EXPORTS_PREFIX},
-        }
-        _upload_json_gs(manifest, f"{base_alias}/manifest.json")
         return 0
 
     frames: List[pd.DataFrame] = []
@@ -627,7 +589,6 @@ def main() -> int:
     # Detect & normalize columns / types
     cols = _detect_perf_columns(perf)
     perf = _normalize_types(perf, cols)
-
     # Explicit working columns
     tbin_col = cols["tbin"]; sid_col = cols["station"]
     y_col = cols["y_true"]; b_col = cols["y_baseline"]
@@ -657,15 +618,14 @@ def main() -> int:
     target_hbins = [hb for hb in requested_hbins if hb in available_hbins]
     if not target_hbins:
         print(f"[model.performance] no matching horizons in data. available_hbins={available_hbins}, requested={requested_hbins}")
+        # publish minimal manifest for latest
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
             "window_days": int(LAST_DAYS),
             "latest_prefix": base_alias,
             "horizons": [],
-            "horizons_info": [],
-            "tz": TZNAME,
-            "sources": {"exports_prefix": EXPORTS_PREFIX},
+            "horizons_info": []
         }
         _upload_json_gs(manifest, f"{base_alias}/manifest.json")
         return 0
@@ -723,6 +683,7 @@ def main() -> int:
             "y_pred_int": "__p", "y_pred_float": "__p",
         }, bins=RESID_BINS)
 
+        # NEW — 24h timeseries for a random eligible station
         station_ts = _build_station_timeseries_24h(sub, min_points=int(TS_MIN_POINTS), tzname=TZNAME, horizon_min=hmin)
 
         # Assemble payloads per horizon
@@ -734,7 +695,7 @@ def main() -> int:
             "by_station": {"schema_version": SCHEMA_VERSION, "horizon_min": int(hmin), "rows": by_station_rows},
             "lift_curve": dict(lift_curve, **{"horizon_min": int(hmin)}),
             "hist_residuals": dict(hist_res, **{"horizon_min": int(hmin)}),
-            "station_timeseries": station_ts,
+            "station_timeseries": station_ts,  # NEW
         }
         if by_cluster_rows is not None:
             payloads["by_cluster"] = {"schema_version": SCHEMA_VERSION, "horizon_min": int(hmin), "rows": by_cluster_rows}
@@ -750,15 +711,14 @@ def main() -> int:
 
     if not manifests_items:
         print("[model.performance] nothing published — all horizons empty")
+        # manifest minimal
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
             "window_days": int(LAST_DAYS),
             "latest_prefix": base_alias,
             "horizons": [],
-            "horizons_info": [],
-            "tz": TZNAME,
-            "sources": {"exports_prefix": EXPORTS_PREFIX},
+            "horizons_info": []
         }
         _upload_json_gs(manifest, f"{base_alias}/manifest.json")
         return 0
@@ -770,9 +730,7 @@ def main() -> int:
         "window_days": int(LAST_DAYS),
         "latest_prefix": base_alias,
         "horizons": [int(it["horizon_min"]) for it in manifests_items],
-        "horizons_info": manifests_items,
-        "tz": TZNAME,
-        "sources": {"exports_prefix": EXPORTS_PREFIX},
+        "horizons_info": manifests_items
     }
     _upload_json_gs(manifest, f"{base_alias}/manifest.json")
 

@@ -25,7 +25,7 @@ const MarkerClusterGroup = dynamic(() => import('react-leaflet-cluster').then(m 
 export type MapViewProps = {
   stations: Station[]
   forecast: Forecast[]
-  mode: 'current' | 't15'
+  mode: 'current' | 't15' | 't60'   // ⬅️ support de t60 ajouté
   center: [number, number]
   userPos?: [number, number] | null
   setMapInstance?: (m: LType.Map) => void
@@ -124,6 +124,11 @@ export default function MapView({ stations, forecast, mode, center, userPos, set
   )
 
   const markers = useMemo(() => {
+    const predLabel =
+      mode === 't60' ? 'Prévision (60 min)' :
+      mode === 't15' ? 'Prévision (15 min)' :
+      'Prévision'
+
     return stationsWithGeo.map(s => {
       const id = keyFor(s as any)
       const f  = id ? forecastById.get(id) : undefined
@@ -159,14 +164,14 @@ export default function MapView({ stations, forecast, mode, center, userPos, set
         makeDivIcon(iconHtml, [size, size + 12], [size / 2, size + 12]) ??
         makeDivIcon(`<div style="font:700 12px/1 Inter;color:#111;background:#fff;border:1px solid #ddd;border-radius:8px;padding:2px 6px">${value}</div>`, [28, 18], [14, 9])
 
-      // ✅ Popup d’origine, juste sans Δ vélos
+      // ✅ Popup d’origine, avec libellé horizon explicite
       const popupHtml = `
         <div class="popup-content">
           <div class="popup-title">${(s as any).name ?? (s as any).station_id}</div>
           <div class="popup-sub">#${String((s as any).station_id ?? '')}</div>
           <div class="popup-row">
             <span class="badge current">Actuel&nbsp;: <b>${current}</b> / ${cap}</span>
-            <span class="badge pred">Prévision&nbsp;: <b>${pred}</b></span>
+            <span class="badge pred">${predLabel}&nbsp;: <b>${pred}</b></span>
           </div>
         </div>`
 
