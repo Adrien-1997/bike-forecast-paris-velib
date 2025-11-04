@@ -1,25 +1,14 @@
 // /ui/pages/api/proxy/[...path].ts
 import type { NextApiRequest, NextApiResponse } from "next";
 
-/*─────────────────────────────── Config depuis l'env ───────────────────────────────*/
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "")!;
-if (!API_BASE) {
-  throw new Error("NEXT_PUBLIC_API_BASE is not set");
-}
-
-// Jeton privé, non exposé au client
-const API_TOKEN = process.env.API_TOKEN;
-if (!API_TOKEN) {
-  console.warn("[proxy] API_TOKEN is not set — calls will be unauthenticated");
-}
-
-// Personnalisation optionnelle
+/*─────────────────────────────── Config privée (serveur) ───────────────────────────────*/
+const BASE = (process.env.CLOUD_RUN_BASE || "").replace(/\/+$/, "");
+const API_TOKEN = process.env.API_TOKEN || "";
 const AUTH_HEADER = process.env.API_AUTH_HEADER || "Authorization";
 const TOKEN_PREFIX = process.env.API_TOKEN_PREFIX ?? "Bearer ";
 const DEFAULT_TIMEOUT_MS = Number(process.env.API_PROXY_TIMEOUT_MS ?? "30000");
 
-// Désactive le bodyParser pour pouvoir lire le corps brut
+// Désactive le bodyParser (on forward le corps tel quel)
 export const config = {
   api: {
     bodyParser: false,
@@ -28,7 +17,6 @@ export const config = {
 };
 
 /*─────────────────────────────── Helpers ───────────────────────────────*/
-
 function readRawBody(req: NextApiRequest): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -43,23 +31,25 @@ function buildUpstreamUrl(req: NextApiRequest) {
     ? req.query.path
     : [req.query.path].filter(Boolean) as string[];
   const path = segs.join("/");
-  const query = req.url?.split("?")[1];
-  return `${API_BASE}/${path}${query ? `?${query}` : ""}`;
+  const q = req.url?.split("?")[1];
+  return `${BASE}/${path}${q ? `?${q}` : ""}`;
 }
 
 function filterIncomingHeaders(req: NextApiRequest): Record<string, string> {
   const h: Record<string, string> = {};
 
-  if (req.headers["content-type"]) h["Content-Type"] = String(req.headers["content-type"]);
-  h["Accept"] = req.headers["accept"]
-    ? String(req.headers["accept"])
-    : "application/json";
+  // Types acceptés
+  const ct = req.headers["content-type"];
+  if (ct) h["Content-Type"] = String(ct);
+  h["Accept"] = req.headers["accept"] ? String(req.headers["accept"]) : "application/json";
 
+  // Caching conditionnel safe
   if (req.headers["if-none-match"]) h["If-None-Match"] = String(req.headers["if-none-match"]);
   if (req.headers["if-modified-since"])
     h["If-Modified-Since"] = String(req.headers["if-modified-since"]);
 
-  // Ajoute le token privé côté serveur
+  // Pas d'Authorization entrant (évite l'injection)
+  // Ajoute le jeton privé serveur si dispo
   if (API_TOKEN) {
     if (AUTH_HEADER.toLowerCase() === "authorization") {
       h["Authorization"] = `${TOKEN_PREFIX}${API_TOKEN}`;
@@ -74,49 +64,43 @@ function filterIncomingHeaders(req: NextApiRequest): Record<string, string> {
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
     const id = setTimeout(() => reject(new Error("Upstream timeout")), ms);
-    p.then((v) => {
-      clearTimeout(id);
-      resolve(v);
-    }).catch((e) => {
-      clearTimeout(id);
-      reject(e);
-    });
+    p.then((v) => { clearTimeout(id); resolve(v); })
+     .catch((e) => { clearTimeout(id); reject(e); });
   });
 }
 
 /*─────────────────────────────── Handler principal ───────────────────────────────*/
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const url = buildUpstreamUrl(req);
+  // Config manquante → réponse générique (ne pas exposer les valeurs)
+  if (!BASE) {
+    res.status(500).json({ error: "Upstream not configured" });
+    return;
+  }
+
   const method = (req.method || "GET").toUpperCase();
+  const url = buildUpstreamUrl(req);
 
   let body: Buffer | undefined;
   if (!["GET", "HEAD"].includes(method)) {
     try {
       body = await readRawBody(req);
-    } catch (e: any) {
-      res.status(400).json({ error: "Invalid request body", detail: String(e?.message || e) });
+    } catch {
+      res.status(400).json({ error: "Invalid request body" });
       return;
     }
   }
 
   const headers = filterIncomingHeaders(req);
-  const bodyInit = body ? new Uint8Array(body) : undefined; // ✅ conversion propre
+  const bodyInit = body ? new Uint8Array(body) : undefined;
 
   try {
     const upstream = await withTimeout(
-      fetch(url, {
-        method,
-        headers,
-        body: bodyInit,
-        redirect: "manual",
-      }),
+      fetch(url, { method, headers, body: bodyInit, redirect: "manual" }),
       DEFAULT_TIMEOUT_MS
     );
 
+    // Propage code + entêtes utiles, sans exposer quoi que ce soit de sensible
     res.status(upstream.status);
-
-    // Headers utiles
     const ct = upstream.headers.get("content-type");
     if (ct) res.setHeader("Content-Type", ct);
 
@@ -126,9 +110,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const lastMod = upstream.headers.get("last-modified");
     if (lastMod) res.setHeader("Last-Modified", lastMod);
 
+    // Pas de cache côté CDN/Client via ce proxy
     res.setHeader("Cache-Control", "no-store, private, max-age=0");
 
-    // Réponses sans corps
     if (method === "HEAD" || upstream.status === 304) {
       res.end();
       return;
@@ -137,12 +121,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const buf = Buffer.from(await upstream.arrayBuffer());
     res.setHeader("Content-Length", String(buf.length));
     res.send(buf);
-  } catch (e: any) {
-    console.error("[proxy] upstream error →", e);
-    res.status(502).json({
-      error: "Bad gateway",
-      detail: String(e?.message || e),
-      upstream: url,
-    });
+  } catch {
+    // Réponse minimale, sans echo d’URL ni de détails serveur
+    res.status(502).json({ error: "Bad gateway" });
   }
 }

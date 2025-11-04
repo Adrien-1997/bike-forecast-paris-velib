@@ -1,32 +1,31 @@
-# ui/netlify.toml
 [build]
 command = "npm run build"
-publish = ".next"
+publish  = ".next"
 
 [build.environment]
-# API (public)
-NEXT_PUBLIC_API_BASE = "https://velib-api-160046094975.europe-west1.run.app"
+# Le front appelle directement la Function Netlify api-proxy
+NEXT_PUBLIC_API_BASE = "/.netlify/functions/api-proxy"
 
-# ⚠️ Ne mets pas de secrets en NEXT_PUBLIC_* : exposés au client !
-# Si ce token est privé, enlève la ligne suivante et passe-le côté proxy/server.
-# NEXT_PUBLIC_API_TOKEN = "…"
-
-# ✅ STRIPE (public au build)
+# Liens publics Stripe
 NEXT_PUBLIC_STRIPE_MONTHLY_5 = "https://buy.stripe.com/14A7sM2pzdaY5Kd4nc4Ja03"
-NEXT_PUBLIC_STRIPE_DON_5      = "https://buy.stripe.com/6oU00kfclc6U3C5g5U4Ja02"
-NEXT_PUBLIC_STRIPE_DON_10     = "https://buy.stripe.com/5kQ3cw0hr1sgdcFcTI4Ja00"
-NEXT_PUBLIC_STRIPE_DON_20     = "https://buy.stripe.com/28E4gA8NXfj60pT9Hw4Ja01"
+NEXT_PUBLIC_STRIPE_DON_5 = "https://buy.stripe.com/6oU00kfclc6U3C5g5U4Ja02"
+NEXT_PUBLIC_STRIPE_DON_10 = "https://buy.stripe.com/5kQ3cw0hr1sgdcFcTI4Ja00"
+NEXT_PUBLIC_STRIPE_DON_20 = "https://buy.stripe.com/28E4gA8NXfj60pT9Hw4Ja01"
+
+[functions]
+directory = "netlify/functions"
+node_bundler = "esbuild"
 
 [[plugins]]
 package = "@netlify/plugin-nextjs"
 
-[[redirects]]
-from = "/api/*"
-to = "https://velib-api-160046094975.europe-west1.run.app/:splat"
-status = 200
-force = true
+[[headers]]
+for = "/*"
+  [headers.values]
+  Content-Security-Policy = "frame-ancestors 'self' https://velo-paris.fr https://*.velo-paris.fr https://lucky-sunshine-834fe9.netlify.app"
+  Referrer-Policy = "strict-origin-when-cross-origin"
 
 [[headers]]
-for = "/api/*"
+for = "/_next/static/*"
   [headers.values]
-  Cache-Control = "public, max-age=0, s-maxage=60, stale-while-revalidate=300"
+  Cache-Control = "public, max-age=31536000, immutable"

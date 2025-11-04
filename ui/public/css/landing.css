@@ -106,7 +106,7 @@ body::before{
   --halo-b: rgba(29,127,255,.30);
   --halo-mix: linear-gradient(180deg, rgba(255,255,255,.14), rgba(29,127,255,.16));
 }
-:root { --header-offset: calc(var(--header-h) + 50px); } /* ou 2px si tu veux un léger air */
+:root { --header-offset: calc(var(--header-h) + -50px); } /* ou 2px si tu veux un léger air */
 @media (max-width: 740px){
   :root { --header-offset: calc(var(--header-h) + -70px); }
 }

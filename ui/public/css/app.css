@@ -61,7 +61,8 @@
 }
 
 /* ---------- Base ---------- */
-html{ color-scheme: light dark; }
+html{ color-scheme: dark light; }            /* important pour iOS Safari */
+:root, body, * { color-scheme: inherit; }   /* propage le schéma de couleur */
 body{ margin:0; color:var(--text); background:var(--bg); }
 .container{ max-width:var(--content-max); margin:0 auto; padding:0 24px; }
 
@@ -441,3 +442,40 @@ body{ scrollbar-gutter: stable both-edges; }
 @supports not (scrollbar-gutter: stable){ html{ overflow-y: scroll; } }
 .main{ overflow: hidden; }
 @media (max-width:900px){ .main{ overflow: visible; } }
+
+/* ---------- iOS Safari — Forcer le rendu dark sur les blocs “glass” ---------- */
+@media (prefers-color-scheme: dark){
+  .panel,
+  .map-root,
+  .main > :first-child,
+  .kpi .card,
+  .badges .badge,
+  .list .row{
+    background:
+      linear-gradient(180deg, var(--glass-bg-1), var(--glass-bg-2)),
+      linear-gradient(180deg, var(--glass-tint), transparent) !important;
+    border-color: var(--glass-border) !important;
+    box-shadow: var(--glass-shadow) !important;
+  }
+  .kpi .delta{
+    background:
+      linear-gradient(180deg, var(--glass-bg-1), var(--glass-bg-2)),
+      linear-gradient(180deg, var(--glass-tint), transparent) !important;
+    border-color: var(--glass-border) !important;
+    color: var(--text) !important;
+  }
+}
+/* WebKit tactile (iOS) : renforce blur/saturation pour contrer l’auto-ajustement */
+@supports (-webkit-touch-callout: none){
+  @media (prefers-color-scheme: dark){
+    .panel,
+    .map-root,
+    .main > :first-child,
+    .kpi .card,
+    .badges .badge,
+    .list .row{
+      -webkit-backdrop-filter: saturate(150%) blur(14px) !important;
+      backdrop-filter: saturate(150%) blur(14px) !important;
+    }
+  }
+}

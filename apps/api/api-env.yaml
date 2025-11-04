@@ -1,0 +1,47 @@
+GOOGLE_CLOUD_PROJECT: "velib-forecast-472820"
+
+GCS_RAW_PREFIX: "gs://velib-forecast-472820_cloudbuild/velib/bronze"
+GCS_DAILY_PREFIX: "gs://velib-forecast-472820_cloudbuild/velib/daily"
+GCS_EXPORTS_PREFIX: "gs://velib-forecast-472820_cloudbuild/velib/exports"
+GCS_MONITORING_PREFIX: "gs://velib-forecast-472820_cloudbuild/velib/monitoring"
+GCS_SERVING_PREFIX: "gs://velib-forecast-472820_cloudbuild/velib/serving"
+SERVING_FORECAST_PREFIX: "gs://velib-forecast-472820_cloudbuild/velib/serving/forecast"
+
+GCS_MODEL_URI_H15: "gs://velib-forecast-472820_cloudbuild/velib/models/h15/latest.joblib"
+GCS_MODEL_URI_H60: "gs://velib-forecast-472820_cloudbuild/velib/models/h60/latest.joblib"
+GCS_MODEL_URI: "gs://velib-forecast-472820_cloudbuild/velib/models/h15/latest.joblib"
+
+FORECAST_SUPPORTED: "15,60"
+FORECAST_HORIZONS: "15,60"
+
+VELIB_STATUS_URL: "https://velib-metropole-opendata.smovengo.cloud/opendata/Velib_Metropole/station_status.json"
+VELIB_INFO_URL: "https://velib-metropole-opendata.smovengo.cloud/opendata/Velib_Metropole/station_information.json"
+
+OPENMETEO_URL: "https://api.open-meteo.com/v1/forecast"
+OPENMETEO_LAT: "48.8566"
+OPENMETEO_LON: "2.3522"
+OPENMETEO_TIMEOUT: "5.0"
+METEO_DISABLE: "false"
+
+PENURY_THRESH: "2"
+SATURATION_THRESH: "2"
+HISTORY_BACK_MIN: "240"
+
+TZ_APP: "Europe/Paris"
+TMP_DIR: "/tmp"
+PYTHONUNBUFFERED: "1"
+LOG_LEVEL: "INFO"
+IMAGE_TAG: "v1"
+API_CACHE_TTL_S: "120"
+FORECAST_CACHE_TTL_SECONDS: "120"
+UVICORN_TIMEOUT_S: "120"
+
+# CORS (JSON comme chaîne)
+CORS_ORIGINS: '["https://velo-paris.fr","https://lucky-sunshine-834fe9.netlify.app","http://localhost:3000","http://127.0.0.1:3000","http://localhost:5050","http://127.0.0.1:5050"]'
+CORS_ALLOWED_METHODS: "GET,OPTIONS"
+CORS_ALLOWED_HEADERS: "Content-Type,If-None-Match"
+
+API_SELF_BASE: "https://api.velo-paris.fr"
+LIVE_SNAPSHOT_URL: "/snapshot"
+
+DELETE_AFTER_COMPACT: "1"

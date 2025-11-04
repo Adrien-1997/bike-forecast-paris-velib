@@ -74,3 +74,6 @@ apps/api/__pycache__/
 # (pas de règle ici, juste un rappel)
 # bucket-lifecycle.json si tu ne veux pas le versionner :
 bucket-lifecycle.json
+
+# Local Netlify folder
+.netlify

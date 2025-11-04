@@ -1,40 +1,43 @@
 // pages/api/debug/badges-proxy.ts
-import type { NextApiRequest, NextApiResponse } from 'next';
+import type { NextApiRequest, NextApiResponse } from "next";
 
-const UPSTREAM = `${process.env.NEXT_PUBLIC_API_BASE}/badges?mode=latest`;
+const BASE = (process.env.CLOUD_RUN_BASE || "").replace(/\/+$/, "");
+const API_TOKEN = process.env.API_TOKEN || ""; // injecté côté Netlify, jamais exposé
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!process.env.NEXT_PUBLIC_API_BASE) {
-    return res.status(500).json({ error: 'NEXT_PUBLIC_API_BASE not set' });
+  if (!BASE) {
+    // Ne divulgue pas le nom de la variable manquante
+    return res.status(500).json({ error: "Upstream not configured" });
   }
-  const url = `${UPSTREAM}&_ts=${Date.now()}`; // anti-cache
+
+  const url = `${BASE}/badges?mode=latest&_ts=${Date.now()}`;
+
   try {
     const upstream = await fetch(url, {
-      // Force no cache pour voir la vérité du serveur
-      cache: 'no-store',
+      method: "GET",
       headers: {
-        'accept': 'application/json',
-        // ajoute ici éventuels tokens: Authorization: `Bearer ${process.env.API_TOKEN}`,
+        accept: "application/json",
+        ...(API_TOKEN ? { authorization: `Bearer ${API_TOKEN}` } : {}),
       },
+      // on force le fetch frais pour un endpoint de debug
+      cache: "no-store",
     });
 
-    const rawText = await upstream.text();
-    let parsed: any = null;
-    try { parsed = JSON.parse(rawText); } catch { /* pas JSON */ }
+    // On forward le status et le JSON sans écho de l’URL ni des headers
+    const text = await upstream.text();
+    let body: any;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      // Si ce n’est pas du JSON, renvoie un wrapper minimal (toujours sans secrets)
+      return res
+        .status(upstream.status)
+        .json({ ok: upstream.ok, status: upstream.status, body: text.slice(0, 2000) });
+    }
 
-    const headersObj = Object.fromEntries(upstream.headers.entries());
-
-    res.status(200).json({
-      probe: {
-        requested_url: url,
-        status: upstream.status,
-        statusText: upstream.statusText,
-        headers: headersObj,
-        is_json: parsed !== null,
-      },
-      body: parsed ?? rawText,
-    });
+    return res.status(upstream.status).json(body);
   } catch (e: any) {
-    res.status(500).json({ error: String(e) });
+    // Message générique pour éviter toute fuite d’info
+    return res.status(502).json({ error: "Upstream fetch failed" });
   }
 }

@@ -511,7 +511,7 @@ export default function LandingPage() {
                 <div className="eyebrow">
                   <span className="ping" aria-hidden="true" />
                   <span className="chip" aria-label="Horizon de prévision">Prévisions +15 / +60 min • Paris</span>
-                  <span className="chip" aria-label="Actualisation">Données live 5 min</span>
+                  <span className="chip" aria-label="Actualisation">Données live</span>
                 </div>
 
                 <h1 id="hero-title">
@@ -631,8 +631,7 @@ export default function LandingPage() {
                 <div>
                   <h2 id="demo-title">Démo en direct</h2>
                   <p>
-                    Application React embarquée : carte en direct, recherche de stations, et prévisions à +15 minutes.
-                    Le premier accès peut prendre quelques secondes (cold start Cloud Run).
+                    Application React embarquée : carte en direct, recherche de stations, et prévisions à +15/+60 minutes.
                   </p>
                 </div>
                 <div className="actions-row" style={{ gap: "0.5rem" }}>

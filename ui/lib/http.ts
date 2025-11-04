@@ -1,28 +1,35 @@
 // ui/lib/http.ts
 // Centralized HTTP utility — timeout, JSON parsing, ETag caching, and error handling.
 
-/*─────────────────────────────── Base URL & Token ───────────────────────────────*/
+/*─────────────────────────────── Base URL (proxy Netlify) ───────────────────────────────*/
 
-// En production (Netlify), on passe par le rewrite /api → évite CORS.
-// En dev, si tu as un proxy Next: http://localhost:3000/api/proxy ; sinon /api marche aussi.
 function joinUrl(base: string, path: string) {
   const b = base.replace(/\/+$/, "");
   const p = path.replace(/^\/+/, "");
   return `${b}/${p}`;
 }
 
+/**
+ * Always prefer NEXT_PUBLIC_API_BASE; fallback to Netlify Function proxy.
+ * No hard-coded Cloud Run URL to avoid secret-scan or env drift.
+ */
+export const API_BASE: string = (
+  process.env.NEXT_PUBLIC_API_BASE && process.env.NEXT_PUBLIC_API_BASE.trim()
+) || "/.netlify/functions/api-proxy";
+
+// Optional public token (for local/dev only)
 const PUBLIC_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN ?? "";
 
-export const API_BASE =
-  (process.env.NEXT_PUBLIC_API_BASE && process.env.NEXT_PUBLIC_API_BASE.trim()) ||
-  (process.env.NODE_ENV === "production" ? "/api" : "http://localhost:3000/api/proxy");
-
+// Default timeout
 export const DEFAULT_TIMEOUT_MS = Number(
   process.env.NEXT_PUBLIC_HTTP_TIMEOUT_MS ?? "30000"
-); // 30s par défaut
+); // 30s
 
-console.log("[http] API_BASE =", API_BASE);
-console.log("[http] timeout =", DEFAULT_TIMEOUT_MS, "ms");
+if (typeof window !== "undefined") {
+  // Harmless debug (client only)
+  console.log("[http] API_BASE =", API_BASE);
+  console.log("[http] timeout =", DEFAULT_TIMEOUT_MS, "ms");
+}
 
 /*─────────────────────────────── Types & Helpers ───────────────────────────────*/
 
@@ -63,7 +70,7 @@ async function fetchWithRetry(input: RequestInfo, init: RequestInit, tries = 2) 
   try {
     return await fetch(input, init);
   } catch (e: any) {
-    if (tries > 1 && (e?.name === "AbortError" || /aborted/i.test(String(e)))) {
+    if (tries > 1 && (e?.name === "AbortError" || /aborted|timeout/i.test(String(e)))) {
       console.warn("[http] retry after abort/timeout →", input);
       return fetchWithRetry(input, init, tries - 1);
     }
@@ -82,18 +89,25 @@ export async function json<T>(path: string, init: JsonInit = {}): Promise<T> {
   try {
     const headers = new Headers(rest.headers || {});
     headers.set("accept", "application/json");
-    headers.set("Content-Type", "application/json");
-    if (PUBLIC_TOKEN) headers.set("Authorization", `Bearer ${PUBLIC_TOKEN}`);
+
+    // Only set Content-Type when sending a body
+    if (rest.method && rest.method !== "GET" && rest.method !== "HEAD") {
+      headers.set("content-type", headers.get("content-type") || "application/json");
+    }
+
+    // Optional public token for dev
+    if (PUBLIC_TOKEN) headers.set("authorization", `Bearer ${PUBLIC_TOKEN}`);
 
     const res = await fetchWithRetry(url, {
       ...rest,
       headers,
       cache: noCache ? "no-store" : rest.cache,
+      credentials: "same-origin",
       signal: t.signal,
     });
 
     const text = await res.text();
-    if (!res.ok) throw new HttpError(res.status, res.statusText, text);
+    if (!res.ok) throw new HttpError(res.status, res.statusText || "HTTP Error", text);
 
     try {
       return JSON.parse(text) as T;
@@ -118,43 +132,43 @@ export async function fetchJsonWithEtag<T>(
 
   const etagKey = `etag:${url0}`;
   const bodyKey = `cache:${url0}`;
-  const prevEtag =
-    typeof window !== "undefined" ? localStorage.getItem(etagKey) : null;
+  const hasWindow = typeof window !== "undefined";
+  const prevEtag = hasWindow ? localStorage.getItem(etagKey) : null;
 
   try {
     const headers = new Headers(rest.headers || {});
     headers.set("accept", "application/json");
-    headers.set("Content-Type", "application/json");
-    if (PUBLIC_TOKEN) headers.set("Authorization", `Bearer ${PUBLIC_TOKEN}`);
-    if (prevEtag) headers.set("If-None-Match", prevEtag);
+    if (PUBLIC_TOKEN) headers.set("authorization", `Bearer ${PUBLIC_TOKEN}`);
+    if (prevEtag) headers.set("if-none-match", prevEtag);
 
     const res = await fetchWithRetry(url, {
       ...rest,
       headers,
       cache: noCache ? "no-store" : rest.cache,
+      credentials: "same-origin",
       signal: t.signal,
     });
 
-    // 304 mais aucun cache local → re-fetch complet
-    if (res.status === 304 && typeof window !== "undefined") {
+    // 304 but nothing cached → fetch fresh
+    if (res.status === 304 && hasWindow) {
       const cached = localStorage.getItem(bodyKey);
       if (cached) return JSON.parse(cached) as T;
 
       const headers2 = new Headers(rest.headers || {});
       headers2.set("accept", "application/json");
-      headers2.set("Content-Type", "application/json");
-      if (PUBLIC_TOKEN) headers2.set("Authorization", `Bearer ${PUBLIC_TOKEN}`);
+      if (PUBLIC_TOKEN) headers2.set("authorization", `Bearer ${PUBLIC_TOKEN}`);
 
       const res2 = await fetchWithRetry(addTs(url0), {
         ...rest,
         headers: headers2,
         cache: "no-store",
+        credentials: "same-origin",
         signal: t.signal,
       });
       const text2 = await res2.text();
-      if (!res2.ok) throw new HttpError(res2.status, res2.statusText, text2);
+      if (!res2.ok) throw new HttpError(res2.status, res2.statusText || "HTTP Error", text2);
       const data2 = JSON.parse(text2) as T;
-      const etag2 = res2.headers.get("ETag");
+      const etag2 = res2.headers.get("etag");
       if (etag2) {
         try {
           localStorage.setItem(etagKey, etag2);
@@ -165,11 +179,11 @@ export async function fetchJsonWithEtag<T>(
     }
 
     const text = await res.text();
-    if (!res.ok) throw new HttpError(res.status, res.statusText, text);
+    if (!res.ok) throw new HttpError(res.status, res.statusText || "HTTP Error", text);
 
     const data = JSON.parse(text) as T;
-    const etag = res.headers.get("ETag");
-    if (typeof window !== "undefined" && etag) {
+    const etag = res.headers.get("etag");
+    if (hasWindow && etag) {
       try {
         localStorage.setItem(etagKey, etag);
         localStorage.setItem(bodyKey, text);
@@ -201,21 +215,12 @@ export const postJSON = <T>(
 
 /*─────────────────────────────── Forecast helpers ───────────────────────────────*/
 
-// Robust row selector for forecast payloads (supports multiple shapes)
 export function selectForecastRows(payload: any, horizonMin = 15): any[] {
-  // Root array
-  if (Array.isArray(payload)) return payload;
-
-  // Current format: { data: [...] }
-  if (Array.isArray(payload?.data)) return payload.data;
-
-  // Legacy keyed by horizon: { data: { "15": [...] } }
-  const k = String(horizonMin);
+  if (Array.isArray(payload)) return payload;                 // root array
+  if (Array.isArray(payload?.data)) return payload.data;      // { data: [...] }
+  const k = String(horizonMin);                               // { data: { "15": [...] } }
   if (payload?.data?.[k] && Array.isArray(payload.data[k])) return payload.data[k];
-
-  // Other legacy: { predictions: [...] }
-  if (Array.isArray(payload?.predictions)) return payload.predictions;
-
+  if (Array.isArray(payload?.predictions)) return payload.predictions; // legacy
   console.warn("[selectForecastRows] unexpected payload shape:", payload);
   return [];
 }
@@ -225,8 +230,7 @@ export async function getForecastRows(horizonMin = 15) {
     const payload = await getJSON(`/forecast/latest?h=${horizonMin}`);
     return selectForecastRows(payload, horizonMin);
   } catch (e: any) {
-    // GCS file missing → API returns 404; return [] for UI resilience
-    if (e?.status === 404) return [];
+    if (e?.status === 404) return []; // tolerate missing GCS file
     throw e;
   }
 }
