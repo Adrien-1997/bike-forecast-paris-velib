@@ -128,7 +128,7 @@ body.menu-open .site-header.autohide { transform: translateY(0) !important; }
   color: var(--text, #e6eaf2);
   background: rgba(29,127,255,0.18) !important;
   border: 0 !important;
-  border-radius: 12px !important;   /* ← add !important */
+  border-radius: 12px !important;
   padding: 7px 12px !important;
   box-shadow: none !important;
 }
@@ -154,9 +154,9 @@ body.menu-open .site-header.autohide { transform: translateY(0) !important; }
   height: auto;
   padding: 8px;
   border: none;
-  background: transparent;      /* pas d'encerclement */
-  box-shadow: none;             /* pas d'ombre */
-  border-radius: 0;             /* pas de forme ronde */
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
   transition: transform .15s ease;
   position: relative;
   z-index: 999;
@@ -165,24 +165,24 @@ body.menu-open .site-header.autohide { transform: translateY(0) !important; }
 }
 .site-header .burger:hover { background: transparent; box-shadow: none; }
 
-/* Icône toujours blanche */
+/* Icône — couleur gérée plus bas (dark/light) */
 .site-header .burger .icon {
   display: inline-grid;
   place-items: center;
   width: 28px;
   height: 28px;
-  color: #ffffff;               /* blanc forcé (dark & light) */
+  color: currentColor;
 }
 
-/* Le SVG utilise la couleur courante */
+/* SVG suit la couleur courante */
 .site-header .burger .icon svg {
   display: block;
   width: 28px;
   height: 28px;
+  color: currentColor;
 }
 .site-header .burger .icon svg rect { fill: currentColor; }
 
-/* Transitions (lines ↔ cross) */
 .site-header .burger .icon svg .lines,
 .site-header .burger .icon svg .cross {
   transition: opacity .18s ease, transform .18s ease;
@@ -193,17 +193,15 @@ body.menu-open .site-header.autohide { transform: translateY(0) !important; }
 .site-header .burger.close .icon svg .lines { opacity: 0; transform: scale(0.96); }
 .site-header .burger.close .icon svg .cross { opacity: 1; transform: rotate(0deg) scale(1); }
 
-/* Pas d'anneau focus sur le burger */
 .site-header .burger:focus-visible { outline: none; box-shadow: none; }
 
-/* Cacher le burger en desktop */
 @media (min-width: 980px) { .site-header .burger { display: none; } }
 
 /* =================== Mobile drawer =================== */
 .site-header .mobile-drawer {
   position: fixed;
   left: 0; right: 0;
-  top: var(--header-top);       /* <— piloté par la variable */
+  top: var(--header-top);
   opacity: 0;
   pointer-events: none;
   transition: opacity .18s ease, translate .18s ease;
@@ -236,10 +234,10 @@ body.menu-open .site-header.autohide { transform: translateY(0) !important; }
   padding: 6px;
 }
 
-/* Liens "flat" par défaut dans le drawer (zéro pastille) */
+/* Liens "flat" dans le drawer */
 .site-header .mobile-nav .nav-trigger{
   width: 100%;
-  padding: 12px 0 !important;  /* vertical only */
+  padding: 12px 0 !important;
   background: transparent !important;
   border: 0 !important;
   border-radius: 0 !important;
@@ -249,10 +247,10 @@ body.menu-open .site-header.autohide { transform: translateY(0) !important; }
   background: transparent !important;
 }
 
-/* ✅ Voile bleu UNIQUEMENT sur l’actif (drawer) */
+/* ✅ Voile bleu sur l’actif (drawer) */
 .site-header .mobile-nav .nav-trigger.active{
   background: rgba(29,127,255,0.18) !important;
-  border-radius: 10px !important;   /* ← add !important */
+  border-radius: 10px !important;
   padding: 12px 12px !important;
   box-shadow: none !important;
 }
@@ -315,3 +313,36 @@ body.menu-open .app-wrapper iframe {
   pointer-events: none !important;
   touch-action: none !important;
 }
+
+/* ===================================================================
+   COULEURS HEADER (dark/light)
+   =================================================================== */
+
+/* Dark (par défaut) : blanc */
+.site-header .brand,
+.site-header .brandtext,
+.site-header .nav-trigger { color: #e6eaf2; }
+.site-header .burger .icon { color: #ffffff; }
+.site-header .nav-trigger:hover,
+.site-header .nav-desktop .nav-trigger.active { color: #e6eaf2; }
+
+/* Light : noir */
+@media (prefers-color-scheme: light) {
+  .site-header .brand,
+  .site-header .brandtext,
+  .site-header .nav-trigger { color: #111827; }
+  .site-header .burger .icon { color: #000000; }
+
+  .site-header .nav-trigger:hover,
+  .site-header .nav-desktop .nav-trigger.active {
+    color: #111827;
+    background: rgba(29,127,255,0.14) !important;
+  }
+}
+
+/* S’assure que les SVG suivent la couleur courante */
+.site-header .burger .icon svg,
+.site-header .brand .mark svg,
+.site-header .nav-trigger svg { color: currentColor; }
+.site-header .burger .icon svg rect,
+.site-header .burger .icon svg path { fill: currentColor; }

@@ -448,7 +448,7 @@ export default function NetworkStationsPage() {
             {/* <button className="btn btn--primary" onClick={exportCSV}>Export CSV</button> */}
           </div>
 
-          <div className="map-block">
+          <div className="map-block" style={{ height: 520 }}>
             <MapView rows={filteredRows} sizeByCapacity={sizeByCapacity} autoFit={autoFit} />
           </div>
           <div className="figure-note small">

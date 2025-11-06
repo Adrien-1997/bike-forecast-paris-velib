@@ -1,5 +1,5 @@
 /* ===================================================================
-   Vélib’ Forecast — app.css (clean)
+   Vélib’ Forecast — app.css (clean, iOS dark hard fix)
    Thème identique à landing.css + verre dépoli (carte & panneau)
    KPI = style unifié (étiquettes sans ombres + dépoli renforcé)
    =================================================================== */
@@ -27,15 +27,16 @@
   --gap:16px; --gap-sm:12px;
   --gap-2:8px; --gap-3:12px; /* pour KPI */
 
-  /* Glass tokens (dark) */
-  --glass-bg-1: rgba(255,255,255,.08);
-  --glass-bg-2: rgba(255,255,255,.04);
-  --glass-tint: rgba(255,255,255,.02);
-  --glass-border: rgba(255,255,255,.12);
-  --glass-ring: rgba(255,255,255,.08);
+  /* Glass tokens (DARK, teintés foncés pour iOS) */
+  --glass-bg-1: rgba(12,19,36,.70);   /* au lieu de blanc translucide */
+  --glass-bg-2: rgba(12,19,36,.52);
+  --glass-tint: rgba(0,0,0,.12);
+  --glass-border: rgba(255,255,255,.10);
+  --glass-ring: rgba(255,255,255,.07);
   --glass-shadow: 0 10px 24px rgba(0,0,0,.28), 0 2px 10px rgba(0,0,0,.22);
   --glass-shadow-hover: 0 16px 40px rgba(0,0,0,.36), 0 4px 14px rgba(0,0,0,.28);
 }
+
 @media (prefers-color-scheme:light){
   :root{
     --bg:#f9fafb; --bg-soft:#fff;
@@ -49,7 +50,7 @@
     --border:rgba(0,0,0,.08);
     --border-strong:rgba(0,0,0,.12);
 
-    /* Glass tokens (light) */
+    /* Glass tokens (LIGHT) */
     --glass-bg-1: rgba(255,255,255,.90);
     --glass-bg-2: rgba(255,255,255,.70);
     --glass-tint: rgba(0,0,0,.02);
@@ -61,8 +62,8 @@
 }
 
 /* ---------- Base ---------- */
-html{ color-scheme: dark light; }            /* important pour iOS Safari */
-:root, body, * { color-scheme: inherit; }   /* propage le schéma de couleur */
+html{ color-scheme: dark light; }          /* iOS: annonce la prise en charge */
+:root, body, * { color-scheme: inherit; } /* propage partout (stop auto-tint) */
 body{ margin:0; color:var(--text); background:var(--bg); }
 .container{ max-width:var(--content-max); margin:0 auto; padding:0 24px; }
 
@@ -80,7 +81,7 @@ body{ margin:0; color:var(--text); background:var(--bg); }
 /* ---------- Main : CARTE + PANNEAU ---------- */
 .main{
   display:flex; gap:var(--gap); align-items:stretch;
-  height: calc(90svh - var(--header-h)); /* 90% viewport */
+  height: calc(90svh - var(--header-h));
   min-height: 420px;
   min-block-size: 0;
 }
@@ -93,13 +94,10 @@ body{ margin:0; color:var(--text); background:var(--bg); }
     linear-gradient(180deg, var(--glass-bg-1), var(--glass-bg-2)),
     linear-gradient(180deg, var(--glass-tint), transparent);
   box-shadow: var(--glass-shadow);
-  overflow:hidden;
-  height:100%;
-  flex:1 1 auto;
+  overflow:hidden; height:100%; flex:1 1 auto;
   backdrop-filter: saturate(120%) blur(8px);
   -webkit-backdrop-filter: saturate(120%) blur(8px);
-  position: relative;
-  isolation: isolate;
+  position: relative; isolation: isolate;
 }
 .map-root::before, .main > :first-child::before{
   content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
@@ -138,7 +136,7 @@ body{ margin:0; color:var(--text); background:var(--bg); }
   box-shadow: inset 0 1px 0 var(--glass-ring);
 }
 
-/* Hover relief (conservé pour les conteneurs interactifs, pas pour les étiquettes) */
+/* Hover relief */
 @media (hover:hover){
   .panel:hover, .map-root:hover, .main > :first-child:hover{
     box-shadow: var(--glass-shadow-hover);
@@ -166,63 +164,38 @@ body{ margin:0; color:var(--text); background:var(--bg); }
 /* =========================================================
    KPI — alignement vertical haut/bas + style Monitoring
    ========================================================= */
-
 .kpi{
-  display:grid;
-  grid-template-columns:repeat(3,1fr);
-  gap:10px;
-  margin-top:6px;
+  display:grid; grid-template-columns:repeat(3,1fr);
+  gap:10px; margin-top:6px;
 }
-
 .kpi .card{
-  display:grid;
-  grid-template-rows:auto 1fr;          /* ↑ label en haut, valeur en bas */
-  align-content:space-between;
-  padding:16px;
-  border-radius:14px;
-  border:1px solid var(--glass-border);
+  display:grid; grid-template-rows:auto 1fr;
+  align-content:space-between; padding:16px;
+  border-radius:14px; border:1px solid var(--glass-border);
   background:
     linear-gradient(180deg, var(--glass-bg-1), var(--glass-bg-2)),
     linear-gradient(180deg, var(--glass-tint), transparent);
   box-shadow:none !important;
   backdrop-filter:saturate(150%) blur(14px);
   -webkit-backdrop-filter:saturate(150%) blur(14px);
-  transition:none;
-  min-height:90px;                     /* garantit un peu de tension verticale */
+  transition:none; min-height:90px;
 }
-
-/* Label (haut) */
 .kpi .small{
-  color:var(--muted);
-  font-size:.82rem;
-  text-transform:uppercase;
-  letter-spacing:.03em;
-  align-self:start;
+  color:var(--muted); font-size:.82rem; text-transform:uppercase;
+  letter-spacing:.03em; align-self:start;
 }
-
-/* Valeur (bas) */
 .kpi .val{
-  font-weight:900;
-  font-size:1.25rem;
-  color:var(--text);
-  line-height:1.1;
-  align-self:end;
+  font-weight:900; font-size:1.25rem; color:var(--text);
+  line-height:1.1; align-self:end;
 }
-
-/* Delta (facultatif, au-dessus de la valeur si utilisé) */
 .kpi .delta{
-  justify-self:start;
-  font-size:.8rem;
-  font-weight:800;
-  line-height:1;
-  padding:4px 6px;
-  border-radius:999px;
+  justify-self:start; font-size:.8rem; font-weight:800; line-height:1;
+  padding:4px 6px; border-radius:999px; white-space:nowrap;
   border:1px solid var(--glass-border);
   background:
     linear-gradient(180deg, var(--glass-bg-1), var(--glass-bg-2)),
     linear-gradient(180deg, var(--glass-tint), transparent);
   color:var(--text);
-  white-space:nowrap;
   box-shadow:none !important;
   backdrop-filter:saturate(140%) blur(12px);
   -webkit-backdrop-filter:saturate(140%) blur(12px);
@@ -272,7 +245,6 @@ body{ margin:0; color:var(--text); background:var(--bg); }
     -webkit-backdrop-filter:saturate(150%) blur(10px);
   }
 
-  /* Variantes colorées adoucies en clair */
   .kpi .delta--ok{
     background:linear-gradient(180deg,
       color-mix(in srgb, var(--ok) 15%, var(--panel-2)),
@@ -334,16 +306,10 @@ h3.section-title{ margin:10px 0 4px; font-size:1rem; font-weight:800; letter-spa
 }
 
 /* ---------- Responsive ---------- */
-@media (max-width:1200px){
-  .side-panel{ flex-basis:320px; max-width:320px; }
-}
+@media (max-width:1200px){ .side-panel{ flex-basis:320px; max-width:320px; } }
 @media (max-width:900px){
-  .main{
-    height:auto; min-height:auto; flex-direction:column;
-  }
-  .side-panel{
-    flex-basis:auto; max-width:none; height:auto; min-height:auto;
-  }
+  .main{ height:auto; min-height:auto; flex-direction:column; }
+  .side-panel{ flex-basis:auto; max-width:none; height:auto; min-height:auto; }
 }
 @media (max-width:740px){
   .container{ padding:0 20px; }
@@ -351,9 +317,7 @@ h3.section-title{ margin:10px 0 4px; font-size:1rem; font-weight:800; letter-spa
   .header h1{ display:block; }
   .header .subtitle{ display:block; margin-top:2px; white-space:normal; }
 }
-@media (max-width:520px){
-  .container{ padding:0 16px; }
-}
+@media (max-width:520px){ .container{ padding:0 16px; } }
 
 /* ---------- A11y / motion ---------- */
 :focus-visible{ outline:none; box-shadow:0 0 0 3px rgba(29,127,255,.35); border-radius:10px; }
@@ -389,61 +353,34 @@ h3.section-title{ margin:10px 0 4px; font-size:1rem; font-weight:800; letter-spa
 /* === OVERRIDE MOBILE — map plus haute === */
 @media (max-width: 900px){
   .main{ flex-direction: column; height:auto; min-height:auto; }
-
-  /* Map ≈ 70% d'écran en portrait, priorité maximale */
-  .main > :first-child{
-    height: 70svh !important;
-    min-height: 380px;
-  }
-  @supports (height: 1dvh){
-    .main > :first-child{ height: 70dvh !important; }
-  }
-
-  /* Assure que Leaflet remplit le parent */
+  .main > :first-child{ height: 70svh !important; min-height: 380px; }
+  @supports (height: 1dvh){ .main > :first-child{ height: 70dvh !important; } }
   .main > :first-child .leaflet-container{
-    height: 100% !important;
-    width: 100% !important;
-    display: block;
+    height: 100% !important; width: 100% !important; display: block;
   }
 }
-
-/* Bonus : encore plus haut en portrait très étroit */
 @media (max-width: 520px) and (orientation: portrait){
-  .main > :first-child{
-    height: 70svh !important;
-  }
-  @supports (height: 1dvh){
-    .main > :first-child{ height: 70dvh !important; }
-  }
+  .main > :first-child{ height: 70svh !important; }
+  @supports (height: 1dvh){ .main > :first-child{ height: 70dvh !important; } }
 }
 
 /* ============================================
-   Popup badges — texte foncé même en thème sombre
+   Popup badges — (si tu veux suivre le thème, commente ces 4 règles)
    ============================================ */
-.leaflet-popup-content .badge {
-  color: #111827 !important;   /* texte foncé lisible partout */
-  font-weight: 700;
-}
-.leaflet-popup-content .badge b {
-  color: #000000 !important;   /* chiffres bien visibles */
-}
-/* Empêche tout blanchiment hérité du dark mode */
+.leaflet-popup-content .badge { color: #111827 !important; font-weight: 700; }
+.leaflet-popup-content .badge b { color: #000000 !important; }
 @media (prefers-color-scheme: dark) {
   .leaflet-popup-content .badge,
-  .leaflet-popup-content .badge b {
-    color: #111827 !important;
-    text-shadow: none !important;
-    opacity: 1 !important;
-  }
+  .leaflet-popup-content .badge b { color: #111827 !important; text-shadow: none !important; opacity: 1 !important; }
 }
 
-/* ===== Scrollbar handling (évite le layout shift) ===== */
+/* ===== Scrollbar handling ===== */
 body{ scrollbar-gutter: stable both-edges; }
 @supports not (scrollbar-gutter: stable){ html{ overflow-y: scroll; } }
 .main{ overflow: hidden; }
 @media (max-width:900px){ .main{ overflow: visible; } }
 
-/* ---------- iOS Safari — Forcer le rendu dark sur les blocs “glass” ---------- */
+/* ---------- iOS Safari — HARD OVERRIDES pour dark ---------- */
 @media (prefers-color-scheme: dark){
   .panel,
   .map-root,
@@ -456,6 +393,7 @@ body{ scrollbar-gutter: stable both-edges; }
       linear-gradient(180deg, var(--glass-tint), transparent) !important;
     border-color: var(--glass-border) !important;
     box-shadow: var(--glass-shadow) !important;
+    color: var(--text) !important;
   }
   .kpi .delta{
     background:
@@ -465,7 +403,7 @@ body{ scrollbar-gutter: stable both-edges; }
     color: var(--text) !important;
   }
 }
-/* WebKit tactile (iOS) : renforce blur/saturation pour contrer l’auto-ajustement */
+/* WebKit tactile : renforce blur/saturation (réduit l’effet “blanchi”) */
 @supports (-webkit-touch-callout: none){
   @media (prefers-color-scheme: dark){
     .panel,
@@ -474,8 +412,35 @@ body{ scrollbar-gutter: stable both-edges; }
     .kpi .card,
     .badges .badge,
     .list .row{
-      -webkit-backdrop-filter: saturate(150%) blur(14px) !important;
-      backdrop-filter: saturate(150%) blur(14px) !important;
+      -webkit-backdrop-filter: saturate(170%) blur(16px) !important;
+      backdrop-filter: saturate(170%) blur(16px) !important;
     }
+  }
+}
+
+
+/* === Plotly light-mode fix: titles + axes text + axes lines === */
+@media (prefers-color-scheme: light){
+  /* Titres, ticks, légende, annotations */
+  .js-plotly-plot .main-svg text{
+    fill: var(--text, #111827) !important;
+  }
+  .js-plotly-plot .main-svg .gtitle text,
+  .js-plotly-plot .main-svg .xtitle text,
+  .js-plotly-plot .main-svg .ytitle text,
+  .js-plotly-plot .main-svg .legend text,
+  .js-plotly-plot .main-svg .annotation text{
+    fill: var(--text, #111827) !important;
+  }
+
+  /* Lignes d'axes et ticks */
+  .js-plotly-plot .main-svg .xaxislayer-above path,
+  .js-plotly-plot .main-svg .yaxislayer-above path{
+    stroke: rgba(0,0,0,.35) !important;
+  }
+
+  /* Grilles (optionnel : un peu plus visibles en light) */
+  .js-plotly-plot .main-svg .gridlayer path{
+    stroke: rgba(0,0,0,.08) !important;
   }
 }

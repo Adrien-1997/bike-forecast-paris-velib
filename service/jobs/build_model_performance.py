@@ -1,10 +1,14 @@
 # service/jobs/build_model_performance.py
 # -----------------------------------------------------------------------------
 # Build "Model Performance" monitoring artifacts from perf_YYYY-MM-DD.parquet
-# ➜ VERSION "LATEST ONLY" (aucun dossier versionné horodaté)
+# ➜ VERSION "LATEST ONLY" (no timestamped versioned folders)
+#
+# Time window aligned with Data Health:
+#   - End  = last aligned bin of Y-1 (UTC, aligned on BIN_MIN)
+#   - Start= 00:00:00 UTC of Y-(MON_LAST_DAYS-1)
 #
 # Inputs  (GCS):
-#   GCS_EXPORTS_PREFIX/perf_YYYY-MM-DD.parquet  (plusieurs fichiers dans la fenêtre)
+#   GCS_EXPORTS_PREFIX/perf_YYYY-MM-DD.parquet  (one per day)
 #
 # Outputs (GCS JSON — LATEST ONLY):
 #   <MONITORING_BASE>/model/performance/latest/manifest.json
@@ -22,16 +26,16 @@
 #   GCS_EXPORTS_PREFIX     = gs://<bucket>/velib/exports
 #   GCS_MONITORING_PREFIX  = gs://<bucket>/velib
 #
-# ENV unifiés (comme les autres jobs) :
+# Unified ENV (like other jobs):
 #   MON_TZ            = Europe/Paris      (fallback PERF_TZ, default "Europe/Paris")
 #   MON_LAST_DAYS     = 14                (fallback PERF_LAST_DAYS, default 14)
 #   MON_HORIZONS      = "15"              (CSV; fallback PERF_HORIZONS / FORECAST_HORIZONS)
 #
-# ENV optionnels (inchangés) :
+# Optional:
 #   PERF_RESID_BINS      = 40
-#   PERF_TOP_STATIONS    = 10             (réservé pour usages futurs)
-#   PERF_CLUSTERS_CSV    = gs://.../station_clusters.csv  (mapping station_id,cluster)
-#   PERF_TS_MIN_POINTS   = 24             # min points requis sur 24h pour le timeseries
+#   PERF_TOP_STATIONS    = 10
+#   PERF_CLUSTERS_CSV    = gs://.../station_clusters.csv
+#   PERF_TS_MIN_POINTS   = 24
 #
 # Run:
 #   python -m service.jobs.build_model_performance
@@ -57,12 +61,12 @@ except Exception as e:
     raise RuntimeError("google-cloud-storage required") from e
 
 
-SCHEMA_VERSION = "1.1"  # 1.0 → 1.1 (ENV unifié MON_* + manifest enrichi)
+SCHEMA_VERSION = "1.2"  # 1.1→1.2 : aligned Y-1 window + strict truncation + effective window in manifest
 BIN_MIN = 5             # 5-minute cadence (pipeline invariant)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ENV helpers (unifiés)
+# ENV helpers (unified)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _env(name: str, default=None):
@@ -76,7 +80,7 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 def _parse_horizons() -> List[int]:
-    # Priorité MON_HORIZONS, fallback PERF_HORIZONS / FORECAST_HORIZONS
+    # Priority: MON_HORIZONS, then PERF_HORIZONS / FORECAST_HORIZONS
     raw = _env("MON_HORIZONS") or _env("PERF_HORIZONS") or _env("FORECAST_HORIZONS") or "15"
     hs: List[int] = []
     for x in str(raw).split(","):
@@ -109,13 +113,13 @@ def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
     return tbl.to_pandas()
 
 def _list_perf_blobs(exports_prefix: str, start_date: datetime, end_date: datetime) -> List["storage.Blob"]:
-    """List perf_YYYY-MM-DD.parquet blobs between start_date and end_date (UTC day)."""
+    """List perf_YYYY-MM-DD.parquet blobs between start_date and end_date (UTC-day inclusive)."""
     bkt, key_prefix = _split(exports_prefix)
     client = storage.Client()
     bucket = client.bucket(bkt)
     blobs = list(client.list_blobs(bucket, prefix=key_prefix.strip("/") + "/"))
     pat = re.compile(r"perf_(\d{4}-\d{2}-\d{2})\.parquet$")
-    out = []
+    out: List["storage.Blob"] = []
     for bl in blobs:
         m = pat.search(bl.name)
         if not m:
@@ -142,13 +146,23 @@ def _upload_json_gs(obj: dict, gs_uri: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Time & base path helpers
+# Time & base path helpers (aligned with Data Health)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _compute_window(now_utc: datetime, last_days: int) -> Tuple[datetime, datetime]:
-    """Inclusive window: from 00:00 UTC of (now - last_days + 1) to now."""
-    start = (now_utc - timedelta(days=last_days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    return start, now_utc
+# ── remplace _yesterday_end_floor / _window_start_for_days par :
+
+def _local_window_yesterday(tzname: str, days: int, bin_min: int = BIN_MIN) -> tuple[datetime, datetime]:
+    """
+    Fenêtre alignée CALENDRIER LOCAL:
+      start_local = 00:00:00 de J-(days-1)
+      end_local   = 23:55:00 de J-1 (floor bin)
+    Retourne (start_utc, end_utc) tz-aware.
+    """
+    now_local = pd.Timestamp.now(tz=tzname)
+    end_local = (now_local - pd.Timedelta(days=1)).replace(hour=23, minute=59, second=59, microsecond=0)
+    end_local = end_local.floor(f"{int(bin_min)}min")
+    start_local = end_local.normalize() - pd.Timedelta(days=max(int(days) - 1, 0))
+    return start_local.tz_convert("UTC").to_pydatetime(), end_local.tz_convert("UTC").to_pydatetime()
 
 def _ensure_mon_base(mon_prefix: str) -> str:
     """Ensure path ends with '/monitoring' once."""
@@ -197,7 +211,7 @@ def _detect_perf_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
 
 def _normalize_types(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.DataFrame:
     out = df.copy()
-    out[cols["tbin"]] = pd.to_datetime(out[cols["tbin"]], utc=True, errors="coerce")
+    out[cols["tbin"]] = pd.to_datetime(out[cols["tbin"]], utc=True, errors="coerce")  # tz-aware UTC
     out[cols["station"]] = out[cols["station"]].astype("string")
     out[cols["y_true"]] = pd.to_numeric(out[cols["y_true"]], errors="coerce")
     out[cols["y_baseline"]] = pd.to_numeric(out[cols["y_baseline"]], errors="coerce")
@@ -572,23 +586,25 @@ def main() -> int:
     if not (MON_PREFIX and str(MON_PREFIX).startswith("gs://")):
         raise RuntimeError("GCS_MONITORING_PREFIX missing or invalid")
 
-    # ENV unifiés + fallbacks
+    # Unified ENV + fallbacks
     TZNAME        = _env("MON_TZ", _env("PERF_TZ", "Europe/Paris"))
     LAST_DAYS     = _env_int("MON_LAST_DAYS", _env_int("PERF_LAST_DAYS", 14))
     HORIZONS      = _parse_horizons()
 
-    # Optionnels (inchangés)
+    # Optionals (unchanged)
     RESID_BINS    = _env_int("PERF_RESID_BINS", 40)
     CLUSTERS_URI  = _env("PERF_CLUSTERS_CSV", None)
     TS_MIN_POINTS = _env_int("PERF_TS_MIN_POINTS", 24)
 
-    now = datetime.now(timezone.utc)
-    start, end = _compute_window(now, LAST_DAYS)
-    print(f"[env] MON_TZ={TZNAME} MON_LAST_DAYS={LAST_DAYS} MON_HORIZONS={','.join(map(str,HORIZONS))}")
-    print(f"[model.performance] window UTC: {start.date()} → {end.date()} | horizons={HORIZONS}")
+    start_ref, end_ref = _local_window_yesterday(TZNAME, LAST_DAYS, BIN_MIN)
+    print(f"[model.performance] window LOCAL({TZNAME}) -> UTC: "
+        f"{start_ref.date()} → {end_ref.date()} | horizons={HORIZONS}")
 
-    # Read perf blobs in window
-    blobs = _list_perf_blobs(EXPORTS_PREFIX, start, end)
+    print(f"[env] MON_TZ={TZNAME} MON_LAST_DAYS={LAST_DAYS} MON_HORIZONS={','.join(map(str,HORIZONS))}")
+    print(f"[model.performance] window (theoretical) UTC: {start_ref.date()} → {end_ref.date()} | horizons={HORIZONS}")
+
+    # Read perf blobs in theoretical window (by file dates)
+    blobs = _list_perf_blobs(EXPORTS_PREFIX, start_ref, end_ref)
     if not blobs:
         print("[model.performance] no perf_* blobs in window — nothing to do")
         mon_base = _ensure_mon_base(MON_PREFIX)
@@ -597,6 +613,8 @@ def main() -> int:
             "schema_version": SCHEMA_VERSION,
             "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
             "window_days": int(LAST_DAYS),
+            "window": {"start_utc": start_ref.isoformat().replace("+00:00","Z"),
+                       "end_utc": end_ref.isoformat().replace("+00:00","Z")},
             "latest_prefix": base_alias,
             "horizons": [],
             "horizons_info": [],
@@ -628,8 +646,20 @@ def main() -> int:
     cols = _detect_perf_columns(perf)
     perf = _normalize_types(perf, cols)
 
+    # STRICT truncation to the aligned Y-1 window (timestamps UTC tz-aware)
+    tbin_col = cols["tbin"]
+    perf = perf[(perf[tbin_col] > start_ref) & (perf[tbin_col] <= end_ref)].copy()
+    if perf.empty:
+        print("[model.performance] perf empty after window truncation — nothing to do")
+        return 0
+
+    # Effective window (ONLY what is present in files after truncation)
+    t_min_eff = pd.to_datetime(perf[tbin_col], utc=True, errors="coerce").min()
+    t_max_eff = pd.to_datetime(perf[tbin_col], utc=True, errors="coerce").max()
+    print(f"[model.performance] window (effective) UTC: {t_min_eff.date()} → {t_max_eff.date()} | horizons={HORIZONS}")
+
     # Explicit working columns
-    tbin_col = cols["tbin"]; sid_col = cols["station"]
+    sid_col = cols["station"]
     y_col = cols["y_true"]; b_col = cols["y_baseline"]
     pred_series = _select_pred_series(perf, cols)
     hbin_series = _normalize_horizon_bin(perf, cols)
@@ -661,6 +691,8 @@ def main() -> int:
             "schema_version": SCHEMA_VERSION,
             "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
             "window_days": int(LAST_DAYS),
+            "window": {"start_utc": (t_min_eff.isoformat().replace("+00:00","Z") if pd.notna(t_min_eff) else start_ref.isoformat().replace("+00:00","Z")),
+                       "end_utc":   (t_max_eff.isoformat().replace("+00:00","Z") if pd.notna(t_max_eff) else end_ref.isoformat().replace("+00:00","Z"))},
             "latest_prefix": base_alias,
             "horizons": [],
             "horizons_info": [],
@@ -678,7 +710,7 @@ def main() -> int:
             print(f"[model.performance] skip h={hmin} (empty after filter)")
             continue
 
-        # Compute artifacts
+        # Compute artifacts (on subset already truncated to Y-1 window)
         kpis = _compute_global(sub, cols={
             "tbin": "__tbin", "station": "__sid",
             "y_true": "__y", "y_baseline": "__b",
@@ -748,26 +780,15 @@ def main() -> int:
             "artifacts": list(payloads.keys())
         })
 
-    if not manifests_items:
-        print("[model.performance] nothing published — all horizons empty")
-        manifest = {
-            "schema_version": SCHEMA_VERSION,
-            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
-            "window_days": int(LAST_DAYS),
-            "latest_prefix": base_alias,
-            "horizons": [],
-            "horizons_info": [],
-            "tz": TZNAME,
-            "sources": {"exports_prefix": EXPORTS_PREFIX},
-        }
-        _upload_json_gs(manifest, f"{base_alias}/manifest.json")
-        return 0
-
-    # Top-level manifest (LATEST ONLY)
+    # Top-level manifest (LATEST ONLY) — uses the EFFECTIVE window actually present
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
         "window_days": int(LAST_DAYS),
+        "window": {
+            "start_utc": t_min_eff.isoformat().replace("+00:00","Z") if pd.notna(t_min_eff) else start_ref.isoformat().replace("+00:00","Z"),
+            "end_utc":   t_max_eff.isoformat().replace("+00:00","Z") if pd.notna(t_max_eff) else end_ref.isoformat().replace("+00:00","Z"),
+        },
         "latest_prefix": base_alias,
         "horizons": [int(it["horizon_min"]) for it in manifests_items],
         "horizons_info": manifests_items,

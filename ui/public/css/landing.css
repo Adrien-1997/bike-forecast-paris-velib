@@ -1035,3 +1035,29 @@ section.panel{ min-block-size:100vh; }          /* fallback */
 @media (max-width: 980px){
   .monitoring-showcase{ padding: 0 20px; }
 }
+
+/* === Plotly light-mode fix: titles + axes text + axes lines === */
+@media (prefers-color-scheme: light){
+  /* Titres, ticks, légende, annotations */
+  .js-plotly-plot .main-svg text{
+    fill: var(--text, #111827) !important;
+  }
+  .js-plotly-plot .main-svg .gtitle text,
+  .js-plotly-plot .main-svg .xtitle text,
+  .js-plotly-plot .main-svg .ytitle text,
+  .js-plotly-plot .main-svg .legend text,
+  .js-plotly-plot .main-svg .annotation text{
+    fill: var(--text, #111827) !important;
+  }
+
+  /* Lignes d'axes et ticks */
+  .js-plotly-plot .main-svg .xaxislayer-above path,
+  .js-plotly-plot .main-svg .yaxislayer-above path{
+    stroke: rgba(0,0,0,.35) !important;
+  }
+
+  /* Grilles (optionnel : un peu plus visibles en light) */
+  .js-plotly-plot .main-svg .gridlayer path{
+    stroke: rgba(0,0,0,.08) !important;
+  }
+}

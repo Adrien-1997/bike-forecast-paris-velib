@@ -231,24 +231,28 @@ def _build_perf_base(events: pd.DataFrame, horizons_min: List[int]) -> pd.DataFr
             "tbin_utc","station_id","horizon_bins","tbin_target",
             "y_true","y_baseline_persist","bikes","capacity","occ_ratio"
         ])
-    out_frames: List[pd.DataFrame] = []
-    events = events.sort_values(["station_id","tbin_utc"]).reset_index(drop=True)
 
+    events = events.sort_values(["station_id","tbin_utc"]).reset_index(drop=True)
+    base_cols = ["tbin_utc","station_id","bikes","capacity","occ_ratio"]
+
+    out_frames: List[pd.DataFrame] = []
     for hmin in horizons_min:
         hb = max(1, int(round(hmin / BIN_MIN)))
-        g = events.groupby("station_id", group_keys=False, dropna=True)
+        # 1) table source (t) avec la cible temporelle
+        t = events[base_cols].copy()
+        t["tbin_target"] = pd.to_datetime(t["tbin_utc"], errors="coerce") + timedelta(minutes=BIN_MIN * hb)
 
-        def _shift_merge(st: pd.DataFrame) -> pd.DataFrame:
-            st = st[["tbin_utc","station_id","bikes","capacity","occ_ratio"]].copy()
-            st["tbin_target"] = st["tbin_utc"] + timedelta(minutes=BIN_MIN*hb)
-            tgt = st[["tbin_utc","bikes"]].rename(columns={"tbin_utc":"tbin_target","bikes":"y_true"})
-            merged = st.merge(tgt, on=["tbin_target"], how="left")
-            merged["y_baseline_persist"] = merged["bikes"]
-            merged["horizon_bins"] = hb
-            return merged
+        # 2) table cible (future) pour récupérer y_true
+        tgt = events[["station_id","tbin_utc","bikes"]].rename(
+            columns={"tbin_utc": "tbin_target", "bikes": "y_true"}
+        )
 
-        part = g.apply(_shift_merge).reset_index(drop=True)
-        out_frames.append(part)
+        # 3) merge vectorisé par station + tbin_target
+        merged = t.merge(tgt, on=["station_id","tbin_target"], how="left")
+
+        merged["y_baseline_persist"] = merged["bikes"]
+        merged["horizon_bins"] = hb
+        out_frames.append(merged)
 
     perf = pd.concat(out_frames, ignore_index=True, sort=False)
     keep = ["tbin_utc","station_id","horizon_bins","tbin_target",

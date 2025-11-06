@@ -284,7 +284,7 @@ export default function OverviewPage() {
         {/* === Carte snapshot === */}
         <section className="mt-6">
           <h2>Carte des stations — instantané</h2>
-          <div className="map-block">
+          <div className="map-block" style={{ height: 520 }}>
             <SnapshotMap rows={snapMap?.rows ?? []} />
           </div>
           <div className="figure-note small">

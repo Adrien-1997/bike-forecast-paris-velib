@@ -1,7 +1,7 @@
 # =============================================================================
 # service/jobs/build_data_health.py
 # =============================================================================
-# Vélib’ Forecast — Data Health (v1.5 “files-aware”)
+# Vélib’ Forecast — Data Health (v1.6 “yesterday-window”)
 #
 # ▶ ENV HEADER UNIFIÉ (v1) — mêmes noms que les autres jobs
 #   - GCS_EXPORTS_PREFIX      (gs://.../velib/exports)            [requis]
@@ -23,24 +23,13 @@
 #   - DATA_HEALTH_ROUND             (def=3)   arrondi flottants JSON
 #   - DATA_HEALTH_ANOM_INCLUDE_NAMES (def=true) inclure "name" quand dispo
 #
-# Objectifs
-# ---------
-# - Lire les exports “events_YYYY-MM-DD.parquet” réellement présents sur GCS
-# - Calculer des KPIs de santé de données sur une fenêtre glissante :
-#     • Fraîcheur (p50/p95)
-#     • Complétude globale (files-aware) et presence-aware (actives)
-#     • Couverture par heure (presence-aware par station)
-#     • Latence (p50/p95)
-#     • Doublons, séquences plates, bins manquants
-# - Produire des JSON normalisés pour l’UI monitoring :
-#     • kpis.json, station_health.json, coverage_by_hour.json, alerts.json
-#     • anomalies/{flat,duplicates,missing}.json + manifest.json
-#
-# Principes clés (v1.5)
+# v1.6 — Changement clé
 # ---------------------
-# ✅ Files-aware: “attendu global” = (#jours de FICHIERS présents) * (bins/jour)
-# ✅ Presence-aware heure: attendu_i(h, station) = (#jours où vue) * (bins/heure)
-# ✅ Merge des noms défensif et typage station_id en string
+# ✅ La fenêtre se termine au **dernier bin de J-1** (ex: 23:55 pour 5 min),
+#    et la fraîcheur utilise la **même référence "now"** pour éviter les décalages.
+#    On obtient bien: [J-14, ..., J-1], donc “14 jours collectés”.
+# ✅ Coverage par heure corrigée: attendu = nb de jours où la station a été
+#    vue **sur CETTE heure** × bins/heure (presence-aware par heure).
 # =============================================================================
 
 from __future__ import annotations
@@ -62,7 +51,7 @@ try:
 except Exception as e:
     raise RuntimeError("google-cloud-storage requis") from e
 
-SCHEMA_VERSION = "1.5"  # files-aware global expected + robust name merge + hourly PA
+SCHEMA_VERSION = "1.6"  # yesterday-window + freshness alignée + hourly PA fix
 
 # ─────────────────────────── ENV unifié ───────────────────────────
 
@@ -163,8 +152,25 @@ def _detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
         raise KeyError(f"[data.health] Colonnes minimales absentes (ts={ts}, station={sid}, bikes={bikes})")
     return dict(ts=ts, station=sid, bikes=bikes, docks=docks, capacity=cap, ingested_at=ing, name=name)
 
-def _now_floor_utc(bin_min: int) -> pd.Timestamp:
-    return pd.Timestamp.now(tz="UTC").floor(f"{int(bin_min)}min").tz_convert(None)
+def _yesterday_end_floor(bin_min: int) -> pd.Timestamp:
+    """
+    Dernier timestamp aligné sur bin_min pour J-1 en UTC (naïf).
+    Ex: bin_min=5 → 23:55:00 de J-1.
+    """
+    now_utc = datetime.now(timezone.utc)
+    y_end = (now_utc - timedelta(days=1)).replace(hour=23, minute=59, second=59, microsecond=0)
+    ts = pd.Timestamp(y_end)                 # tz-aware (UTC)
+    ts = ts.floor(f"{int(bin_min)}min")     # alignement
+    return ts.tz_localize(None)             # naïf UTC
+
+def _window_start_for_days(end_ts: pd.Timestamp, days: int) -> pd.Timestamp:
+    """
+    Début de fenêtre à 00:00:00 UTC pour couvrir EXACTEMENT `days` jours
+    se terminant à end_ts (fin de J-1). Exemple: days=7 → J-7..J-1.
+    """
+    d = max(int(days), 0)
+    start_day = end_ts.normalize() - pd.Timedelta(days=max(d - 1, 0))
+    return start_day  # 00:00 UTC
 
 def _bins_between(a: pd.Timestamp, b: pd.Timestamp, bin_min: int) -> int:
     """Nb de bins (strict à gauche, inclusif à droite) alignés sur bin_min pour l’intervalle (a, b]."""
@@ -174,8 +180,8 @@ def _bins_between(a: pd.Timestamp, b: pd.Timestamp, bin_min: int) -> int:
 
 # ─────────────────────────── KPI builders ───────────────────────────
 
-def kpi_freshness(df: pd.DataFrame, sid_col: str, ts_col: str, slo_min: int, bin_min: int) -> dict:
-    now = _now_floor_utc(bin_min)
+def kpi_freshness(df: pd.DataFrame, sid_col: str, ts_col: str, slo_min: int, bin_min: int, now_ref: pd.Timestamp) -> dict:
+    now = now_ref  # déjà aligné J-1 23:55 etc.
     last = df.groupby(sid_col)[ts_col].max().reset_index(name="last_ts")
     last["age_min"] = (now - last["last_ts"]).dt.total_seconds() / 60.0
     p50 = float(np.nanpercentile(last["age_min"], 50)) if len(last) else np.nan
@@ -199,25 +205,29 @@ def kpi_completeness_files_aware(
     *,
     active_min_frac: Optional[float] = None,
     weighted: bool = False,
+    end_ref: Optional[pd.Timestamp] = None,
 ) -> Tuple[dict, pd.DataFrame, pd.DataFrame, pd.DataFrame, int, int]:
     """
     Renvoie:
       - kpis dict (coverage_global_pct, coverage_active_pct, ...)
       - by_station_pa : presence-aware par station (obs, expected_i, coverage_pct)
-      - cov_by_hour   : moyenne par heure locale (presence-aware par station)
+      - cov_by_hour   : moyenne par heure locale (presence-aware par station, PAR HEURE)
       - by_station_global_filesaware : station_id, obs, expected_global, coverage_pct_global
       - days_present_all, bins_per_day (pour audit/JSON)
     Règles:
       • Global (files-aware): expected_global = (#jours de FICHIERS présents) * (bins/jour)
-      • Presence-aware heure: expected_i(h, station) = (#jours où la station apparaît) * (bins/heure)
+      • Presence-aware heure: expected_i(h, station) = (#jours où la station a AU MOINS 1 bin à l’heure h) * (bins/heure)
+      • Fenêtre = (t > start) & (t <= end_ref) avec end_ref = fin J-1 aligné
     """
     if current_days <= 0 or df.empty:
         empty = pd.DataFrame()
         return {"coverage_global_pct": np.nan, "coverage_active_pct": np.nan}, empty, empty, empty, 0, (60 // max(1,int(bin_min))) * 24
 
-    tmax = df[ts_col].max()
-    tmin = tmax - pd.Timedelta(days=current_days)
-    win = df[(df[ts_col] > tmin) & (df[ts_col] <= tmax)].copy()
+    if end_ref is None:
+        end_ref = _yesterday_end_floor(bin_min)
+
+    start_ref = _window_start_for_days(end_ref, current_days)
+    win = df[(df[ts_col] > start_ref) & (df[ts_col] <= end_ref)].copy()
     if win.empty:
         empty = pd.DataFrame()
         return {"coverage_global_pct": np.nan, "coverage_active_pct": np.nan}, empty, empty, empty, 0, (60 // max(1,int(bin_min))) * 24
@@ -242,10 +252,10 @@ def kpi_completeness_files_aware(
     )
     coverage_global = float(by_station_global["coverage_pct_global"].mean()) if len(by_station_global) else np.nan
 
-    # Presence-aware par station
+    # Presence-aware par station (sur la fenêtre)
     pres = win.groupby(sid_col)[ts_col].agg(first="min", last="max").reset_index()
     pres["expected_i"] = pres.apply(
-        lambda r: _bins_between(max(tmin, r["first"]), min(tmax, r["last"]), bin_min),
+        lambda r: _bins_between(max(start_ref, r["first"]), min(end_ref, r["last"]), bin_min),
         axis=1,
     )
     pa = per_station_obs.merge(pres[[sid_col, "expected_i"]], on=sid_col, how="left")
@@ -253,13 +263,13 @@ def kpi_completeness_files_aware(
     pa["obs_clamped"] = pa.apply(lambda r: min(int(r["obs"]), int(r["expected_i"])), axis=1)
     pa["coverage_pct_i"] = pa["obs_clamped"] / pa["expected_i"] * 100.0
 
-    # Filtre actives
+    # Filtre actives (optionnel)
     if active_min_frac is not None and 0 < active_min_frac <= 1:
         pa_active = pa[pa["obs_clamped"] >= (active_min_frac * pa["expected_i"])].copy()
     else:
         pa_active = pa.copy()
 
-    # Moyenne presence-aware
+    # Moyenne presence-aware (pondérée ou non)
     if len(pa_active):
         if weighted:
             w = pa_active["expected_i"].astype(float).replace(0, np.nan)
@@ -269,7 +279,7 @@ def kpi_completeness_files_aware(
     else:
         coverage_active = np.nan
 
-    # Coverage par heure (presence-aware)
+    # ───────── Coverage par heure (presence-aware **par heure**) ─────────
     if tz:
         win["_hour"] = pd.to_datetime(win[ts_col]).dt.tz_localize("UTC").dt.tz_convert(tz).dt.hour
         win["_day"]  = pd.to_datetime(win[ts_col]).dt.tz_localize("UTC").dt.tz_convert(tz).dt.normalize()
@@ -277,20 +287,30 @@ def kpi_completeness_files_aware(
         win["_hour"] = pd.to_datetime(win[ts_col]).dt.hour
         win["_day"]  = pd.to_datetime(win[ts_col]).dt.normalize()
 
-    days_by_station = win.groupby(sid_col)["_day"].nunique().rename("days_present_i").reset_index()
+    # Observé: nb de bins par (heure, station)
     per_hour_obs = (
         win.groupby(["_hour", sid_col])[ts_col]
            .nunique()
            .rename("obs")
            .reset_index()
     )
-    per_hour = per_hour_obs.merge(days_by_station, on=sid_col, how="left")
-    per_hour["expected_i"] = (per_hour["days_present_i"].fillna(0).astype(int) * int(bins_per_hour)).astype(int)
+
+    # Présence par (heure, station): nb de jours où la station a été vue à CETTE heure
+    days_by_station_hour = (
+        win.groupby([sid_col, "_hour"])["_day"]
+           .nunique()
+           .rename("days_present_i_hour")
+           .reset_index()
+    )
+
+    per_hour = per_hour_obs.merge(days_by_station_hour, on=[sid_col, "_hour"], how="left")
+    per_hour["expected_i"] = (per_hour["days_present_i_hour"].fillna(0).astype(int) * int(bins_per_hour)).astype(int)
     per_hour["coverage_pct_i"] = np.where(
         per_hour["expected_i"] > 0,
         per_hour["obs"].clip(upper=per_hour["expected_i"]) / per_hour["expected_i"] * 100.0,
         np.nan,
     )
+
     cov_by_hour = (
         per_hour.groupby("_hour")["coverage_pct_i"]
                 .mean()
@@ -341,8 +361,10 @@ def duplication_stats(df: pd.DataFrame, sid_col: str, ts_col: str) -> pd.DataFra
 def flat_sequences(df: pd.DataFrame, sid_col: str, ts_col: str, bikes_col: str, min_steps: int, current_days: int, bin_min: int) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=[sid_col,"steps","start","end","duration_min"])
-    tmax = df[ts_col].max(); tmin = tmax - pd.Timedelta(days=current_days)
-    win = df[(df[ts_col] > tmin) & (df[ts_col] <= tmax)].copy()
+    # Fenêtre cohérente (J-1)
+    end_ref = _yesterday_end_floor(bin_min)
+    start_ref = _window_start_for_days(end_ref, current_days)
+    win = df[(df[ts_col] > start_ref) & (df[ts_col] <= end_ref)].copy()
     if win.empty:
         return pd.DataFrame(columns=[sid_col,"steps","start","end","duration_min"])
     win = win.sort_values([sid_col, ts_col])
@@ -381,12 +403,13 @@ def main() -> int:
     ROUND_ND           = _env_int("DATA_HEALTH_ROUND", 3)
     ANOM_INCLUDE_NAMES = _env("DATA_HEALTH_ANOM_INCLUDE_NAMES", "true").lower() in ("1","true","yes","y")
 
-    # Fenêtre de lecture : >= CURRENT_DAYS (marge min 7 jours)
-    now = datetime.now(timezone.utc)
-    start = (now - timedelta(days=max(CURRENT_DAYS, 7))).replace(hour=0, minute=0, second=0, microsecond=0)
-    print(f"[data.health] window UTC: {start.date()} → {now.date()} (days≥{CURRENT_DAYS})")
+    # ✅ Référence temporelle = fin de J-1 alignée au pas BIN_MIN
+    end_ref = _yesterday_end_floor(BIN_MIN)
+    start_ref = _window_start_for_days(end_ref, max(CURRENT_DAYS, 7))
 
-    blobs = _list_event_blobs(GCS_EXPORTS_PREFIX, start, now)
+    print(f"[data.health] window UTC: {start_ref.date()} → {end_ref.date()} (days≥{CURRENT_DAYS})")
+
+    blobs = _list_event_blobs(GCS_EXPORTS_PREFIX, start_ref, end_ref)
     if not blobs:
         print("[data.health] no event blobs in window — nothing to do")
         return 0
@@ -420,11 +443,14 @@ def main() -> int:
 
     df = df.dropna(subset=[ts_col, sid_col]).copy()
 
+    # Tronquer immédiatement à la fenêtre J-1 (sécurité)
+    df = df[(df[ts_col] > start_ref) & (df[ts_col] <= end_ref)].copy()
+
     # KPIs principaux — files-aware & presence-aware
-    kfresh = kpi_freshness(df, sid_col, ts_col, FRESH_SLO_MIN, BIN_MIN)
+    kfresh = kpi_freshness(df, sid_col, ts_col, FRESH_SLO_MIN, BIN_MIN, now_ref=end_ref)
     kcov, by_station_pa, cov_by_hour, by_station_global, DAYS_PRESENT_ALL, BINS_PER_DAY = kpi_completeness_files_aware(
         df, sid_col, ts_col, CURRENT_DAYS, BIN_MIN, TZNAME,
-        active_min_frac=ACTIVE_MIN_FRAC, weighted=WEIGHTED
+        active_min_frac=ACTIVE_MIN_FRAC, weighted=WEIGHTED, end_ref=end_ref
     )
     klat, lat_df = kpi_latency(df, ts_col, cols["ingested_at"], cap_min=LAT_MAX_MIN)
 
@@ -608,6 +634,10 @@ def main() -> int:
         "sources": {
             "exports_prefix": GCS_EXPORTS_PREFIX,
         },
+        "window": {
+            "start_utc": start_ref.isoformat(),
+            "end_utc":   end_ref.isoformat(),
+        },
     }
 
     data_health = {
@@ -649,6 +679,8 @@ def main() -> int:
     }
 
     def _upload_anom(name: str, rows: List[Dict[str, object]]):
+        uri = f"{anomalies_prefix}/{name}.json"
+        # correction: pas d'accolade en trop
         uri = f"{anomalies_prefix}/{name}.json"
         _upload_json_gs(rows, uri)
         manifest["files"].append({"name": name, "uri": uri, "count": len(rows)})
