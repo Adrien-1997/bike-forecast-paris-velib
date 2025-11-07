@@ -1,7 +1,7 @@
 // ui/pages/index.tsx
 import Script from "next/script";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import Head from "next/head";
 import GlobalHeader from "@/components/layout/GlobalHeader";
 import GlobalFooter from "@/components/layout/GlobalFooter";
@@ -267,23 +267,9 @@ export default function LandingPage() {
     }, 60);
   };
 
-  const handleEnterFullscreen = () => {
-    const wrap = embedWrapRef.current;
-    if (!wrap) return;
-    wrap.classList.add("is-fs"); // active le plein écran “interne”
-    setIsFullscreen(true);
-  };
-
-  const handleExitFullscreen = () => {
-    const wrap = embedWrapRef.current;
-    if (!wrap) return;
-    wrap.classList.remove("is-fs");
-    setIsFullscreen(false);
-  };
-
   // Header (ancres + liens app/monitoring)
   const headerItems = [
-    { label: "Démo", href: "#demo" },
+    { label: "Carte", href: "#carte" },
     { label: "Fonctions", href: "#features" },
     { label: "Monitoring", href: "#monitoring" },
     { label: "Architecture", href: "#how" },
@@ -416,6 +402,74 @@ export default function LandingPage() {
     };
   }, []);
 
+  // === Fullscreen helpers (fallback classe) ===
+  const enterInlineFullscreen = () => {
+    const wrap = embedWrapRef.current;
+    if (!wrap) return;
+    wrap.classList.add("is-fs");
+    document.body.classList.add("no-scroll"); // lock scroll
+    setIsFullscreen(true);
+  };
+
+  const exitInlineFullscreen = () => {
+    const wrap = embedWrapRef.current;
+    if (wrap) wrap.classList.remove("is-fs");
+    document.body.classList.remove("no-scroll");
+    setIsFullscreen(false);
+  };
+
+  // Toggle inline (sans API native)
+  const handleToggleInlineFs = () => {
+    const wrap = embedWrapRef.current;
+    if (!wrap) return;
+    const next = !wrap.classList.contains("is-fs");
+    wrap.classList.toggle("is-fs", next);
+    document.body.classList.toggle("no-scroll", next);
+    setIsFullscreen(next);
+  };
+
+  // Entrée plein écran : tente l'API native puis fallback
+  const handleEnterFullscreen = useCallback(async () => {
+    const wrap = embedWrapRef.current as any;
+    if (!wrap) return;
+
+    const req =
+      wrap.requestFullscreen ||
+      wrap.webkitRequestFullscreen ||
+      wrap.msRequestFullscreen;
+
+    try {
+      if (req) {
+        await req.call(wrap);
+        // l'event fullscreenchange mettra à jour l'état si tu l'écoutes
+      } else {
+        enterInlineFullscreen(); // fallback classe
+      }
+    } catch {
+      enterInlineFullscreen();   // fallback en cas de refus/erreur
+    }
+  }, []);
+
+  // Sortie plein écran : API native si active, sinon fallback
+  const handleExitFullscreen = useCallback(async () => {
+    const doc: any = document;
+    const exit =
+      doc.exitFullscreen ||
+      doc.webkitExitFullscreen ||
+      doc.msExitFullscreen;
+
+    try {
+      if (exit && (doc.fullscreenElement || doc.webkitFullscreenElement)) {
+        await exit.call(doc);
+        // l'event fullscreenchange mettra à jour l'état si tu l'écoutes
+      } else {
+        exitInlineFullscreen(); // fallback classe
+      }
+    } catch {
+      exitInlineFullscreen();   // fallback
+    }
+  }, []);
+
   return (
     <>
       <Head>
@@ -492,7 +546,7 @@ export default function LandingPage() {
       </Head>
 
       {/* ===== A11y skip link ===== */}
-      <a href="#demo" className="sr-only">Aller au contenu principal</a>
+      <a href="#carte" className="sr-only">Aller au contenu principal</a>
 
       {/* Header global */}
       <GlobalHeader items={headerItems} brandHref="/" />
@@ -544,12 +598,12 @@ export default function LandingPage() {
                 </ul>
 
                 <div className="cta">
-                  <a className="btn" href="#demo" aria-label="Aller à la démo en direct">
+                  <a className="btn" href="#carte" aria-label="Aller à la carte en direct">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                       <path d="M7 7h10v10H7z" stroke="white" strokeWidth="1.8" />
                       <path d="M3 3v6M3 3h6M21 21v-6M21 21h-6" stroke="white" strokeWidth="1.8" />
                     </svg>
-                    Voir la démo
+                    Ouvrir la carte
                   </a>
                   <a className="btn outline" href="/monitoring">Monitoring</a>
                   <a className="btn outline" href="/app">Lancer l’app</a>
@@ -625,90 +679,110 @@ export default function LandingPage() {
           </section>
 
           {/* ====================== DEMO (iframe) ====================== */}
-          <section id="demo" className="panel" aria-labelledby="demo-title">
+          <section id="carte" className="panel" aria-labelledby="carte-title">
             <div className="container">
               <div className="sec-head">
                 <div>
-                  <h2 id="demo-title">Démo en direct</h2>
+                  <h2 id="carte-title">Carte en direct</h2>
                   <p>
-                    Application React embarquée : carte en direct, recherche de stations, et prévisions à +15/+60 minutes.
+                    Application embarquée : carte en direct, recherche de stations, et prévisions à +15/+60 minutes.
                   </p>
                 </div>
-                <div className="actions-row" style={{ gap: "0.5rem" }}>
-                  {!demoLaunched ? (
-                    <button className="btn" type="button" onClick={handleLaunch} aria-label="Lancer la démo">
-                      Lancer la démo
+
+                {/* Actions desktop / tablet (cachées en mobile via CSS) */}
+                {demoLaunched && (
+                  <div className="actions-row" style={{ gap: "0.5rem" }}>
+                    <button
+                      className="btn"
+                      type="button"
+                      onClick={handleEnterFullscreen}
+                      aria-label="Plein écran"
+                      title="Plein écran"
+                    >
+                      Plein écran
                     </button>
-                  ) : (
-                    <>
-                      <button className="btn" type="button" onClick={handleEnterFullscreen} aria-label="Plein écran">
-                        Plein écran
-                      </button>
-                      <button className="btn outline" type="button" onClick={handleReload} aria-label="Recharger la démo">
-                        Recharger
-                      </button>
-                    </>
-                  )}
-                </div>
+                    <button
+                      className="btn outline"
+                      type="button"
+                      onClick={handleReload}
+                      aria-label="Recharger la carte"
+                      title="Recharger la carte"
+                    >
+                      Recharger
+                    </button>
+                  </div>
+                )}
               </div>
 
-              {/* Wrapper en plein écran (inclut l’iframe + la croix) */}
-              <div className="embed" aria-live="polite" ref={embedWrapRef} style={{ position: "relative" }}>
-                {isFullscreen && (
-                <button
-                  type="button"
-                  onClick={handleExitFullscreen}
-                  aria-label="Quitter le plein écran"
-                  title="Quitter le plein écran"
-                  style={{
-                    position: "absolute",
-                    top: "max(12px, env(safe-area-inset-top) + 15px)",
-                    left: "max(12px, env(safe-area-inset-left) + 15px)",
-                    zIndex: 3,
-                    border: "none",
-                    borderRadius: "50%",
-                    width: "42px",
-                    height: "42px",
-                    background: "color-mix(in srgb, var(--panel) 70%, black)",
-                    color: "var(--text, #fff)",
-                    cursor: "pointer",
-                    fontSize: "2rem",
-                    lineHeight: 1,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    boxShadow: "0 4px 16px rgba(0,0,0,.3)",
-                    backdropFilter: "blur(4px)",
-                  }}
-                >
-                  ×
-                </button>
-                )}
-
-                {showSkeleton && (
-                  <div
-                    className="skeleton"
-                    id="skeleton"
-                    role="status"
-                    aria-live="polite"
-                    aria-atomic="true"
-                    style={{ position: "absolute", inset: 0 }}
-                  >
-                    {demoLaunched ? "Initialisation de la démo…" : "Cliquez sur « Lancer la démo » pour démarrer"}
+              {/* Wrapper (plein écran / inline-open pilotés par classes) */}
+              <div
+                className={[
+                  "embed",
+                  "embed--bleed",
+                  demoLaunched ? "is-open" : "",
+                  isFullscreen ? "is-fs" : ""
+                ].join(" ").trim()}
+                aria-live="polite"
+                ref={embedWrapRef}
+                style={{ position: "relative" }}
+              >
+                {/* CTA centré tant que non lancé (inchangé) */}
+                {!demoLaunched && (
+                  <div className="map-center-cta">
+                    <button className="btn btn-open-map" type="button" onClick={handleLaunch}>
+                      <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        aria-hidden="true"
+                        style={{ marginRight: 6 }}
+                      >
+                        <path d="M7 7h10v10H7z" stroke="currentColor" strokeWidth="1.8" />
+                        <path
+                          d="M3 3v6M3 3h6M21 21v-6M21 21h-6"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                        />
+                      </svg>
+                      Ouvrir la carte
+                    </button>
                   </div>
                 )}
 
-                <iframe
-                  ref={demoIframeRef}
-                  title="Vélo Paris — Application"
-                  src={demoLaunched ? "/app/embed" : ""}
-                  loading="lazy"
-                  allow="fullscreen; clipboard-read; clipboard-write"
-                  referrerPolicy="no-referrer-when-downgrade"
-                  aria-hidden={demoLaunched ? undefined : true}
-                  style={{ width: "100%", height: "100%", border: 0, display: "block" }}
-                />
+                {/* Skeleton (inchangé) */}
+                {showSkeleton && (
+                  <div className="skeleton" role="status" aria-live="polite" aria-atomic="true" style={{ position:"absolute", inset:0 }}>
+                    {demoLaunched ? "Initialisation…" : "Cliquez sur « Ouvrir la carte » pour démarrer"}
+                  </div>
+                )}
 
+                {/* FAB mobile (inchangé) */}
+                {demoLaunched && (
+                  <button
+                    type="button"
+                    className="map-fab only-mobile"
+                    onClick={() => (isFullscreen ? handleExitFullscreen() : handleEnterFullscreen())}
+                    aria-label={isFullscreen ? "Réduire la carte" : "Agrandir la carte"}
+                  >
+                    {isFullscreen ? "↙" : "↗"}
+                  </button>
+                )}
+
+                {/* >>> Nouveau wrapper pour l’effet de zoom <<< */}
+                <div className="frame-zoom">
+                  <iframe
+                    ref={demoIframeRef}
+                    title="Vélo Paris — Application"
+                    src={demoLaunched ? "/app/embed" : ""}
+                    loading="lazy"
+                    allow="fullscreen; geolocation *; clipboard-read; clipboard-write"
+                    allowFullScreen
+                    referrerPolicy="no-referrer-when-downgrade"
+                    aria-hidden={demoLaunched ? undefined : true}
+                    style={{ width: "100%", height: "100%", border: 0, display: "block" }}
+                  />
+                </div>
               </div>
 
               {/* Actions sous le frame */}
@@ -727,6 +801,7 @@ export default function LandingPage() {
               </div>
             </div>
           </section>
+
 
           {/* ====================== FEATURES ====================== */}
           <section id="features" className="panel" aria-labelledby="features-title">
@@ -1068,7 +1143,7 @@ export default function LandingPage() {
                 {/* Colonne gauche : questions */}
                 <div className="faq-questions">
                   <details>
-                    <summary>La démo met quelques secondes à démarrer, normal ?</summary>
+                    <summary>L’app met quelques secondes à démarrer, normal ?</summary>
                     <p>Oui : cold start Cloud Run. Une instance minimale supprime le délai.</p>
                   </details>
 
@@ -1083,7 +1158,7 @@ export default function LandingPage() {
                   <details>
                     <summary>Comment sont calculées les prévisions ?</summary>
                     <p>
-                      Modèles LightGBM avec signaux calendrier/météo, lissages et calibration. Baseline persistance pour
+                      Modèles XGBoost avec signaux calendrier/météo, lissages et calibration. Baseline persistance pour
                       mesurer le vrai gain (MAE/WAPE).
                     </p>
                   </details>

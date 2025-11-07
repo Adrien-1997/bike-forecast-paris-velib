@@ -843,31 +843,108 @@ section.panel{ min-block-size:100vh; }          /* fallback */
   section.panel{ min-block-size:100dvh; }
 }
 
-/* Default demo frame size (non-fullscreen) */
-/* Default demo size (non-fullscreen) */
-#demo .embed{
-  position: relative;   /* ensures absolute children can fill it */
+/* ====================== DEMO / CARTE — responsive + zoom-on-open ====================== */
+
+/* Variables d’état (heights) + easing commun */
+#carte .embed{
+  --h-closed-desktop: 44svh;   /* ↓ plus compact avant lancement */
+  --h-open-desktop:   78svh;   /* ↑ plus immersif après lancement */
+  --h-closed-mobile:  38svh;
+  --h-open-mobile:    82svh;
+
+  position: relative;
   width: 100%;
-  min-height: 60svh;    /* ⬅️ increase here (e.g., 74–78svh on desktop) */
+  min-height: var(--h-closed-desktop);
   border-radius: 12px;
   overflow: hidden;
   background: var(--panel, #111827);
+
+  /* transition amplifiée, plus “springy” */
+  transition:
+    min-height .42s cubic-bezier(.2,.7,.2,1),
+    height     .42s cubic-bezier(.2,.7,.2,1),
+    box-shadow .42s cubic-bezier(.2,.7,.2,1);
 }
 
-/* Let the iframe fill the wrapper outside fullscreen too */
-#demo .embed iframe{
+/* État ouvert (desktop) */
+#carte .embed.is-open{
+  min-height: var(--h-open-desktop);
+}
+
+/* Mobile: états fermés / ouverts */
+@media (max-width: 900px){
+  #carte .embed{
+    min-height: var(--h-closed-mobile) !important;
+  }
+  #carte .embed.is-open{
+    min-height: var(--h-open-mobile) !important;
+  }
+}
+
+/* Conteneur zoom (permet un scale doux sans toucher au layout) */
+#carte .embed .frame-zoom{
+  position: absolute;
+  inset: 0;
+  will-change: transform, box-shadow;
+  transform: scale(.985);              /* léger zoom-out à l’état fermé */
+  transform-origin: center center;
+  transition:
+    transform .42s cubic-bezier(.2,.7,.2,1),
+    box-shadow .42s cubic-bezier(.2,.7,.2,1);
+}
+
+/* Ouvert : scale 1 + légère ombre pour souligner l’agrandissement */
+#carte .embed.is-open .frame-zoom{
+  transform: scale(1);
+}
+
+/* L’iframe remplit toujours le conteneur de zoom */
+#carte .embed iframe{
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   border: 0;
   display: block;
+  background: var(--panel);
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  touch-action: manipulation;
 }
 
+/* Respect des préférences d’accessibilité */
+@media (prefers-reduced-motion: reduce){
+  #carte .embed,
+  #carte .embed .frame-zoom{
+    transition: none !important;
+    transform: none !important;
+  }
+}
 
-/* Fullscreen states for the demo wrapper */
+/* ====================== FULLSCREEN (inchangé) ====================== */
+#carte .embed.is-fs{
+  position: fixed !important;
+  z-index: 9999 !important;
+  inset: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  width: 100vw !important;
+  height: 100svh !important;
+  height: 100dvh !important;
+  background: var(--bg, #0b1220) !important;
+}
+#carte .embed.is-fs iframe{
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100svh !important;
+  height: 100dvh !important;
+  border: 0 !important;
+  display: block !important;
+}
 .embed:fullscreen,
-.embed:-webkit-full-screen {
+.embed:-webkit-full-screen{
   inset: 0 !important;
   position: fixed !important;
   z-index: 9999 !important;
@@ -878,10 +955,8 @@ section.panel{ min-block-size:100vh; }          /* fallback */
   height: 100vh !important;
   background: var(--bg, #0b1220) !important;
 }
-
-/* Make the iframe fill the fullscreen area */
 .embed:fullscreen iframe,
-.embed:-webkit-full-screen iframe {
+.embed:-webkit-full-screen iframe{
   position: absolute !important;
   inset: 0 !important;
   width: 100vw !important;
@@ -890,27 +965,65 @@ section.panel{ min-block-size:100vh; }          /* fallback */
   display: block !important;
 }
 
-/* Fallback when Fullscreen API applies but :fullscreen styles fail */
-.embed.is-fs {
-  inset: 0 !important;
-  position: fixed !important;
-  z-index: 9999 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  border-radius: 0 !important;
-  width: 100vw !important;
-  height: 100vh !important;
-  background: var(--bg, #0b1220) !important;
-}
-.embed.is-fs iframe {
-  position: absolute !important;
-  inset: 0 !important;
-  width: 100vw !important;
-  height: 100vh !important;
-  border: 0 !important;
-  display: block !important;
-}
+/* Scroll-lock */
+body.no-scroll{ overflow:hidden; touch-action:none }
 
+/* ====================== CTA CENTRAL (inchangé) ====================== */
+.map-center-cta{
+  position:absolute; inset:0; display:grid; place-items:center;
+  z-index:6; pointer-events:none;
+}
+.map-center-cta .btn-open-map{ pointer-events:auto; }
+
+#carte .embed.is-open .map-center-cta,
+#carte .embed.is-fs   .map-center-cta{ display:none !important }
+/* Empêche toute barre dans le cadre démo */
+#carte .embed { overflow: hidden; line-height: 0; }
+#carte .embed .frame-zoom { overflow: hidden; }
+#carte .embed iframe { display: block; }
+
+/* ====================== FAB MOBILE (inchangé) ====================== */
+@media (max-width: 740px) {
+  .only-mobile {
+    display: inline-flex;
+  }
+
+  /* Style complet du bouton flottant mobile */
+  #carte .map-fab {
+    position: absolute;
+    z-index: 4;
+    top: max(12px, env(safe-area-inset-top) + 12px);
+    left: max(12px, env(safe-area-inset-left) + 12px);
+    border: 1px solid var(--glass-border, rgba(255,255,255,.10));
+    width: 46px;
+    height: 46px;
+    border-radius: 999px;
+    background:
+      linear-gradient(180deg, var(--glass-bg-1, rgba(255,255,255,.90)), var(--glass-bg-2, rgba(255,255,255,.70))),
+      linear-gradient(180deg, var(--glass-tint, rgba(0,0,0,.02)), transparent);
+    color: var(--text);
+    font-weight: 800;
+    font-size: 18px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--glass-shadow, 0 10px 24px rgba(0,0,0,.10));
+    backdrop-filter: saturate(150%) blur(12px);
+    -webkit-backdrop-filter: saturate(150%) blur(12px);
+    transition: transform .2s ease, box-shadow .2s ease;
+  }
+
+  #carte .map-fab:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--glass-shadow-hover, 0 16px 40px rgba(0,0,0,.14));
+  }
+
+  /* Cache la barre d’action desktop au-dessus de la carte en mobile */
+  #carte .sec-head .actions-row {
+    display: none !important;
+  }
+}
 
 /* ==========================================================================
    LANDING MAP — identique à monitoring/overview
