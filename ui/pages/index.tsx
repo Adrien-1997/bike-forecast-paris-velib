@@ -233,14 +233,21 @@ export default function LandingPage() {
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [showSkeleton, setShowSkeleton] = useState<boolean>(false);
 
-  // Au load de l’iframe, on coupe le skeleton via state (pas de remove())
+  // Au load de l’iframe : on coupe le skeleton et on marque le wrapper comme "loaded"
   useEffect(() => {
     const frame = demoIframeRef.current;
-    if (!frame) return;
-    const onLoad = () => setShowSkeleton(false);
+    const wrap = embedWrapRef.current;
+    if (!frame || !wrap) return;
+
+    const onLoad = () => {
+      setShowSkeleton(false);
+      wrap.classList.add("is-loaded");
+    };
+
     frame.addEventListener("load", onLoad);
     return () => frame.removeEventListener("load", onLoad);
   }, []);
+
 
   // Suivre les changements de plein écran sur le wrapper
   useEffect(() => {
@@ -253,17 +260,20 @@ export default function LandingPage() {
   const handleLaunch = () => {
     if (demoLaunched) return;
     setShowSkeleton(true);
-    setDemoLaunched(true); // l'iframe reçoit src via JSX (pas de mutation DOM directe)
+    embedWrapRef.current?.classList.remove("is-loaded"); // ← reset avant premier load
+    setDemoLaunched(true);
   };
+
 
   const handleReload = () => {
     const frame = demoIframeRef.current;
     if (!frame || !demoLaunched) return;
     const url = frame.src || "/app/embed";
     setShowSkeleton(true);
+    embedWrapRef.current?.classList.remove("is-loaded"); // ← reset
     frame.src = "";
     setTimeout(() => {
-      frame.src = url;
+      frame.src = url; // la classe sera réajoutée au prochain "load"
     }, 60);
   };
 

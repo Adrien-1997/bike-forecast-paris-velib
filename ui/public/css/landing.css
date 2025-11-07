@@ -285,47 +285,113 @@ section > .glass:not(:first-child){ margin-top: var(--g3); }
 .eyebrow{display:inline-flex; gap:.5rem; align-items:center; margin-bottom:.8rem}
 .eyebrow .ping{width:8px; height:8px; border-radius:50%; background:var(--ok); box-shadow:0 0 0 6px rgba(34,197,94,.15)}
 
-/* ---------------------- EMBED / IFRAME ---------------------- */
+/* ================== EMBED (clean, no white flash + theme-aware) ================== */
 .embed{
-  margin-top:var(--g5); border-radius:18px; overflow:hidden;
-  border:1px solid rgba(255,255,255,.12); position:relative;
-  box-shadow:none;
-  background:
-    linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03)),
-    var(--panel-2);
-  backdrop-filter:saturate(150%) blur(14px);
-  -webkit-backdrop-filter:saturate(150%) blur(14px);
-  line-height:0;
+  margin-top: var(--g5);
+  position: relative;
+  overflow: hidden;
+  line-height: 0;
+
+  /* visuals */
+  border-radius: 18px;
+  border: 1px solid var(--border, rgba(255,255,255,.12));
+  box-shadow: none;
+
+  /* dark, non-whitening base (avoid white veil on iOS) */
+  background: var(--panel, #0f172a);
+
+  /* glass, kept subtle */
+  backdrop-filter: saturate(150%) blur(14px);
+  -webkit-backdrop-filter: saturate(150%) blur(14px);
 }
 .embed:hover{ box-shadow:none; transform:none; }
+
+/* Loading skeleton — disable to avoid “white sheet” perception on mobile */
 .embed .skeleton{
-  position:absolute; inset:0; display:grid; place-items:center; color:var(--muted);
-  background:linear-gradient(90deg, rgba(255,255,255,.04) 0%, rgba(255,255,255,.09) 50%, rgba(255,255,255,.04) 100%);
-  background-size:400% 100%; animation:shimmer 2.2s infinite; user-select:none; pointer-events:none
+  position:absolute; inset:0; display:none; place-items:center;
+  color:var(--muted);
+  background: transparent;
+  user-select:none; pointer-events:none;
 }
-@keyframes shimmer{0%{background-position:0 0}100%{background-position:200% 0}}
+
+/* Iframe never paints white before load */
 .embed > iframe{
   display:block;
   width:100%;
   height:68vh;
   min-height:380px;
   border:0;
-  background:var(--panel);
-}
-.embed .btn-fs{
-  position:absolute; right:14px; bottom:14px; z-index:2;
-  padding:.6rem .85rem; border-radius:10px; opacity:.95
+  background: transparent !important;
 }
 
-/* Variante interactive si besoin */
+/* Fullscreen button (auto-tints with theme) */
+.embed .btn-fs{
+  position:absolute; right:14px; bottom:14px; z-index:2;
+  padding:.6rem .85rem; border-radius:10px; opacity:.95;
+
+  border: 1px solid var(--glass-border, rgba(255,255,255,.10));
+  background:
+    linear-gradient(180deg, var(--glass-bg-1, rgba(255,255,255,.90)), var(--glass-bg-2, rgba(255,255,255,.70))),
+    linear-gradient(180deg, var(--glass-tint, rgba(0,0,0,.02)), transparent);
+  color: var(--text);
+}
+
+/* Interactive variant */
 .embed.embed--interactive:hover{
-  transform:translateY(-1px);
-  box-shadow:var(--shadow);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow);
   background:
     linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04)),
     var(--panel-2);
 }
 
+/* -------- Light/Dark explicit polish -------- */
+@media (prefers-color-scheme: light){
+  .embed{
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.80)),
+      #fff;
+    border: 1px solid rgba(0,0,0,.10);
+  }
+  .embed .btn-fs{ color:#111827 !important; }
+}
+@media (prefers-color-scheme: dark){
+  .embed{ background: var(--panel, #0f172a); }
+  .embed .btn-fs{ color:#ffffff !important; }
+}
+
+/* iOS WebKit: stronger blur/saturation reduces milky cast */
+@supports (-webkit-touch-callout: none){
+  .embed{
+    -webkit-backdrop-filter: saturate(170%) blur(16px);
+    backdrop-filter: saturate(170%) blur(16px);
+  }
+}
+
+/* Optional: only hide skeleton on small screens (keep on desktop) */
+/*
+@media (min-width: 901px){
+  .embed .skeleton{
+    display:grid;
+    background: linear-gradient(90deg, rgba(255,255,255,.04) 0%, rgba(255,255,255,.08) 50%, rgba(255,255,255,.04) 100%);
+    background-size:400% 100%;
+    animation: shimmer 2.2s infinite;
+  }
+}
+@keyframes shimmer{0%{background-position:0 0}100%{background-position:200% 0}}
+*/
+/* Anti-flash + reveal après load */
+#carte .embed .frame-zoom{
+  background: var(--panel, #0f172a);
+}
+#carte .embed iframe{
+  opacity: 0;
+  background: transparent !important;
+  transition: opacity .18s ease;
+}
+#carte .embed.is-loaded iframe{
+  opacity: 1;
+}
 /* ---------------------- SECTIONS / HEADINGS ---------------------- */
 section{
   padding:72px 0; position:relative; background:transparent;
@@ -899,6 +965,7 @@ section.panel{ min-block-size:100vh; }          /* fallback */
 }
 
 /* L’iframe remplit toujours le conteneur de zoom */
+/* ❗️Retire tout “voile blanc” avant chargement, y compris iOS */
 #carte .embed iframe{
   position: absolute;
   inset: 0;
@@ -906,10 +973,17 @@ section.panel{ min-block-size:100vh; }          /* fallback */
   height: 100%;
   border: 0;
   display: block;
-  background: var(--panel);
+  background: transparent !important;               /* ← pas de fond blanc */
   -webkit-transform: translateZ(0);
   transform: translateZ(0);
   touch-action: manipulation;
+}
+
+/* Par sécurité, on masque toute skeleton éventuelle dans ce contexte */
+#carte .embed .skeleton{ display:none !important; }
+@media (max-width:740px){
+  #carte .embed iframe{ background: transparent !important; }
+  #carte .embed .skeleton{ display:none !important; }
 }
 
 /* Respect des préférences d’accessibilité */
@@ -921,7 +995,7 @@ section.panel{ min-block-size:100vh; }          /* fallback */
   }
 }
 
-/* ====================== FULLSCREEN (inchangé) ====================== */
+/* ====================== FULLSCREEN (inchangé fonctionnellement) ====================== */
 #carte .embed.is-fs{
   position: fixed !important;
   z-index: 9999 !important;
@@ -942,6 +1016,7 @@ section.panel{ min-block-size:100vh; }          /* fallback */
   height: 100dvh !important;
   border: 0 !important;
   display: block !important;
+  background: transparent !important;              /* ← pas de flash blanc en FS */
 }
 .embed:fullscreen,
 .embed:-webkit-full-screen{
@@ -963,6 +1038,7 @@ section.panel{ min-block-size:100vh; }          /* fallback */
   height: 100vh !important;
   border: 0 !important;
   display: block !important;
+  background: transparent !important;
 }
 
 /* Scroll-lock */
@@ -982,11 +1058,9 @@ body.no-scroll{ overflow:hidden; touch-action:none }
 #carte .embed .frame-zoom { overflow: hidden; }
 #carte .embed iframe { display: block; }
 
-/* ====================== FAB MOBILE (inchangé) ====================== */
+/* ====================== FAB MOBILE ====================== */
 @media (max-width: 740px) {
-  .only-mobile {
-    display: inline-flex;
-  }
+  .only-mobile { display: inline-flex; }
 
   /* Style complet du bouton flottant mobile */
   #carte .map-fab {
@@ -1001,7 +1075,7 @@ body.no-scroll{ overflow:hidden; touch-action:none }
     background:
       linear-gradient(180deg, var(--glass-bg-1, rgba(255,255,255,.90)), var(--glass-bg-2, rgba(255,255,255,.70))),
       linear-gradient(180deg, var(--glass-tint, rgba(0,0,0,.02)), transparent);
-    color: var(--text);
+    color: var(--text); /* ← s’aligne sur le thème (noir en light, blanc en dark) */
     font-weight: 800;
     font-size: 18px;
     line-height: 1;
@@ -1013,17 +1087,54 @@ body.no-scroll{ overflow:hidden; touch-action:none }
     -webkit-backdrop-filter: saturate(150%) blur(12px);
     transition: transform .2s ease, box-shadow .2s ease;
   }
-
   #carte .map-fab:hover {
     transform: translateY(-1px);
     box-shadow: var(--glass-shadow-hover, 0 16px 40px rgba(0,0,0,.14));
   }
+  /* Icône = couleur du texte (noir en light, blanc en dark) */
+  #carte .map-fab svg,
+  #carte .map-fab .icon{
+    color: currentColor;
+    fill: currentColor;
+    stroke: currentColor;
+  }
 
   /* Cache la barre d’action desktop au-dessus de la carte en mobile */
-  #carte .sec-head .actions-row {
-    display: none !important;
-  }
+  #carte .sec-head .actions-row { display: none !important; }
 }
+
+/* ====================== Bouton PLEIN ÉCRAN — couleurs des flèches ====================== */
+#carte .embed .btn-fs{
+  position:absolute; right:14px; bottom:14px; z-index:5;
+  padding:.6rem .85rem; border-radius:10px; opacity:.95;
+  border:1px solid var(--glass-border, rgba(255,255,255,.10));
+  background:
+    linear-gradient(180deg, var(--glass-bg-1, rgba(255,255,255,.90)), var(--glass-bg-2, rgba(255,255,255,.70))),
+    linear-gradient(180deg, var(--glass-tint, rgba(0,0,0,.02)), transparent);
+  color: var(--text); /* ← uniformise (noir en clair, blanc en sombre) */
+  display:inline-flex; align-items:center; justify-content:center; gap:.4rem;
+  backdrop-filter: saturate(150%) blur(12px);
+  -webkit-backdrop-filter: saturate(150%) blur(12px);
+}
+
+/* Icône (flèches) — suit le thème via currentColor */
+#carte .embed .btn-fs svg,
+#carte .embed .btn-fs .icon{
+  width: 1.1em; height: 1.1em;
+  color: currentColor;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 1.2;
+}
+
+/* Renforce le contraste explicite par thème si besoin */
+@media (prefers-color-scheme: light){
+  #carte .embed .btn-fs{ color:#111827 !important; }
+}
+@media (prefers-color-scheme: dark){
+  #carte .embed .btn-fs{ color:#ffffff !important; }
+}
+
 
 /* ==========================================================================
    LANDING MAP — identique à monitoring/overview
