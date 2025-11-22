@@ -1,47 +1,134 @@
+# =============================================================================
+# Vélib’ Forecast – API environment (Cloud Run / local)
+# -----------------------------------------------------------------------------
+# Fichier de référence pour les variables d’environnement de l’API.
+# Il ne contient AUCUN secret : uniquement des chemins GCS, des URLs publiques
+# et des paramètres fonctionnels (seuils, timeouts…).
+#
+# Rôles principaux :
+# - pointer vers les buckets GCS (bronze/daily/exports/monitoring/serving),
+# - définir les modèles à utiliser (h15 / h60),
+# - configurer les horizons exposés par l’API,
+# - configurer les URLs de données sources (Vélib’, météo),
+# - paramétrer les seuils de pénurie/saturation et l’historique minimal,
+# - régler le comportement de l’API (cache, timeout, CORS…).
+# =============================================================================
+
+# ───────── Projet GCP ─────────
 GOOGLE_CLOUD_PROJECT: "velib-forecast-472820"
 
+# ───────── Stockage GCS (pipelines ingestion / compact / exports / monitoring / serving) ─────────
+# Snapshots bruts 5 min (ingest → bronze)
 GCS_RAW_PREFIX: "gs://velib-forecast-472820_cloudbuild/velib/bronze"
+
+# Données compactées par jour (compact_daily → daily)
 GCS_DAILY_PREFIX: "gs://velib-forecast-472820_cloudbuild/velib/daily"
+
+# Exports analytiques et perf modèle (perf_YYYY-MM-DD.parquet, etc.)
 GCS_EXPORTS_PREFIX: "gs://velib-forecast-472820_cloudbuild/velib/exports"
+
+# Racine des artefacts de monitoring (overview, stations, dynamics, perf, explainability…)
 GCS_MONITORING_PREFIX: "gs://velib-forecast-472820_cloudbuild/velib/monitoring"
+
+# Racine du “serving layer” (features / forecasts publiés pour l’API ou d’autres consommateurs)
 GCS_SERVING_PREFIX: "gs://velib-forecast-472820_cloudbuild/velib/serving"
+
+# Sous-dossier dédié aux bundles de prévisions JSON (latest_forecast.json, latest_h{h}.json, …)
 SERVING_FORECAST_PREFIX: "gs://velib-forecast-472820_cloudbuild/velib/serving/forecast"
 
+# ───────── Modèles de forecast (XGBoost, LGBM, etc.) ─────────
+# Modèle horizon 15 minutes (h=3 bins de 5 min)
 GCS_MODEL_URI_H15: "gs://velib-forecast-472820_cloudbuild/velib/models/h15/latest.joblib"
+
+# Modèle horizon 60 minutes (h=12 bins de 5 min)
 GCS_MODEL_URI_H60: "gs://velib-forecast-472820_cloudbuild/velib/models/h60/latest.joblib"
+
+# Modèle par défaut utilisé côté API quand aucun horizon n’est spécifié (fallback sur h15)
 GCS_MODEL_URI: "gs://velib-forecast-472820_cloudbuild/velib/models/h15/latest.joblib"
 
+# ───────── Horizons de prévision exposés par l’API ─────────
+# Horizons supportés (en minutes) dans les bundles et endpoints (/forecast)
 FORECAST_SUPPORTED: "15,60"
+
+# Alias conservé pour compat / lisibilité (même information)
 FORECAST_HORIZONS: "15,60"
 
+# ───────── Sources de données Vélib’ (OpenData Smovengo) ─────────
+# Statut temps réel des stations (nombre de vélos, capacité, statut…)
 VELIB_STATUS_URL: "https://velib-metropole-opendata.smovengo.cloud/opendata/Velib_Metropole/station_status.json"
+
+# Métadonnées des stations (coordonnées GPS, noms, capacité…)
 VELIB_INFO_URL: "https://velib-metropole-opendata.smovengo.cloud/opendata/Velib_Metropole/station_information.json"
 
+# ───────── Source météo (Open-Meteo) ─────────
+# Endpoint public utilisé pour enrichir les features avec la météo
 OPENMETEO_URL: "https://api.open-meteo.com/v1/forecast"
+
+# Coordonnées de Paris centre (lat/lon) utilisées pour interroger l’API météo
 OPENMETEO_LAT: "48.8566"
 OPENMETEO_LON: "2.3522"
+
+# Timeout HTTP (secondes) pour les appels à Open-Meteo
 OPENMETEO_TIMEOUT: "5.0"
+
+# Flag pour désactiver la météo (utile en cas de panne ou en local : "true"/"false")
 METEO_DISABLE: "false"
 
+# ───────── Seuils de pénurie / saturation & historique pour le monitoring ─────────
+# Nombre de vélos ≤ PENURY_THRESH → station considérée en pénurie
 PENURY_THRESH: "2"
+
+# Nombre de bornes libres ≤ SATURATION_THRESH → station considérée saturée
 SATURATION_THRESH: "2"
+
+# Profondeur minimale (en minutes) d’historique considérée pour certaines métriques
+# (par exemple : régularité, tension, profils horaires…)
 HISTORY_BACK_MIN: "240"
 
+# ───────── Paramètres généraux d’exécution ─────────
+# Fuseau horaire applicatif (cohérence avec la partie UI / monitoring)
 TZ_APP: "Europe/Paris"
+
+# Répertoire temporaire interne au container (fichiers intermédiaires, buffers…)
 TMP_DIR: "/tmp"
+
+# Forcer le flush immédiat de stdout/stderr (utile dans des environnements containerisés)
 PYTHONUNBUFFERED: "1"
+
+# Niveau de log de l’API (DEBUG / INFO / WARNING / ERROR)
 LOG_LEVEL: "INFO"
+
+# Tag d’image (purement informatif, pratique pour exposer la version dans l’API)
 IMAGE_TAG: "v1"
+
+# TTL de cache HTTP général pour certains endpoints API (secondes)
 API_CACHE_TTL_S: "120"
+
+# TTL de cache interne pour la lecture des bundles de prévision (secondes)
 FORECAST_CACHE_TTL_SECONDS: "120"
+
+# Timeout Uvicorn / serveur HTTP (secondes)
 UVICORN_TIMEOUT_S: "120"
 
-# CORS (JSON comme chaîne)
-CORS_ORIGINS: '["https://velo-paris.fr","https://lucky-sunshine-834fe9.netlify.app","http://localhost:3000","http://127.0.0.1:3000","http://localhost:5050","http://127.0.0.1:5050"]'
+# ───────── CORS / exposition publique de l’API ─────────
+# Liste d’origines autorisées pour l’UI (JSON encodé dans une chaîne).
+# Inclut les domaines de prod (velo-paris.fr), pré-production Netlify, localhost, etc.
+CORS_ORIGINS: '["https://velo-paris.fr","https://lucky-suns...27.0.0.1:3000","http://localhost:5050","http://127.0.0.1:5050"]'
+
+# Méthodes HTTP autorisées
 CORS_ALLOWED_METHODS: "GET,OPTIONS"
+
+# En-têtes autorisées côté client
 CORS_ALLOWED_HEADERS: "Content-Type,If-None-Match"
 
+# ───────── URLs internes de l’API ─────────
+# Base publique de l’API (utilisée pour générer des liens absolus si besoin)
 API_SELF_BASE: "https://api.velo-paris.fr"
+
+# Endpoint “live snapshot” exposé par l’API (état réseau quasi temps réel)
 LIVE_SNAPSHOT_URL: "/snapshot"
 
+# ───────── Garde-fous / nettoyage des données ─────────
+# Si "1", les fichiers bruts GCS peuvent être supprimés après compactage
+# (à n’activer que si le pipeline est stable et la rétention bronze maîtrisée).
 DELETE_AFTER_COMPACT: "1"

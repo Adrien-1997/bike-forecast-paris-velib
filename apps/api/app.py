@@ -1,4 +1,28 @@
 ﻿# apps/api/app.py
+
+"""Vélib' Forecast — Entrypoint FastAPI.
+
+Ce module construit et configure l’application FastAPI utilisée pour exposer
+l’API publique de Vélib' Forecast :
+
+- Chargement des variables d’environnement depuis `.env` (local + racine repo).
+- Résolution souple du module `core` pour partager des utilitaires (settings…).
+- Chargement des `Settings` Pydantic (chemins GCS, CORS, météo, monitoring…).
+- Montage des routers :
+    * routes "legacy" : health, stations, forecast, history, badges, snapshot, weather,
+    * routes "monitoring" : network overview/dynamics/stations, model perf/explain,
+      data health/drift/freshness, intro.
+- Middleware global :
+    * enforcement d’un token d’accès global (API_GLOBAL_TOKEN),
+    * compression GZip des réponses,
+    * CORS configuré via les origines autorisées définies dans les settings.
+- Hook startup :
+    * affichage de toutes les routes montées (path + méthodes) dans les logs.
+
+Ce fichier correspond donc au "main" applicatif côté backend, exploité à la fois
+en local (uvicorn) et dans Cloud Run.
+"""
+
 from __future__ import annotations
 import sys, importlib, os
 from pathlib import Path
@@ -7,6 +31,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
 # ─────────── .env ───────────
+# On tente d'abord de charger un .env dans le cwd (utile en local),
+# puis un .env à la racine du repo (utile en prod/Cloud Run si monté).
 try:
     from dotenv import load_dotenv, find_dotenv
     found = find_dotenv(filename=".env", usecwd=True)
@@ -18,9 +44,13 @@ try:
         load_dotenv(env_file, override=False)
     print(f"[app] .env chargé ✓ (found='{found}', repo_root='{repo_root}')")
 except Exception as e:
+    # L’API reste fonctionnelle même si .env n’est pas trouvé : on se repose
+    # alors uniquement sur les variables d’environnement déjà présentes.
     print(f"[app] .env non chargé ({e})")
 
 # ─────────── Alias 'core' ───────────
+# Permet d'importer `core` de façon homogène dans tout le projet, que l’on soit
+# dans un contexte `apps.api.*`, `api.*` ou directement `core.*`.
 for mod in ("apps.api.core", "api.core", "core"):
     try:
         sys.modules.setdefault("core", importlib.import_module(mod))
@@ -29,6 +59,8 @@ for mod in ("apps.api.core", "api.core", "core"):
         continue
 
 # ─────────── Settings ───────────
+# On tente plusieurs chemins pour récupérer l'instance `settings` (Pydantic),
+# afin que le fichier reste robuste aux variations de layout/imports.
 try:
     from apps.api.core.settings import settings
 except Exception:
@@ -38,9 +70,13 @@ except Exception:
         try:
             from core.settings import settings
         except Exception:
+            # En dernier recours, `settings` vaut None : l’API reste utilisable
+            # mais certaines fonctionnalités (CORS, etc.) seront dégradées.
             settings = None
 
 # ─────────── Routes legacy ───────────
+# Endpoints principaux (avant monitoring) :
+# - /healthz, /stations, /forecast, /history, /badges, /snapshot, /weather, …
 try:
     from apps.api.routes import health, stations, forecast, history, badges, snapshot, weather
 except Exception:
@@ -50,6 +86,11 @@ except Exception:
         from routes import health, stations, forecast, history, badges, snapshot, weather
 
 # ─────────── Routes monitoring ───────────
+# Endpoints de monitoring structurés par sous-pages :
+# - network_overview, network_dynamics, network_stations
+# - model_performance, model_explainability
+# - data_health, data_drift, data_freshness
+# - intro (bloc de synthèse / landing monitoring)
 try:
     from apps.api.routes.monitoring import (
         network_overview,
@@ -89,13 +130,26 @@ except Exception:
         )
 
 # ─────────── App ───────────
+# Application FastAPI principale (titre/version utilisés aussi pour OpenAPI).
 app = FastAPI(title="velib-api", version="0.2.0")
 
 # ─────────── Token global (middleware) ───────────
+# API_GLOBAL_TOKEN (env) permet de protéger l'ensemble des endpoints avec un
+# simple Bearer token "global" (pas de gestion fine utilisateur / scopes).
 GLOBAL_TOKEN = os.getenv("API_GLOBAL_TOKEN", "").strip()
 
 @app.middleware("http")
 async def enforce_global_token(request: Request, call_next):
+    """Middleware d'enforcement du token global.
+
+    Règles :
+    - OPTIONS (preflight CORS) toujours autorisées,
+    - si GLOBAL_TOKEN n'est pas configuré → API entièrement ouverte (utile en dev),
+    - routes racine "/" et "/healthz" toujours publiques,
+    - pour le reste :
+        * Authorization: Bearer <token> requis,
+        * <token> doit correspondre exactement à API_GLOBAL_TOKEN sinon 403.
+    """
     # Laisser passer les preflights CORS
     if request.method == "OPTIONS":
         return await call_next(request)
@@ -117,9 +171,13 @@ async def enforce_global_token(request: Request, call_next):
     return await call_next(request)
 
 # ─────────── GZip ───────────
+# Compression des réponses HTTP à partir de 1 Ko, pour limiter la bande passante
+# (utile notamment pour les gros JSON de monitoring).
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # ─────────── CORS (à AJOUTER EN DERNIER) ───────────
+# On autorise soit la liste définie par `settings.cors_list`, soit `*`
+# (ce qui reste acceptable car la protection principale est le token global).
 allow_origins = (
     settings.cors_list
     if (settings and getattr(settings, "cors_list", None))
@@ -157,11 +215,18 @@ app.include_router(intro.router)
 # ─────────── Debug ───────────
 @app.on_event("startup")
 async def _print_routes() -> None:
+    """Log de toutes les routes montées au démarrage.
+
+    Utile en environnement de dev / staging pour vérifier rapidement
+    que tous les routers ont bien été inclus et que les méthodes HTTP
+    exposées correspondent aux attentes.
+    """
     print("=== ROUTES MONTÉES ===")
     for r in app.router.routes:
         try:
             methods = ",".join(sorted(r.methods)) if hasattr(r, "methods") else ""
             print(f"{r.path}  {methods}")
         except Exception:
+            # En cas de route “exotique” sans attribut .methods, on ignore l’erreur
             pass
     print("=======================")

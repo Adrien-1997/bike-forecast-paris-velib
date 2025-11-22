@@ -1,4 +1,23 @@
 // ui/components/layout/GlobalHeader.tsx
+
+// =============================================================================
+// Header global du site (marque "vélo/paris" + navigation principale).
+//
+// Rôle :
+// - Affiche le branding (logo + texte) renvoyant vers l'accueil.
+// - Gère la navigation principale (desktop + mobile drawer).
+// - Met en évidence le lien actif (route ou ancre) :
+//   • par path (pathname) pour les pages,
+//   • par "scroll-spy" IntersectionObserver pour les sections (#ancres).
+// - Gère un menu mobile avec : scroll-lock, backdrop, focus management, ESC,
+//   clic extérieur, auto-hide du header au scroll, fermeture sur changement de route.
+//
+// Important :
+// - Ne gère PAS l'état "active" dans la logique de scroll globale du site
+//   (seulement pour le header).
+// - Le style (autohide, backdrop, burger…) est entièrement géré via CSS.
+// =============================================================================
+
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
@@ -6,7 +25,12 @@ import { createPortal } from "react-dom";
 
 export type HeaderItem = { label: string; href: string };
 
-/** Active pour routes (pages), pas pour ancres. */
+/**
+ * Détermine si une route (href) doit être considérée comme "active"
+ * pour un chemin donné :
+ * - uniquement pour les liens de page (pas pour les ancres `#`),
+ * - match exact ou préfixe (ex: /monitoring active pour /monitoring/overview).
+ */
 function isPathActive(path: string, href: string) {
   if (!href.startsWith("#")) return path === href || path.startsWith(href + "/");
   return false;
@@ -22,18 +46,22 @@ export default function GlobalHeader({
   const router = useRouter();
   const { pathname } = router;
 
-  // ── États
-  const [open, setOpen] = useState(false);
-  const [hasDOM, setHasDOM] = useState(false);
+  // ─────────────────────────────
+  // États & refs
+  // ─────────────────────────────
+  const [open, setOpen] = useState(false);     // état du menu mobile (drawer)
+  const [hasDOM, setHasDOM] = useState(false); // true côté client (pour portal)
   const headerRef = useRef<HTMLElement | null>(null);
 
-  const burgerRef = useRef<HTMLButtonElement | null>(null);
-  const firstLinkRef = useRef<HTMLAnchorElement | null>(null);
+  const burgerRef = useRef<HTMLButtonElement | null>(null);   // bouton burger
+  const firstLinkRef = useRef<HTMLAnchorElement | null>(null); // 1er lien du menu mobile (focus)
 
-  const [activeHash, setActiveHash] = useState<string>("");
+  const [activeHash, setActiveHash] = useState<string>("");   // ancre active (scroll-spy)
 
+  // Indique que l'on est bien côté client (DOM disponible) → requerant pour createPortal
   useEffect(() => setHasDOM(true), []);
 
+  // Liste des items, ou fallback par défaut si aucune prop `items` n'est fournie.
   const list = useMemo<HeaderItem[]>(
     () =>
       items && items.length
@@ -46,20 +74,27 @@ export default function GlobalHeader({
     [items]
   );
 
+  // Liste des IDs ciblés par des ancres (#id) pour le scroll-spy
   const hashTargets = useMemo(
     () => list.filter((i) => i.href.startsWith("#")).map((i) => i.href.slice(1)),
     [list]
   );
 
+  // Fonction générique pour savoir si un lien est actif (page ou ancre)
   const isActive = (href: string) =>
     href.startsWith("#") ? activeHash === href : isPathActive(pathname, href);
 
+  // Ferme le menu mobile
   const closeMenu = () => setOpen(false);
 
-  // ===== Scroll-spy via IntersectionObserver =====
+  // ========================================================================
+  // Scroll-spy via IntersectionObserver (gestion des ancres actives)
+  // ========================================================================
   useEffect(() => {
     if (typeof window === "undefined" || hashTargets.length === 0) return;
 
+    // Récupère la hauteur du header via la CSS custom property --header-h,
+    // fallback à 60 px si non définie.
     const headerH = (() => {
       const doc = document.documentElement;
       const comp = getComputedStyle(doc);
@@ -68,10 +103,12 @@ export default function GlobalHeader({
       return Number.isFinite(px) ? px : 60;
     })();
 
+    // Décalage vertical utilisé pour le calcul de la section "dominante"
     const topOffset = Math.ceil(window.innerHeight * 0.3) + headerH;
 
     const observer = new IntersectionObserver(
       (entries) => {
+        // On ordonne les sections visibles par leur position vertical (top)
         const visibles = entries
           .filter((e) => e.isIntersecting)
           .sort(
@@ -80,12 +117,16 @@ export default function GlobalHeader({
               (b.target as HTMLElement).getBoundingClientRect().top
           );
 
+        // Si au moins une section est visible, on prend la plus haute dans la vue
         if (visibles.length > 0) {
           const id = (visibles[0].target as HTMLElement).id;
           if (id) setActiveHash("#" + id);
           return;
         }
 
+        // Fallback : aucune section n'est intersectée → on choisit celle
+        // dont le top est le plus proche du haut de la fenêtre, tout en étant
+        // au-dessus du seuil `topOffset`.
         let bestId = "";
         let bestTop = -Infinity;
         for (const id of hashTargets) {
@@ -106,11 +147,13 @@ export default function GlobalHeader({
       }
     );
 
+    // On observe toutes les sections ciblées par des ancres
     hashTargets.forEach((id) => {
       const el = document.getElementById(id);
       if (el) observer.observe(el);
     });
 
+    // Au chargement, on synchronise l'état actif avec le hash de l'URL s'il existe
     const setFromUrl = () => {
       const h = window.location.hash;
       if (h && hashTargets.includes(h.slice(1))) setActiveHash(h);
@@ -126,7 +169,7 @@ export default function GlobalHeader({
     };
   }, [hashTargets]);
 
-  // Fermer menu si resize desktop
+  // Fermer le menu mobile si on repasse en "desktop" (>= 980 px)
   useEffect(() => {
     const onResize = () => {
       if (window.innerWidth >= 980) setOpen(false);
@@ -135,12 +178,16 @@ export default function GlobalHeader({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // Scroll-lock body
+  // ========================================================================
+  // Scroll-lock du body quand le menu mobile est ouvert
+  // ========================================================================
   useEffect(() => {
     if (typeof window === "undefined") return;
     const body = document.body;
 
     if (open) {
+      // On fige le body (position: fixed) pour bloquer le scroll,
+      // tout en mémorisant la position courante pour la restaurer à la fermeture.
       const scrollY = window.scrollY;
       body.dataset.prevScrollY = String(scrollY);
       body.style.position = "fixed";
@@ -149,8 +196,11 @@ export default function GlobalHeader({
       body.style.right = "0";
       body.style.width = "100%";
       body.classList.add("menu-open");
+
+      // Focus initial sur le premier lien du menu mobile
       requestAnimationFrame(() => firstLinkRef.current?.focus());
     } else {
+      // Restaure l'état du body et la position de scroll précédente
       const prev = body.dataset.prevScrollY;
       body.style.position = "";
       body.style.top = "";
@@ -162,6 +212,7 @@ export default function GlobalHeader({
       burgerRef.current?.focus();
     }
 
+    // Cleanup pour éviter de laisser le body dans un état fixé si le composant unmount
     return () => {
       body.style.position = "";
       body.style.top = "";
@@ -172,7 +223,9 @@ export default function GlobalHeader({
     };
   }, [open]);
 
-  // Auto-hide header
+  // ========================================================================
+  // Auto-hide du header au scroll (caché en scroll down, affiché en scroll up)
+  // ========================================================================
   useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
@@ -184,6 +237,7 @@ export default function GlobalHeader({
         const goingDown = y > prevY && y > 10;
         el.classList.toggle("is-hidden", goingDown);
       } else {
+        // Si le menu est ouvert, le header reste visible
         el.classList.remove("is-hidden");
       }
       prevY = y;
@@ -197,7 +251,7 @@ export default function GlobalHeader({
     };
   }, [open]);
 
-  // ESC pour fermer
+  // ESC pour fermer le menu mobile
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -207,7 +261,7 @@ export default function GlobalHeader({
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
-  // Clic extérieur
+  // Clic extérieur (en "capturing") pour fermer le drawer mobile
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (e: PointerEvent) => {
@@ -216,25 +270,34 @@ export default function GlobalHeader({
       if (!headerEl) return;
       const drawer = headerEl.querySelector(".mobile-drawer");
       const burger = headerEl.querySelector(".burger");
+
+      // Si clic dans le drawer ou sur le burger → on ne ferme pas
       if (
         (drawer && (drawer === e.target || drawer.contains(e.target as Node))) ||
         (burger && (burger === e.target || burger.contains(e.target as Node)))
       ) {
         return;
       }
+      // Sinon → fermer le menu
       setOpen(false);
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
   }, [open]);
 
-  // Fermer navigation interne
+  // Fermer le menu sur changement de route (navigation interne Next)
   useEffect(() => {
     const handleStart = () => setOpen(false);
     router.events.on("routeChangeStart", handleStart);
     return () => router.events.off("routeChangeStart", handleStart);
   }, [router.events]);
 
+  /**
+   * aria-current selon le type de lien :
+   * - "page" pour les routes actives,
+   * - "location" pour les ancres actives,
+   * - undefined sinon.
+   */
   const ariaCurrentFor = (href: string): "page" | "location" | undefined => {
     if (href.startsWith("#")) return isActive(href) ? "location" : undefined;
     return isActive(href) ? "page" : undefined;
@@ -244,7 +307,7 @@ export default function GlobalHeader({
     <>
       <header ref={headerRef} className="site-header">
         <div className="container nav">
-          {/* Branding */}
+          {/* Branding (logo + texte "vélo/paris") */}
           <Link href={brandHref} className="brand" aria-label="Accueil" onClick={closeMenu}>
             <img
               src="/favicon.svg"
@@ -263,7 +326,7 @@ export default function GlobalHeader({
             </span>
           </Link>
 
-          {/* Nav desktop */}
+          {/* Navigation desktop */}
           <nav className="nav-desktop" aria-label="Navigation principale">
             <ul>
               {list.map((it) => (
@@ -283,7 +346,7 @@ export default function GlobalHeader({
             </ul>
           </nav>
 
-          {/* Burger */}
+          {/* Bouton burger (mobile) */}
           <button
             ref={burgerRef}
             className={open ? "burger close" : "burger"}
@@ -321,7 +384,7 @@ export default function GlobalHeader({
           </button>
         </div>
 
-        {/* Mobile drawer */}
+        {/* Drawer mobile (menu plein écran) */}
         <div
           id="mobile-menu"
           className={open ? "mobile-drawer open" : "mobile-drawer"}
@@ -351,7 +414,7 @@ export default function GlobalHeader({
         </div>
       </header>
 
-      {/* Backdrop global */}
+      {/* Backdrop global pour le menu mobile (portal vers document.body) */}
       {hasDOM &&
         createPortal(
           <button

@@ -1,8 +1,31 @@
-// components/BadgesBar.tsx
+// components/app/Badges.tsx
+
+// =============================================================================
+// Barre de badges en haut de la page d’app : météo + fraîcheur des données.
+//
+// Rôle :
+// - afficher un résumé compact de la météo (température, pluie, vent) sous
+//   forme de badge, avec un emoji contextuel jour/nuit,
+// - afficher un badge de “fraîcheur des données” basé sur l’âge du dernier
+//   snapshot (minutes) et la meta du modèle (heure de run + heure cible),
+// - supporter à la fois le format de badges récent
+//   { weather: {...}, freshness: {...}, meta: {...} }
+//   et l’ancien format plus “plat” pour rester rétro-compatible.
+//
+// Ce composant est purement visuel : il ne fait aucun fetch, il consomme
+// un objet `Badges` déjà préparé côté API.
+// =============================================================================
+
 import type { Badges } from "@/lib/types/types";
 
 export type BadgesProps = { data?: Badges | null };
 
+/**
+ * Format numérique "safe" :
+ * - convertit vers Number,
+ * - renvoie "—" si non fini (NaN / Inf / undefined),
+ * - limite le nombre de décimales à `d`.
+ */
 function fmt(n: number | null | undefined, d = 1) {
   const v = Number(n);
   return Number.isFinite(v)
@@ -10,6 +33,12 @@ function fmt(n: number | null | undefined, d = 1) {
     : "—";
 }
 
+/**
+ * Affiche une heure HH:mm en Europe/Paris à partir d’un ISO UTC.
+ *
+ * - Si la chaîne ne termine pas par "Z", on l’ajoute par sécurité (cas "naïf").
+ * - Fallback "—" si la valeur est absente ou invalide.
+ */
 function parisHHmm(iso?: string | null): string {
   if (!iso) return "—";
   const s = iso.endsWith("Z") ? iso : `${iso}Z`;
@@ -24,8 +53,16 @@ function parisHHmm(iso?: string | null): string {
 
 /**
  * Emoji météo contextuel :
- * - Priorité : précipitations > vent > température > calme
- * - Jour/Nuit déterminé par `targetIso` (Europe/Paris). Fallback: heure locale si absent.
+ * - Priorité : précipitations > vent > température > calme,
+ * - Jour/nuit déterminé par `targetIso` en fuseau Europe/Paris,
+ * - Fallback : heure actuelle à Paris si `targetIso` est absent.
+ *
+ * Heuristique :
+ * - pluie forte / orage → 🌧️ / ⛈️ / 🌩️,
+ * - vent marqué → 🌬️ / 💨,
+ * - froid / très froid → ❄️ / 🥶,
+ * - chaud / canicule → ☀️ / 🥵,
+ * - sinon → 🌙 la nuit, 🌤️ le jour.
  */
 function weatherEmoji(
   temp?: number | null,
@@ -71,7 +108,7 @@ function weatherEmoji(
   if (Number.isFinite(w) && w >= 14) return "💨"; // très venteux / rafales
   if (Number.isFinite(w) && w >= 8)  return "🌬️"; // vent sensible
 
-  // ❄️ Température (sans pluie/vent fort)
+  // ❄️ / ☀️ Température (sans pluie/vent fort)
   if (Number.isFinite(t)) {
     if (t <= -2) return "🥶"; // grand froid
     if (t <= 5)  return "❄️"; // froid
@@ -89,6 +126,20 @@ function weatherEmoji(
   }
 }
 
+/**
+ * BadgesBar
+ * ---------
+ * Affiche deux badges principaux :
+ * - badge "Météo" : emoji + température / pluie / vent,
+ * - badge "Données" : fraîcheur du dernier snapshot + heure modèle / cible.
+ *
+ * Props :
+ * - `data` : objet `Badges` ou `null` ; si falsy → rien n’est rendu.
+ *
+ * Compat :
+ * - supporte à la fois le format modernisé (weather/freshness/meta)
+ *   et l’ancien format où certains champs étaient au niveau racine.
+ */
 export default function BadgesBar({ data }: BadgesProps) {
   if (!data) return null;
 
@@ -108,7 +159,7 @@ export default function BadgesBar({ data }: BadgesProps) {
     (data as any)?.parquet_age_min ??
     null;
 
-  // Info complémentaires (tooltip)
+  // Infos complémentaires pour tooltip (heures modèle / cible)
   const predTsISO    = meta?.pred_ts_utc ?? null;    // heure de run du modèle
   const targetTsISO  = meta?.target_ts_utc ?? null;  // heure cible de la prévision
 
@@ -116,7 +167,7 @@ export default function BadgesBar({ data }: BadgesProps) {
   const emo = weatherEmoji(temp, precip, wind, targetTsISO);
 
   // Palette simple selon âge des données
-  // <= 10 min → vert ; 11-20 → amber ; > 20 → rouge
+  // <= 10 min → vert ; 11-20 → amber ; > 20 → rouge ; inconnu → neutre
   const age = Number(ageMin);
   const freshClass =
     Number.isFinite(age)
@@ -137,7 +188,7 @@ export default function BadgesBar({ data }: BadgesProps) {
 
   return (
     <div className="badges flex flex-wrap gap-2">
-      {/* Météo */}
+      {/* Badge météo : emoji + T° + pluie + vent */}
       <div className="badge inline-flex items-center gap-2 rounded px-2 py-1 bg-neutral-100 text-neutral-900">
         <span className="badge-dot inline-block h-2 w-2 rounded-full bg-neutral-400" />
         <span>{emo} Météo</span>
@@ -146,7 +197,7 @@ export default function BadgesBar({ data }: BadgesProps) {
         <span className="small opacity-80">• {fmt(wind, 1)} m/s</span>
       </div>
 
-      {/* Fraîcheur des données (tbin_latest) */}
+      {/* Badge de fraîcheur des données (tbin_latest) */}
       <div
         className={`badge inline-flex items-center gap-2 rounded px-2 py-1 ${freshClass}`}
         title={tooltip}

@@ -1,4 +1,33 @@
 # apps/api/routes/model_explainability.py
+
+"""Monitoring — Model Explainability endpoints.
+
+Ce module expose les endpoints :
+
+    /monitoring/model/explainability/...
+
+Ils servent les artefacts JSON produits par le job
+`build_model_explainability.py` sur GCS, typiquement organisés comme :
+
+    <GCS_MONITORING_PREFIX>/monitoring/model/explainability/latest/h{H}/
+        overview.json
+        residuals.json
+        calibration.json
+        uncertainty.json
+        feature_importance.json
+
+Principes :
+- Le backend **ne calcule rien** : il ne fait que proxifier des JSON déjà
+  préparés par les jobs batch.
+- Tous les chemins GCS sont dérivés de `GCS_MONITORING_PREFIX` (env),
+  normalisé via `_mon_prefix_or_500()`.
+- Le paramètre `h` représente l’horizon en minutes (ex: 15, 60).
+- Le paramètre `at` est prévu pour le time-travel, mais est aujourd’hui
+  limité à `"latest"` (les autres valeurs invalides sont ignorées).
+- Les nombres flottants non finis (NaN / ±Inf) sont convertis en `null`
+  dans la réponse via `_json_sanitize`, pour garantir un JSON valide.
+"""
+
 from __future__ import annotations
 import os, json, re, math
 from typing import Optional, Literal, Tuple
@@ -9,20 +38,60 @@ from fastapi.responses import JSONResponse
 try:
     from google.cloud import storage  # type: ignore
 except Exception as e:
+    # Pour les routes de monitoring, GCS est requis côté API : sans client
+    # storage disponible, on ne peut pas servir les artefacts → erreur au boot.
     raise RuntimeError("google-cloud-storage requis côté API") from e
 
 # ── Préfixe aligné sur les autres pages (network/*, model/*) ──────────────────
 # /monitoring/model/explainability/*
 router = APIRouter(prefix="/monitoring/model/explainability")
 
+
 # ── Helpers GCS (cohérents avec model/performance) ────────────────────────────
 def _split_gs(uri: str) -> Tuple[str, str]:
+    """Découpe une URI `gs://bucket/key` en `(bucket, key)`.
+
+    Parameters
+    ----------
+    uri : str
+        URI GCS devant commencer par `gs://`.
+
+    Returns
+    -------
+    tuple[str, str]
+        `(bucket, key)`.
+
+    Raises
+    ------
+    ValueError
+        Si l’URI ne commence pas par `gs://`.
+    """
     if not uri.startswith("gs://"):
         raise ValueError(f"Bad GCS URI: {uri}")
     bucket, key = uri[5:].split("/", 1)
     return bucket, key
 
+
 def _gcs_read_json(gs_uri: str) -> dict:
+    """Télécharge un blob JSON depuis GCS et le parse en dict Python.
+
+    Parameters
+    ----------
+    gs_uri : str
+        URI GCS du document JSON à lire.
+
+    Returns
+    -------
+    dict
+        Contenu JSON décodé.
+
+    Raises
+    ------
+    FileNotFoundError
+        Si le blob n’existe pas sur GCS.
+    ValueError
+        Si le contenu n’est pas un JSON valide.
+    """
     bkt, key = _split_gs(gs_uri)
     client = storage.Client()
     blob = client.bucket(bkt).blob(key)
@@ -34,7 +103,25 @@ def _gcs_read_json(gs_uri: str) -> dict:
     except Exception as e:
         raise ValueError(f"Invalid JSON in {gs_uri}: {e}") from e
 
+
 def _mon_prefix_or_500() -> str:
+    """Retourne `GCS_MONITORING_PREFIX` normalisé ou lève une 500.
+
+    Étapes :
+    - lit la variable d’environnement `GCS_MONITORING_PREFIX`,
+    - strip espaces + guillemets, retire le slash final,
+    - vérifie que le résultat commence par `gs://`.
+
+    Returns
+    -------
+    str
+        Préfixe GCS pour la racine de monitoring.
+
+    Raises
+    ------
+    HTTPException(500)
+        Si le préfixe est manquant ou invalide.
+    """
     mon_raw = os.environ.get("GCS_MONITORING_PREFIX", "")
     mon = mon_raw.strip().strip("'\"").rstrip("/")
     if not mon.startswith("gs://"):
@@ -42,8 +129,19 @@ def _mon_prefix_or_500() -> str:
         raise HTTPException(status_code=500, detail="GCS_MONITORING_PREFIX manquant ou invalide")
     return mon
 
+
+# Timestamp "version" attendu si on activait le time-travel : 2025-10-23T14-30-00Z
 _AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z$")
+
+
 def _sanitize_at(at: Optional[str]) -> str:
+    """Normalise le paramètre `at` (time-travel) en nom de dossier.
+
+    Comportement actuel (latest-only) :
+    - `None`, vide ou "latest" (insensible à la casse) → `"latest"`,
+    - chaîne non vide respectant le pattern `_AT_RE` → renvoyée telle quelle,
+    - toute autre valeur → `"latest"` (fallback sécurisé).
+    """
     # latest-only pour l’instant ; on garde 'at' future-proof
     if not at or at.strip().lower() in ("", "latest"):
         return "latest"
@@ -52,7 +150,16 @@ def _sanitize_at(at: Optional[str]) -> str:
         return "latest"
     return s
 
+
 def _json_sanitize(obj):
+    """Remplace NaN/±Inf par None pour garantir un JSON valide.
+
+    Fonction récursive appliquée sur tout l’objet :
+    - dict  → application sur toutes les valeurs,
+    - list  → application sur tous les éléments,
+    - float → si non fini (NaN / ±Inf) → None,
+    - autres types → renvoyés tels quels.
+    """
     if isinstance(obj, dict):
         return {k: _json_sanitize(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -61,7 +168,30 @@ def _json_sanitize(obj):
         return obj if math.isfinite(obj) else None
     return obj
 
+
 def _proxy_json(gs_uri: str, request: Request, ttl: int = 120) -> JSONResponse:
+    """Lit un JSON sur GCS et le proxifie avec des headers HTTP adaptés.
+
+    Parameters
+    ----------
+    gs_uri : str
+        URI GCS du document à servir.
+    request : Request
+        Requête FastAPI (non utilisée pour l’instant, gardée pour extension).
+    ttl : int, default 120
+        Durée de vie du cache HTTP (`max-age`), en secondes.
+
+    Returns
+    -------
+    fastapi.responses.JSONResponse
+        Réponse contenant le JSON nettoyé (`_json_sanitize`).
+
+    Raises
+    ------
+    HTTPException
+        - 404 si le document est introuvable,
+        - 502 en cas d’erreur de lecture GCS / parsing JSON.
+    """
     try:
         payload = _gcs_read_json(gs_uri)
     except FileNotFoundError:
@@ -74,19 +204,33 @@ def _proxy_json(gs_uri: str, request: Request, ttl: int = 120) -> JSONResponse:
     resp.headers.setdefault("Access-Control-Allow-Origin", "*")
     return resp
 
+
 # ── Endpoints EXPLAINABILITY (latest only, multi-horizon) ─────────────────────
 DocNameExplain = Literal["overview", "residuals", "calibration", "uncertainty", "feature_importance"]
 
+# TTL par type de document (en secondes)
 _TTL_BY_DOC = {
     "overview": 60,
-    "residuals": 600,            # hist/qq/acf peu volatiles
-    "calibration": 300,          # binning/heure
+    "residuals": 600,            # hist/QQ/ACF peu volatiles
+    "calibration": 300,          # binning / heure
     "uncertainty": 300,          # couverture
     "feature_importance": 600,   # SHAP / gain XGB relativement stable
 }
 
+
 @router.get("/available")
 def model_explain_available():
+    """Expose la liste des documents d'explicabilité disponibles.
+
+    Response
+    --------
+    {
+      "docs": ["overview", "residuals", "calibration", "uncertainty", "feature_importance"],
+      "horizons": "utiliser ?h=<minutes> (ex: 15, 60)",
+      "time_travel": "latest uniquement (param ?at=… ignoré si non valide)",
+      "examples": [...]
+    }
+    """
     return {
         "docs": ["overview", "residuals", "calibration", "uncertainty", "feature_importance"],
         "horizons": "utiliser ?h=<minutes> (ex: 15, 60)",
@@ -101,12 +245,31 @@ def model_explain_available():
         ],
     }
 
+
 @router.get("/manifest")
 def model_explain_manifest(
     request: Request,
     h: int = Query(15, description="Horizon en minutes (ex: 15, 60)"),
     at: Optional[str] = None,
 ):
+    """Expose un "manifest" minimal pour un horizon donné.
+
+    Aujourd'hui, il n'y a pas de manifest dédié côté job d'explicabilité :
+    on réutilise simplement `overview.json` comme document de référence
+    (manifest) pour chaque horizon.
+
+    Parameters
+    ----------
+    h : int, query
+        Horizon en minutes (ex: 15, 60). Doit être > 0.
+    at : str | None, query
+        Time-travel slug (actuellement latest-only, via `_sanitize_at`).
+
+    Returns
+    -------
+    fastapi.responses.JSONResponse
+        Contenu de `overview.json` pour l'horizon demandé.
+    """
     if h <= 0:
         raise HTTPException(status_code=400, detail="Paramètre h (minutes) doit être > 0")
     mon = _mon_prefix_or_500()
@@ -116,6 +279,7 @@ def model_explain_manifest(
     gs_uri = f"{base}/model/explainability/{folder}/h{int(h)}/overview.json"
     return _proxy_json(gs_uri, request, ttl=60)
 
+
 @router.get("/{doc}")
 def model_explain_doc(
     doc: DocNameExplain,
@@ -123,6 +287,30 @@ def model_explain_doc(
     h: int = Query(15, description="Horizon en minutes (ex: 15, 60)"),
     at: Optional[str] = None,
 ):
+    """Proxy JSON pour un document d'explicabilité particulier.
+
+    Endpoints typiques :
+    --------------------
+    - /monitoring/model/explainability/overview?h=15
+    - /monitoring/model/explainability/residuals?h=60
+    - /monitoring/model/explainability/calibration?h=15
+    - /monitoring/model/explainability/uncertainty?h=60
+    - /monitoring/model/explainability/feature_importance?h=15
+
+    Parameters
+    ----------
+    doc : {"overview","residuals","calibration","uncertainty","feature_importance"}
+        Nom logique du document à servir.
+    h : int, query
+        Horizon en minutes (ex: 15, 60). Doit être > 0.
+    at : str | None, query
+        Time-travel slug (actuellement latest-only, via `_sanitize_at`).
+
+    Returns
+    -------
+    fastapi.responses.JSONResponse
+        Contenu JSON sanitisé du document demandé pour l'horizon h.
+    """
     if h <= 0:
         raise HTTPException(status_code=400, detail="Paramètre h (minutes) doit être > 0")
     mon = _mon_prefix_or_500()

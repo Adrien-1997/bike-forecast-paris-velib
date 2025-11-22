@@ -1,4 +1,29 @@
-# api/core/forecast_reader.py
+"""API Forecast Reader.
+
+Ce module fournit une petite couche d’accès aux prévisions batch stockées
+dans GCS (outputs de `build_serving_forecast`), avec :
+
+- résolution des chemins GCS à partir des settings,
+- lecture optimisée via HTTP public si possible (sinon client GCS),
+- normalisation des colonnes (types, tri, etc.),
+- cache mémoire simple par horizon,
+- filtrage optionnel par liste de stations.
+
+Format principal attendu (bundle JSON unique) sous
+`SERVING_FORECAST_PREFIX/latest_forecast.json` :
+
+    {
+      "generated_at": "...Z",
+      "horizons": [15, 60],
+      "data": {
+        "15": [ {record}, ... ],
+        "60": [ {record}, ... ]
+      }
+    }
+
+Un mode legacy est aussi supporté par horizon : `latest_h{h}.json`.
+"""
+
 from __future__ import annotations
 
 import io
@@ -22,6 +47,11 @@ _CACHE: Dict[int, Tuple[float, pd.DataFrame]] = {}
 # Helpers config
 # ───────────────────────────────────────────────────────────────
 def _supported_horizons() -> set[int]:
+    """Retourne l'ensemble des horizons (en minutes) supportés par l'API.
+
+    Lecture de `settings.FORECAST_SUPPORTED` (string CSV, ex. "15,60").
+    Si vide ou None, on retombe sur `{15}` par défaut.
+    """
     raw = (settings.FORECAST_SUPPORTED or "15").strip()
     if not raw:
         return {15}
@@ -29,17 +59,30 @@ def _supported_horizons() -> set[int]:
 
 
 def _parse_gs(uri: str) -> tuple[str, str]:
+    """Parse une URI GCS `gs://bucket/key` en `(bucket, key)`.
+
+    Raises
+    ------
+    AssertionError
+        Si l'URI ne commence pas par `gs://`.
+    """
     assert uri.startswith("gs://"), f"Invalid GCS URI: {uri}"
     bkt, key = uri[5:].split("/", 1)
     return bkt, key
 
 
 def _bundle_json_uri() -> str:
+    """Construit l'URI GCS du bundle JSON principal `latest_forecast.json`."""
     prefix = settings.SERVING_FORECAST_PREFIX.rstrip("/")
     return f"{prefix}/latest_forecast.json"
 
 
 def _legacy_latest_json_uri(h: int) -> str:
+    """Construit l'URI GCS legacy pour un horizon donné.
+
+    Format attendu : `<SERVING_FORECAST_PREFIX>/latest_h{h}.json`.
+    Utilisé uniquement en fallback si le bundle n'existe pas.
+    """
     # Backward-compat support if per-horizon files still exist
     prefix = settings.SERVING_FORECAST_PREFIX.rstrip("/")
     return f"{prefix}/latest_h{h}.json"
@@ -64,6 +107,23 @@ def _http_download_optional(uri: str, timeout: float = 5.0) -> Optional[bytes]:
 
 
 def _download_bytes(uri: str) -> bytes:
+    """Télécharge un objet GCS via le client `google-cloud-storage`.
+
+    Parameters
+    ----------
+    uri : str
+        URI GCS au format `gs://bucket/key`.
+
+    Returns
+    -------
+    bytes
+        Contenu brut de l'objet.
+
+    Raises
+    ------
+    google.api_core.exceptions.NotFound
+        Si l'objet n'existe pas.
+    """
     bkt, key = _parse_gs(uri)
     cli = storage.Client()
     blob = cli.bucket(bkt).blob(key)
@@ -71,6 +131,7 @@ def _download_bytes(uri: str) -> bytes:
 
 
 def _download_bytes_optional(uri: str) -> Optional[bytes]:
+    """Version tolérante de `_download_bytes` : renvoie None en cas de NotFound."""
     try:
         return _download_bytes(uri)
     except NotFound:
@@ -113,6 +174,24 @@ def _read_json_df_records(b: bytes) -> pd.DataFrame:
 # Normalisation
 # ───────────────────────────────────────────────────────────────
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise le DataFrame de prévisions en types/cohérence UI.
+
+    - Convertit les colonnes datetime (`tbin_latest`, `pred_ts_utc`) en tz-naive UTC.
+    - Force `station_id` en string (clé front / API).
+    - Cast les colonnes entières (`capacity_bin`, `horizon_min`) en Int64 nullable.
+    - Cast certaines colonnes numériques en float (prédictions, ratios, lags).
+    - Trie par `station_id` si présent.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame brut issu du JSON.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame normalisé et trié.
+    """
     if df is None or df.empty:
         return pd.DataFrame()
 
@@ -145,6 +224,21 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
 # Cache
 # ───────────────────────────────────────────────────────────────
 def _cache_get(h: int) -> Optional[pd.DataFrame]:
+    """Retourne le DataFrame en cache pour un horizon donné si encore valide.
+
+    La durée de vie (TTL) est contrôlée par `settings.FORECAST_CACHE_TTL_SECONDS`.
+    Si le TTL est <= 0, le cache est désactivé.
+
+    Parameters
+    ----------
+    h : int
+        Horizon (en minutes).
+
+    Returns
+    -------
+    Optional[pd.DataFrame]
+        DataFrame mis en cache, ou None si expiré / absent / cache désactivé.
+    """
     ttl = int(getattr(settings, "FORECAST_CACHE_TTL_SECONDS", 0) or 0)
     if ttl <= 0:
         return None
@@ -158,6 +252,17 @@ def _cache_get(h: int) -> Optional[pd.DataFrame]:
 
 
 def _cache_put(h: int, df: pd.DataFrame) -> None:
+    """Enregistre un DataFrame en cache pour un horizon donné.
+
+    Ne fait rien si le TTL est <= 0 (cache désactivé).
+
+    Parameters
+    ----------
+    h : int
+        Horizon (en minutes).
+    df : pd.DataFrame
+        DataFrame à mettre en cache.
+    """
     ttl = int(getattr(settings, "FORECAST_CACHE_TTL_SECONDS", 0) or 0)
     if ttl <= 0:
         return
@@ -169,16 +274,45 @@ def _cache_put(h: int, df: pd.DataFrame) -> None:
 # ───────────────────────────────────────────────────────────────
 def load_latest_forecast(h: int, station_ids: Optional[List[str]] = None) -> pd.DataFrame:
     """
-    Nouveau format principal: SERVING_FORECAST_PREFIX/latest_forecast.json
-      {
-        "generated_at": "...Z",
-        "horizons": [15, 60],
-        "data": {
-          "15": [ {record}, ... ],
-          "60": [ {record}, ... ]
+    Charge les dernières prévisions pour un horizon donné depuis GCS.
+
+    Format principal (bundle):
+      SERVING_FORECAST_PREFIX/latest_forecast.json
+
+        {
+          "generated_at": "...Z",
+          "horizons": [15, 60],
+          "data": {
+            "15": [ {record}, ... ],
+            "60": [ {record}, ... ]
+          }
         }
-      }
-    Fallback legacy: latest_h{h}.json si présent.
+
+    Fallback legacy:
+      - latest_h{h}.json si présent sous SERVING_FORECAST_PREFIX.
+
+    Le résultat est normalisé via `_normalize` et peut être filtré sur un
+    sous-ensemble de stations.
+
+    Parameters
+    ----------
+    h : int
+        Horizon de prévision en minutes (doit appartenir à _supported_horizons).
+    station_ids : list[str] | None, optional
+        Liste optionnelle d'identifiants de station à conserver.
+        Les identifiants sont castés en string et normalisés avec `strip()`.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame des prévisions pour l'horizon demandé, éventuellement filtré.
+
+    Raises
+    ------
+    ValueError
+        Si l'horizon n'est pas listé dans les horizons supportés.
+    google.api_core.exceptions.NotFound
+        Si aucun fichier de prévision n'est trouvé pour cet horizon.
     """
     if h not in _supported_horizons():
         raise ValueError(f"horizon {h} not supported. Supported={sorted(_supported_horizons())}")

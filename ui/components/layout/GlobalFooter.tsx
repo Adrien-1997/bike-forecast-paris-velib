@@ -1,16 +1,42 @@
+// ui/components/layout/GlobalFooter.tsx
+
+// =============================================================================
+// Footer global du site velo-paris.fr.
+//
+// Rôle :
+// - Afficher la ligne de base : © année + nom du site + note "projet".
+// - Afficher un bloc de liens sociaux (ex : LinkedIn) sous forme d’icônes cliquables.
+// - Afficher un bloc de mention légale / disclaimer en bas.
+//
+// Points clés :
+// - 100 % configurable via les props : siteName, projectNote, year, social, disclaimer.
+// - Valeurs par défaut adaptées à velo-paris.fr (projet indépendant).
+// - Accessibilité : chaque icône social a un label ARIA explicite.
+// =============================================================================
+
 import Link from "next/link";
 import { ReactNode } from "react";
 
 type SocialItem = {
+  /** URL de la cible (profil LinkedIn, autre réseau, etc.). */
   href: string;
+  /** Label ARIA décritif, ex: "LinkedIn Adrien Morel". */
   label: string;           // ex: "LinkedIn Adrien Morel"
+  /** Icône facultative (SVG ou autre ReactNode). */
   icon?: ReactNode;        // facultatif : <svg/>
 };
 
 export default function GlobalFooter({
+  /** Nom du site affiché dans le footer. */
   siteName = "velo-paris.fr",
+  /** Courte note contextuelle, ex: "Projet indépendant". */
   projectNote = "Projet indépendant",
+  /** Année affichée (par défaut : année courante). */
   year = new Date().getFullYear(),
+  /**
+   * Liste de liens sociaux (icône + label ARIA).
+   * Par défaut : lien LinkedIn d’Adrien Morel.
+   */
   social = [
     {
       href: "https://www.linkedin.com/in/adrien-morel/",
@@ -25,6 +51,10 @@ export default function GlobalFooter({
       ),
     },
   ],
+  /**
+   * Bloc de disclaimer affiché en bas du footer.
+   * Peut être surchargé par n’importe quel ReactNode.
+   */
   disclaimer = (
     <>
       <strong>Mention légale :</strong> Ce site est un projet indépendant, non affilié à une institution publique,
@@ -42,10 +72,12 @@ export default function GlobalFooter({
   return (
     <footer className="site-footer">
       <div className="footer-grid">
+        {/* Ligne principale : © année + nom du site + note projet */}
         <div>
           © <span>{year}</span> {siteName} — {projectNote}
         </div>
 
+        {/* Bloc de liens sociaux, rendu seulement si `social` non vide */}
         {social?.length ? (
           <div className="social">
             {social.map((s) => (
@@ -66,6 +98,7 @@ export default function GlobalFooter({
         ) : null}
       </div>
 
+      {/* Bloc disclaimer (texte légal ou note explicative) */}
       <p className="disclaimer">{disclaimer}</p>
     </footer>
   );

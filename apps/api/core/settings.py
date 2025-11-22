@@ -1,3 +1,17 @@
+"""API settings and environment configuration for Vélib’ Forecast.
+
+Centralizes all configuration for the API layer using Pydantic `BaseSettings`:
+
+- CORS configuration
+- GCS roots (serving, monitoring, models)
+- forecast-related options (supported horizons, cache TTL)
+- live weather (Open-Meteo)
+- misc (timezone, tmp dir, image tag)
+- legacy compatibility for older env vars (MODELS_PREFIX, GCS_SERVING_PREFIX)
+
+All values are read from environment variables with sensible defaults for local dev.
+"""
+
 from __future__ import annotations
 import json
 import re
@@ -8,6 +22,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ---------- Helpers ----------
 def _parse_cors_any(v: Optional[str]) -> List[str]:
+    """Parse a CORS origins env string into a list of origins.
+
+    Accepts:
+    - JSON array string: '["https://foo","https://bar"]'
+    - CSV string: "https://foo,https://bar"
+
+    Returns an empty list if the input is empty / None.
+    """
     if not v:
         return []
     s = v.strip()
@@ -17,6 +39,7 @@ def _parse_cors_any(v: Optional[str]) -> List[str]:
             if isinstance(arr, list):
                 return [str(x).strip() for x in arr if str(x).strip()]
         except Exception:
+            # Fallback to CSV-style parsing below
             pass
     return [x.strip() for x in s.split(",") if x.strip()]
 
@@ -44,7 +67,10 @@ def _strip_serving_prefix(p: str) -> str:
 
 
 def _strip_latest(p: str) -> str:
-    """Remove trailing '/latest.parquet' or '/latest_forecast.json' if present."""
+    """Remove trailing '/latest.parquet' or '/latest_forecast.json' if present.
+
+    Used to ensure prefixes always refer to directories, not single files.
+    """
     if not p:
         return p
     for suf in ("/latest.parquet", "/latest_forecast.json"):
@@ -55,13 +81,27 @@ def _strip_latest(p: str) -> str:
 
 # ---------- Settings ----------
 class Settings(BaseSettings):
+    """Pydantic-based settings object for the API.
+
+    Main responsibilities:
+    - expose structured settings mapped from environment variables,
+    - provide a small compatibility layer for legacy envs (`MODELS_PREFIX`,
+      `GCS_SERVING_PREFIX`),
+    - normalize GCS prefixes so they always point to folders (not files),
+    - offer small helpers (e.g. `cors_list`).
+    """
+
     # ---------- CORS ----------
+    # Raw env string (CSV or JSON array). Use `cors_list` property for parsed list.
     cors_origins: Optional[str] = Field(default=None, env="CORS_ORIGINS")
 
     # ---------- Legacy compat (kept so old env vars won't break) ----------
     # NOTE: We serve JSON now. These fields remain for backward compatibility only.
-    models_prefix: Optional[str] = Field(default=None, env="MODELS_PREFIX")         # ex: gs://.../models/*.joblib OR a single .joblib
-    gcs_serving_prefix: Optional[str] = Field(default=None, env="GCS_SERVING_PREFIX")  # ex: gs://.../serving/[...]/latest.parquet (legacy)
+    # ex: gs://.../models/*.joblib OR a single .joblib
+    models_prefix: Optional[str] = Field(default=None, env="MODELS_PREFIX")
+
+    # ex: gs://.../serving/[...]/latest.parquet (legacy)
+    gcs_serving_prefix: Optional[str] = Field(default=None, env="GCS_SERVING_PREFIX")
 
     # ---------- GCS / Forecast (JSON-first) ----------
     # Default model URI (still used by server-side inference if any)
@@ -70,7 +110,8 @@ class Settings(BaseSettings):
         env="GCS_MODEL_URI",
     )
 
-    # Parent "serving" folder (generic). We keep this for structure, but JSON is under SERVING_FORECAST_PREFIX.
+    # Parent "serving" folder (generic). We keep this for structure,
+    # but JSON is under SERVING_FORECAST_PREFIX.
     GCS_SERVING_PREFIX: str = Field(
         default="gs://velib-forecast-472820_cloudbuild/velib/serving",
         env="GCS_SERVING_PREFIX",
@@ -83,6 +124,7 @@ class Settings(BaseSettings):
     )
 
     # Horizons exposed by the API (CSV)
+    # Example: "15" or "15,60"
     FORECAST_SUPPORTED: str = Field(default="15", env="FORECAST_SUPPORTED")  # set to "15,60" when ready
 
     # In-memory cache TTL for reading latest_* bundles (seconds)
@@ -96,17 +138,22 @@ class Settings(BaseSettings):
     )
 
     # ---------- Weather (live) ----------
+    # Open-Meteo public endpoint + coordinates for Paris.
     OPENMETEO_URL: str = Field(default="https://api.open-meteo.com/v1/forecast", env="OPENMETEO_URL")
     OPENMETEO_LAT: float = Field(default=48.8566, env="OPENMETEO_LAT")
     OPENMETEO_LON: float = Field(default=2.3522, env="OPENMETEO_LON")
     OPENMETEO_TIMEOUT: float = Field(default=5.0, env="OPENMETEO_TIMEOUT")
-    METEO_DISABLE: bool = Field(default=False, env="METEO_DISABLE")  # accepts 1/true/True
+    METEO_DISABLE: bool = Field(default=False, env="METEO_DISABLE")  # accepts 1/true/True/yes
 
     # ---------- Misc ----------
     IMAGE_TAG: str = Field(default="", env="IMAGE_TAG")
     tz_app: str = Field(default="Europe/Paris", env="TZ_APP")
     tmp_dir: str = Field(default="/tmp", env="TMP_DIR")
 
+    # BaseSettings config:
+    # - support for .env file
+    # - ignore extra env vars
+    # - case-sensitive names for deterministic mapping
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -117,12 +164,18 @@ class Settings(BaseSettings):
     # ---------- Derived / helpers ----------
     @property
     def cors_list(self) -> List[str]:
+        """Return CORS origins as a parsed list of strings."""
         return _parse_cors_any(self.cors_origins)
 
     # ---------- Validators ----------
     @field_validator("GCS_MODEL_URI", "GCS_SERVING_PREFIX", "SERVING_FORECAST_PREFIX", "GCS_MONITORING_PREFIX")
     @classmethod
     def _must_be_gs_uri(cls, v: str) -> str:
+        """Ensure core GCS-related fields start with `gs://` and are stripped.
+
+        Empty values are allowed only for optional fields; here they all have
+        required defaults so we mostly enforce structure.
+        """
         # Allow empty only for optional fields (these are required defaults, so non-empty expected)
         if not v:
             return v
@@ -133,12 +186,24 @@ class Settings(BaseSettings):
     @field_validator("METEO_DISABLE", mode="before")
     @classmethod
     def _bool_compat(cls, v):
+        """Allow common string representations for booleans in env vars."""
         # Accept "1", "true", "True", "yes"
         if isinstance(v, str):
             return v.strip().lower() in ("1", "true", "yes")
         return v
 
     def __init__(self, **data):
+        """Construct settings and apply legacy compatibility / normalization.
+
+        Post-init steps:
+        - map `MODELS_PREFIX` → `GCS_MODEL_URI` if it points to a single joblib,
+        - normalize `GCS_SERVING_PREFIX` so it always points to `.../serving`,
+        - strip accidental '/latest.parquet' or '/latest_forecast.json'
+          from SERVING_FORECAST_PREFIX,
+        - re-create legacy aliases (`gcs_serving_prefix`, `models_prefix`)
+          if missing, for old code paths,
+        - strip trailing '/' from `GCS_MONITORING_PREFIX`.
+        """
         super().__init__(**data)
 
         # 1) Map legacy fields if provided (do not break old envs)
@@ -169,4 +234,5 @@ class Settings(BaseSettings):
 
 
 # ---------- Singleton ----------
+# Single shared settings instance used by the API.
 settings = Settings()
