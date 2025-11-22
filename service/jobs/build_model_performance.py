@@ -1,4 +1,5 @@
 # service/jobs/build_model_performance.py
+
 # -----------------------------------------------------------------------------
 # Build "Model Performance" monitoring artifacts from perf_YYYY-MM-DD.parquet
 # ➜ VERSION "LATEST ONLY" (no timestamped versioned folders)
@@ -41,6 +42,40 @@
 #   python -m service.jobs.build_model_performance
 # -----------------------------------------------------------------------------
 
+"""
+Vélib’ Forecast — Model Performance monitoring job (LATEST ONLY).
+
+Rôle du job
+-----------
+Ce job construit tous les artefacts de **performance modèle** consommés par
+l’UI de monitoring, à partir des fichiers journaliers `perf_YYYY-MM-DD.parquet`
+produits par `build_datasets.py`.
+
+Pour chaque horizon H (15, 60, …), il génère (en "latest only") :
+
+- `kpis.json` : métriques globales (MAE, RMSE, lift vs baseline, coverage…)
+- `daily_metrics.json` : MAE / lift par jour (courbe de lift)
+- `by_hour.json` : performance par heure locale
+- `by_dow.json` : performance par jour de la semaine
+- `by_station.json` : performance par station
+- `by_cluster.json` : performance par cluster (optionnel, via CSV)
+- `lift_curve.json` : lift vs baseline dans le temps
+- `hist_residuals.json` : histogramme des résidus (y_true - y_pred)
+- `station_timeseries.json` : série temporelle 24h d’une station choisie
+
+La fenêtre temporelle est **alignée avec Data Health** :
+
+- fenêtre CALENDRIER LOCAL (MON_TZ) sur J-(MON_LAST_DAYS-1) → J-1,
+- transformée en UTC via `_local_window_yesterday`,
+- les données sont ensuite **troncées strictement** dans cette fenêtre.
+
+En sortie, tout est publié sous :
+
+    <GCS_MONITORING_PREFIX>/monitoring/model/performance/latest/...
+
+Sans versionnement daté : l’UI ne lit que la dernière version disponible.
+"""
+
 from __future__ import annotations
 import os, re, json, sys, random
 from io import BytesIO
@@ -70,16 +105,62 @@ BIN_MIN = 5             # 5-minute cadence (pipeline invariant)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _env(name: str, default=None):
+    """
+    Lire une variable d’environnement avec valeur par défaut.
+
+    Paramètres
+    ----------
+    name : str
+        Nom de la variable d’environnement.
+    default : Any
+        Valeur de repli si la variable n’est pas définie ou vide.
+
+    Retour
+    ------
+    Any
+        Valeur de la variable ou valeur de repli.
+    """
     v = os.environ.get(name)
     return v if (v is not None and v != "") else default
 
 def _env_int(name: str, default: int) -> int:
+    """
+    Lire une variable d’environnement et la convertir en entier.
+
+    Si la conversion échoue, renvoie la valeur de repli.
+
+    Paramètres
+    ----------
+    name : str
+        Nom de la variable.
+    default : int
+        Valeur par défaut si non définie ou conversion impossible.
+
+    Retour
+    ------
+    int
+        Valeur entière ou valeur de repli.
+    """
     try:
         return int(_env(name, default))
     except Exception:
         return default
 
 def _parse_horizons() -> List[int]:
+    """
+    Résoudre la liste des horizons en minutes à monitorer.
+
+    Priorité :
+    1. MON_HORIZONS
+    2. PERF_HORIZONS
+    3. FORECAST_HORIZONS
+    4. "15" par défaut
+
+    Retour
+    ------
+    list[int]
+        Horizons triés, uniques, > 0.
+    """
     # Priority: MON_HORIZONS, then PERF_HORIZONS / FORECAST_HORIZONS
     raw = _env("MON_HORIZONS") or _env("PERF_HORIZONS") or _env("FORECAST_HORIZONS") or "15"
     hs: List[int] = []
@@ -101,11 +182,37 @@ def _parse_horizons() -> List[int]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _split(gs: str) -> Tuple[str, str]:
+    """
+    Découper une URI GCS `gs://bucket/path` en (bucket, key).
+
+    Paramètres
+    ----------
+    gs : str
+        URI GCS.
+
+    Retour
+    ------
+    (str, str)
+        Nom du bucket et chemin d’objet.
+    """
     assert gs.startswith("gs://"), f"bad GCS uri: {gs}"
     b, k = gs[5:].split("/", 1)
     return b, k.rstrip("/")
 
 def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
+    """
+    Lire un blob Parquet GCS dans un DataFrame pandas.
+
+    Paramètres
+    ----------
+    blob : google.cloud.storage.Blob
+        Blob à lire.
+
+    Retour
+    ------
+    pandas.DataFrame
+        Contenu du Parquet.
+    """
     buf = BytesIO()
     blob.download_to_file(buf)
     buf.seek(0)
@@ -153,10 +260,27 @@ def _upload_json_gs(obj: dict, gs_uri: str):
 
 def _local_window_yesterday(tzname: str, days: int, bin_min: int = BIN_MIN) -> tuple[datetime, datetime]:
     """
-    Fenêtre alignée CALENDRIER LOCAL:
-      start_local = 00:00:00 de J-(days-1)
-      end_local   = 23:55:00 de J-1 (floor bin)
-    Retourne (start_utc, end_utc) tz-aware.
+    Fenêtre alignée CALENDRIER LOCAL pour la perf (cohérente avec Data Health).
+
+    Définition (en timezone locale MON_TZ) :
+      - end_local   = 23:55:00 de J-1 (floor sur BIN_MIN)
+      - start_local = 00:00:00 de J-(days-1)
+
+    La fonction renvoie la fenêtre en UTC (tz-aware) : (start_utc, end_utc).
+
+    Paramètres
+    ----------
+    tzname : str
+        Nom de timezone (ex: "Europe/Paris").
+    days : int
+        Nombre de jours dans la fenêtre (incluant J-1).
+    bin_min : int
+        Taille d’un bin en minutes (BIN_MIN=5).
+
+    Retour
+    ------
+    (datetime, datetime)
+        (start_utc, end_utc) tz-aware.
     """
     now_local = pd.Timestamp.now(tz=tzname)
     end_local = (now_local - pd.Timedelta(days=1)).replace(hour=23, minute=59, second=59, microsecond=0)
@@ -172,6 +296,21 @@ def _ensure_mon_base(mon_prefix: str) -> str:
     return base
 
 def _to_local(utc_series: pd.Series, tzname: str) -> pd.Series:
+    """
+    Convertir une série UTC en timezone locale.
+
+    Paramètres
+    ----------
+    utc_series : pandas.Series
+        Série de timestamps (tz-aware ou naïfs).
+    tzname : str
+        Timezone cible (ex: "Europe/Paris").
+
+    Retour
+    ------
+    pandas.Series
+        Série de timestamps tz-aware dans la timezone cible.
+    """
     s = pd.to_datetime(utc_series, utc=True, errors="coerce")
     return s.dt.tz_convert(tzname)
 
@@ -210,6 +349,28 @@ def _detect_perf_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
     )
 
 def _normalize_types(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.DataFrame:
+    """
+    Normaliser les types des colonnes structurantes de perf.
+
+    - tbin     : datetime UTC tz-aware
+    - station  : string
+    - y_true   : float
+    - y_baseline, y_pred_* : float
+    - capacity : float
+    - horizons : float (avant conversion en Int64)
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Dataset perf brut.
+    cols : dict
+        Mapping des noms de colonnes.
+
+    Retour
+    ------
+    pandas.DataFrame
+        DataFrame copié/typé.
+    """
     out = df.copy()
     out[cols["tbin"]] = pd.to_datetime(out[cols["tbin"]], utc=True, errors="coerce")  # tz-aware UTC
     out[cols["station"]] = out[cols["station"]].astype("string")
@@ -252,6 +413,21 @@ def _normalize_horizon_bin(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> 
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _metrics(y_true: pd.Series, y_hat: pd.Series) -> Dict[str, float]:
+    """
+    Calculer les métriques de base : MAE, RMSE, ME (mean error).
+
+    Paramètres
+    ----------
+    y_true : pandas.Series
+        Observations.
+    y_hat : pandas.Series
+        Prédictions.
+
+    Retour
+    ------
+    dict
+        {"mae": float, "rmse": float, "me": float}
+    """
     err = y_true.astype("float64") - y_hat.astype("float64")
     mae = float(np.nanmean(np.abs(err))) if len(err) else float("nan")
     rmse = float(np.sqrt(np.nanmean(np.square(err)))) if len(err) else float("nan")
@@ -259,11 +435,41 @@ def _metrics(y_true: pd.Series, y_hat: pd.Series) -> Dict[str, float]:
     return {"mae": mae, "rmse": rmse, "me": me}
 
 def _lift(mae_base: float, mae_model: float) -> float:
+    """
+    Calculer le lift relatif vs baseline : (MAE_base - MAE_model) / MAE_base.
+
+    Gestion de sécurité si MAE_base est nul ou NaN.
+
+    Paramètres
+    ----------
+    mae_base : float
+        MAE de la baseline.
+    mae_model : float
+        MAE du modèle.
+
+    Retour
+    ------
+    float
+        Lift, ou NaN si non défini.
+    """
     if mae_base is None or np.isnan(mae_base) or mae_base == 0 or mae_model is None or np.isnan(mae_model):
         return float("nan")
     return float((mae_base - mae_model) / mae_base)
 
 def _coverage_pct(pred: pd.Series) -> float:
+    """
+    Pourcentage de lignes pour lesquelles une prédiction est disponible.
+
+    Paramètres
+    ----------
+    pred : pandas.Series
+        Série de prédictions (peut contenir des NaN).
+
+    Retour
+    ------
+    float
+        Pourcentage (0–100) de non-NaN, arrondi à 2 décimales.
+    """
     return float((pred.notna().mean() * 100.0).round(2)) if len(pred) else float("nan")
 
 
@@ -272,6 +478,27 @@ def _coverage_pct(pred: pd.Series) -> float:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _compute_global(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, window_days: int, horizon_min: Optional[int]) -> dict:
+    """
+    Calculer les KPIs globaux pour un horizon.
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Sous-ensemble perf (une horizon bin, fenêtre tronquée).
+    cols : dict
+        Mapping de colonnes (tbin, station, y_true, y_baseline, y_pred_*).
+    tzname : str
+        Timezone (non utilisée ici mais homogène avec autres helpers).
+    window_days : int
+        Fenêtre théorique en jours (pour info).
+    horizon_min : int | None
+        Horizon en minutes, ou None pour global.
+
+    Retour
+    ------
+    dict
+        KPIs globaux (mae, rmse, me, coverage, lift…).
+    """
     y_true = pd.to_numeric(df[cols["y_true"]], errors="coerce")
     y_base = pd.to_numeric(df[cols["y_baseline"]], errors="coerce")
     y_pred = _select_pred_series(df, cols)
@@ -297,6 +524,25 @@ def _compute_global(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: st
     return g
 
 def _compute_daily(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, last_days: int) -> List[dict]:
+    """
+    Calculer les métriques quotidiennes (MAE, RMSE, lift, coverage) par jour.
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Sous-ensemble perf.
+    cols : dict
+        Mapping des colonnes (tbin, station, y_true, y_baseline, y_pred_*).
+    tzname : str
+        Timezone pour le regroupement par date locale.
+    last_days : int
+        Nombre de jours max à conserver (taille de la courbe), ou 0 pour tout.
+
+    Retour
+    ------
+    list[dict]
+        Une ligne par date locale.
+    """
     tloc = _to_local(df[cols["tbin"]], tzname)
     y_true = pd.to_numeric(df[cols["y_true"]], errors="coerce")
     y_base = pd.to_numeric(df[cols["y_baseline"]], errors="coerce")
@@ -330,6 +576,23 @@ def _compute_daily(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str
     return rows
 
 def _compute_by_hour(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str) -> List[dict]:
+    """
+    Calculer les métriques agrégées par heure locale (0–23).
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Sous-ensemble perf.
+    cols : dict
+        Mapping des colonnes (tbin, station, y_true, y_baseline, y_pred_*).
+    tzname : str
+        Timezone pour l’heure locale.
+
+    Retour
+    ------
+    list[dict]
+        Une ligne par heure locale.
+    """
     tloc = _to_local(df[cols["tbin"]], tzname)
     y_true = pd.to_numeric(df[cols["y_true"]], errors="coerce")
     y_base = pd.to_numeric(df[cols["y_baseline"]], errors="coerce")
@@ -358,6 +621,23 @@ def _compute_by_hour(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: s
     return rows
 
 def _compute_by_dow(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str) -> List[dict]:
+    """
+    Calculer les métriques agrégées par jour de semaine (0=lundi,…,6=dimanche).
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Sous-ensemble perf.
+    cols : dict
+        Mapping des colonnes (tbin, station, y_true, y_baseline, y_pred_*).
+    tzname : str
+        Timezone pour le calcul du dayofweek.
+
+    Retour
+    ------
+    list[dict]
+        Une ligne par jour de la semaine.
+    """
     tloc = _to_local(df[cols["tbin"]], tzname)
     y_true = pd.to_numeric(df[cols["y_true"]], errors="coerce")
     y_base = pd.to_numeric(df[cols["y_baseline"]], errors="coerce")
@@ -386,6 +666,21 @@ def _compute_by_dow(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: st
     return rows
 
 def _compute_by_station(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> List[dict]:
+    """
+    Calculer les métriques agrégées par station (station_id).
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Sous-ensemble perf.
+    cols : dict
+        Mapping des colonnes (tbin, station, y_true, y_baseline, y_pred_*).
+
+    Retour
+    ------
+    list[dict]
+        Une ligne par station, avec lift vs baseline.
+    """
     y_true = pd.to_numeric(df[cols["y_true"]], errors="coerce")
     y_base = pd.to_numeric(df[cols["y_baseline"]], errors="coerce")
     y_pred = _select_pred_series(df, cols)
@@ -414,6 +709,23 @@ def _compute_by_station(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> Lis
     return rows
 
 def _compute_by_cluster(df: pd.DataFrame, cols: Dict[str, Optional[str]], clusters_df: Optional[pd.DataFrame]) -> Optional[List[dict]]:
+    """
+    Calculer les métriques agrégées par cluster, si un CSV de clusters est fourni.
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Sous-ensemble perf.
+    cols : dict
+        Mapping des colonnes (tbin, station, y_true, y_baseline, y_pred_*).
+    clusters_df : pandas.DataFrame | None
+        DataFrame avec au moins `station_id` et `cluster`.
+
+    Retour
+    ------
+    list[dict] | None
+        Une ligne par cluster, ou None si clusters_df absent / incompatible.
+    """
     if clusters_df is None or clusters_df.empty:
         return None
     m = df.copy()
@@ -452,10 +764,43 @@ def _compute_by_cluster(df: pd.DataFrame, cols: Dict[str, Optional[str]], cluste
     return rows
 
 def _build_lift_curve(daily_rows: List[dict]) -> dict:
+    """
+    Construire la courbe de lift à partir des daily_metrics.
+
+    Paramètres
+    ----------
+    daily_rows : list[dict]
+        Lignes de `daily_metrics` (une par date).
+
+    Retour
+    ------
+    dict
+        {"schema_version": ..., "points": [{"date": ..., "lift_vs_baseline": ...}, ...]}
+    """
     pts = [{"date": r["date"], "lift_vs_baseline": r.get("lift_vs_baseline", None)} for r in daily_rows]
     return {"schema_version": SCHEMA_VERSION, "points": pts}
 
 def _build_residual_hist(df: pd.DataFrame, cols: Dict[str, Optional[str]], bins: int) -> dict:
+    """
+    Construire un histogramme des résidus (y_true - y_pred).
+
+    - Résidus tronqués au 99e percentile absolu.
+    - Bins linéaires symétriques [-max_abs, max_abs].
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Sous-ensemble perf.
+    cols : dict
+        Mapping des colonnes (y_true, y_pred_*).
+    bins : int
+        Nombre de bins de l’histogramme.
+
+    Retour
+    ------
+    dict
+        JSON-ready avec `bins`, `counts`, `n`.
+    """
     y_true = pd.to_numeric(df[cols["y_true"]], errors="coerce")
     y_pred = _select_pred_series(df, cols)
     mask = y_pred.notna() & y_true.notna()
@@ -479,8 +824,31 @@ def _build_residual_hist(df: pd.DataFrame, cols: Dict[str, Optional[str]], bins:
 
 def _build_station_timeseries_24h(df: pd.DataFrame, min_points: int, tzname: str, horizon_min: int) -> dict:
     """
-    df: must contain normalized columns __tbin, __sid, __y, __b, __p (as in 'sub').
-    Pick a random station among those having >= min_points within the last 24h window.
+    Construire une série temporelle 24h pour une station "représentative".
+
+    Stratégie
+    ---------
+    - On identifie la dernière heure alignée (ts_max floor heure).
+    - On prend la fenêtre [ts_max-24h, ts_max[ en UTC.
+    - On filtre les stations ayant au moins `min_points` dans cette fenêtre.
+      Si aucune n’en a assez, on prend la station la plus dense.
+    - On renvoie les séries `ts`, `y_true`, `y_pred`, `y_base` pour cette station.
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Sous-ensemble perf, avec colonnes normalisées `__tbin`, `__sid`, `__y`, `__p`, `__b`.
+    min_points : int
+        Nombre minimal de points pour être éligible.
+    tzname : str
+        Timezone (stockée dans le JSON, mais ts restent en UTC string).
+    horizon_min : int
+        Horizon en minutes (pour taguer la série).
+
+    Retour
+    ------
+    dict
+        Payload JSON-ready pour l’UI.
     """
     if df.empty:
         return {
@@ -543,6 +911,23 @@ def _build_station_timeseries_24h(df: pd.DataFrame, min_points: int, tzname: str
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _read_clusters_csv(gs_uri: Optional[str]) -> Optional[pd.DataFrame]:
+    """
+    Lire un CSV de clusters station → cluster depuis GCS (optionnel).
+
+    Le fichier doit contenir au minimum les colonnes :
+        - station_id
+        - cluster
+
+    Paramètres
+    ----------
+    gs_uri : str | None
+        URI GCS du CSV (PERF_CLUSTERS_CSV).
+
+    Retour
+    ------
+    pandas.DataFrame | None
+        DataFrame (station_id, cluster) ou None si absent / invalide.
+    """
     if not gs_uri or not gs_uri.startswith("gs://"):
         return None
     bkt, key = _split(gs_uri)
@@ -579,6 +964,30 @@ def _publish_latest(base_alias: str, horizon_min: int, payloads: Dict[str, dict]
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    """
+    Entrypoint CLI du job Model Performance (LATEST ONLY).
+
+    Étapes principales
+    ------------------
+    1. Lire les ENV unifiées (GCS_EXPORTS_PREFIX, GCS_MONITORING_PREFIX,
+       MON_TZ, MON_LAST_DAYS, MON_HORIZONS…).
+    2. Construire la fenêtre "théorique" alignée Y-1 via `_local_window_yesterday`.
+    3. Lister et lire les fichiers `perf_YYYY-MM-DD.parquet` dans cette fenêtre.
+    4. Détecter les colonnes de perf et normaliser les types.
+    5. Appliquer une **troncature stricte** sur la fenêtre UTC (start_ref, end_ref).
+    6. Enregistrer la fenêtre **effective** réellement couverte par les données.
+    7. Normaliser les horizons en bins (`__hbin`) et filtrer sur les horizons demandés.
+    8. Pour chaque horizon cible :
+        - calculer les KPIs, daily_metrics, by_hour, by_dow, by_station,
+          by_cluster (optionnel), lift_curve, hist_residuals, station_timeseries.
+        - publier ces JSON sous `model/performance/latest/h{H}/`.
+    9. Construire un `manifest.json` global pour la page Monitoring (Model Perf).
+
+    Retour
+    ------
+    int
+        Code de sortie (0 = succès).
+    """
     EXPORTS_PREFIX = _env("GCS_EXPORTS_PREFIX")
     MON_PREFIX     = _env("GCS_MONITORING_PREFIX")
     if not (EXPORTS_PREFIX and str(EXPORTS_PREFIX).startswith("gs://")):

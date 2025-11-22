@@ -1,6 +1,5 @@
-# =============================================================================
 # service/jobs/build_data_health.py
-# =============================================================================
+
 # Vélib’ Forecast — Data Health (v1.6 “yesterday-window”)
 #
 # ▶ ENV HEADER UNIFIÉ (v1) — mêmes noms que les autres jobs
@@ -32,6 +31,27 @@
 #    vue **sur CETTE heure** × bins/heure (presence-aware par heure).
 # =============================================================================
 
+"""
+Data Health builder for the Vélib’ Forecast monitoring suite (schema v1.6).
+
+This job:
+- Lit les exports d’événements (events_YYYY-MM-DD.parquet) sur GCS.
+- Normalise les colonnes clés (timestamps, station_id, bikes, etc.).
+- Délimite une fenêtre de monitoring sur J-1: [J-N .. J-1].
+- Calcule les KPIs globaux de qualité de données :
+    • Fraîcheur (p50 / p95 d’âge des données, SLO).
+    • Complétude (coverage files-aware + presence-aware).
+    • Latence ingestion → event.
+    • Duplications et séquences plates (bikes constants).
+- Produit des artefacts JSON pour le monitoring UI :
+    • kpis.json
+    • station_health.json
+    • coverage_by_hour.json
+    • alerts.json
+    • anomalies/flat.json, anomalies/duplicates.json, anomalies/missing.json
+    • anomalies/manifest.json
+"""
+
 from __future__ import annotations
 import os, re, json, sys, math
 from io import BytesIO
@@ -56,14 +76,48 @@ SCHEMA_VERSION = "1.6"  # yesterday-window + freshness alignée + hourly PA fix
 # ─────────────────────────── ENV unifié ───────────────────────────
 
 def _env(name: str, default=None):
+    """
+    Lire une variable d'environnement avec valeur par défaut.
+
+    Paramètres
+    ----------
+    name : str
+        Nom de la variable d’environnement.
+    default :
+        Valeur de fallback si la variable est absente ou vide.
+
+    Retour
+    ------
+    Any
+        Chaîne ou valeur par défaut.
+    """
     v = os.environ.get(name)
     return v if (v is not None and v != "") else default
 
+
 def _env_int(name: str, default: int) -> int:
+    """
+    Lire une variable d'environnement entière avec valeur par défaut.
+
+    Si la conversion échoue, on renvoie simplement `default`.
+
+    Paramètres
+    ----------
+    name : str
+        Nom de la variable.
+    default : int
+        Valeur par défaut.
+
+    Retour
+    ------
+    int
+        Valeur entière parsée ou valeur par défaut.
+    """
     try:
         return int(_env(name, default))
     except Exception:
         return default
+
 
 GCS_EXPORTS_PREFIX    = _env("GCS_EXPORTS_PREFIX")
 GCS_MONITORING_PREFIX = _env("GCS_MONITORING_PREFIX")
@@ -78,11 +132,42 @@ if not (GCS_MONITORING_PREFIX and str(GCS_MONITORING_PREFIX).startswith("gs://")
 # ─────────────────────────── Helpers GCS ───────────────────────────
 
 def _split(gs: str) -> Tuple[str, str]:
+    """
+    Découper une URI GCS `gs://bucket/path` en (bucket, key).
+
+    Paramètres
+    ----------
+    gs : str
+        URI GCS commençant par 'gs://'.
+
+    Retour
+    ------
+    (str, str)
+        Tuple (nom_bucket, chemin_objet).
+    """
     assert gs.startswith("gs://"), f"bad GCS uri: {gs}"
     b, k = gs[5:].split("/", 1)
     return b, k.rstrip("/")
 
+
 def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datetime) -> List["storage.Blob"]:
+    """
+    Lister les blobs events_YYYY-MM-DD.parquet dans une fenêtre de dates.
+
+    Paramètres
+    ----------
+    exports_prefix : str
+        Préfixe GCS contenant les événements (GCS_EXPORTS_PREFIX).
+    start_date : datetime
+        Date UTC de début (inclus).
+    end_date : datetime
+        Date UTC de fin (inclus).
+
+    Retour
+    ------
+    list[google.cloud.storage.Blob]
+        Liste triée de blobs d’événements.
+    """
     bkt, key_prefix = _split(exports_prefix)
     client = storage.Client()
     bucket = client.bucket(bkt)
@@ -99,14 +184,44 @@ def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datet
     out.sort(key=lambda b: b.name)
     return out
 
+
 def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
+    """
+    Télécharger un blob Parquet GCS et le charger en DataFrame pandas.
+
+    Paramètres
+    ----------
+    blob : google.cloud.storage.Blob
+        Blob Parquet à lire.
+
+    Retour
+    ------
+    pandas.DataFrame
+        Données du fichier Parquet.
+    """
     buf = BytesIO()
     blob.download_to_file(buf)
     buf.seek(0)
     tbl = pq.read_table(buf)
     return tbl.to_pandas()
 
+
 def _upload_json_gs(obj: object, gs_uri: str) -> None:
+    """
+    Sérialiser un objet Python en JSON et l’uploader sur GCS.
+
+    Règles
+    ------
+    - Conversion propre des types numpy (float/int/bool).
+    - NaN / infinities → None pour du JSON valide.
+
+    Paramètres
+    ----------
+    obj : object
+        Objet JSON-sérialisable (dict, list, ...).
+    gs_uri : str
+        Destination GCS (gs://bucket/path/file.json).
+    """
     def san(o):
         if isinstance(o, dict):  return {k: san(v) for k, v in o.items()}
         if isinstance(o, list):  return [san(v) for v in o]
@@ -128,13 +243,51 @@ def _upload_json_gs(obj: object, gs_uri: str) -> None:
 # ─────────────────────────── Small helpers ───────────────────────────
 
 def _r(x: float, nd: int) -> Optional[float]:
+    """
+    Arrondir un float à `nd` décimales, en retournant None si non fini.
+
+    Paramètres
+    ----------
+    x : float
+        Valeur à arrondir.
+    nd : int
+        Nombre de décimales.
+
+    Retour
+    ------
+    float or None
+        Valeur arrondie ou None si NaN/Inf ou erreur.
+    """
     try:
         if not np.isfinite(x): return None
         return float(np.round(float(x), nd))
     except Exception:
         return None
 
+
 def _detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
+    """
+    Détecter les colonnes clés (ts, station_id, bikes, docks, etc.) de façon robuste.
+
+    La détection est basée sur des variantes de noms en minuscules, pour
+    tolérer différents schémas d’export.
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        DataFrame source.
+
+    Retour
+    ------
+    dict
+        Mapping avec les clés:
+        - ts, station, bikes, docks, capacity, ingested_at, name
+
+    Lève
+    ----
+    KeyError
+        Si les colonnes minimales (ts, station, bikes) sont introuvables.
+    """
     lower = {c.lower(): c for c in df.columns}
     def any_of(*cands):
         for c in cands:
@@ -152,10 +305,15 @@ def _detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
         raise KeyError(f"[data.health] Colonnes minimales absentes (ts={ts}, station={sid}, bikes={bikes})")
     return dict(ts=ts, station=sid, bikes=bikes, docks=docks, capacity=cap, ingested_at=ing, name=name)
 
+
 def _yesterday_end_floor(bin_min: int) -> pd.Timestamp:
     """
-    Dernier timestamp aligné sur bin_min pour J-1 en UTC (naïf).
-    Ex: bin_min=5 → 23:55:00 de J-1.
+    Dernier timestamp aligné sur `bin_min` pour J-1 en UTC (naïf).
+
+    Exemples
+    --------
+    - bin_min=5  → J-1 23:55:00
+    - bin_min=15 → J-1 23:45:00
     """
     now_utc = datetime.now(timezone.utc)
     y_end = (now_utc - timedelta(days=1)).replace(hour=23, minute=59, second=59, microsecond=0)
@@ -163,24 +321,94 @@ def _yesterday_end_floor(bin_min: int) -> pd.Timestamp:
     ts = ts.floor(f"{int(bin_min)}min")     # alignement
     return ts.tz_localize(None)             # naïf UTC
 
+
 def _window_start_for_days(end_ts: pd.Timestamp, days: int) -> pd.Timestamp:
     """
-    Début de fenêtre à 00:00:00 UTC pour couvrir EXACTEMENT `days` jours
-    se terminant à end_ts (fin de J-1). Exemple: days=7 → J-7..J-1.
+    Début de fenêtre à 00:00:00 UTC pour couvrir EXACTEMENT `days` jours.
+
+    La fenêtre inclut le jour de end_ts comme J-1, donc days=7 → J-7..J-1.
+
+    Paramètres
+    ----------
+    end_ts : pandas.Timestamp
+        Fin de fenêtre (J-1 aligné).
+    days : int
+        Nombre de jours à couvrir (>= 0).
+
+    Retour
+    ------
+    pandas.Timestamp
+        Début de fenêtre à 00:00 UTC.
     """
     d = max(int(days), 0)
     start_day = end_ts.normalize() - pd.Timedelta(days=max(d - 1, 0))
     return start_day  # 00:00 UTC
 
+
 def _bins_between(a: pd.Timestamp, b: pd.Timestamp, bin_min: int) -> int:
-    """Nb de bins (strict à gauche, inclusif à droite) alignés sur bin_min pour l’intervalle (a, b]."""
+    """
+    Nombre de bins (strict à gauche, inclusif à droite) de taille `bin_min`.
+
+    Intervalle considéré : (a, b]
+
+    Paramètres
+    ----------
+    a : pandas.Timestamp
+        Début (exclu).
+    b : pandas.Timestamp
+        Fin (inclus).
+    bin_min : int
+        Taille du pas en minutes.
+
+    Retour
+    ------
+    int
+        Nombre de bins.
+    """
     if pd.isna(a) or pd.isna(b) or b <= a:
         return 1
     return int(math.floor((b - a).total_seconds() / 60.0 / max(1, int(bin_min))) + 1)
 
 # ─────────────────────────── KPI builders ───────────────────────────
 
-def kpi_freshness(df: pd.DataFrame, sid_col: str, ts_col: str, slo_min: int, bin_min: int, now_ref: pd.Timestamp) -> dict:
+def kpi_freshness(
+    df: pd.DataFrame,
+    sid_col: str,
+    ts_col: str,
+    slo_min: int,
+    bin_min: int,
+    now_ref: pd.Timestamp,
+) -> dict:
+    """
+    Calculer la fraîcheur des données (âge des derniers points par station).
+
+    Métriques retournées
+    --------------------
+    - freshness_age_p50_min : médiane de l’âge en minutes.
+    - freshness_age_p95_min : p95 de l’âge en minutes.
+    - freshness_slo_min     : SLO cible (env).
+    - freshness_p95_ok      : bool (p95 <= slo_min) ou None si non calculable.
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Données filtrées dans la fenêtre.
+    sid_col : str
+        Nom de la colonne station_id.
+    ts_col : str
+        Nom de la colonne timestamp.
+    slo_min : int
+        SLO de fraîcheur (minutes).
+    bin_min : int
+        Pas en minutes (non utilisé directement mais gardé pour symétrie).
+    now_ref : pandas.Timestamp
+        Référence temporelle globale (fin J-1 alignée).
+
+    Retour
+    ------
+    dict
+        Dictionnaire de KPIs de fraîcheur.
+    """
     now = now_ref  # déjà aligné J-1 23:55 etc.
     last = df.groupby(sid_col)[ts_col].max().reset_index(name="last_ts")
     last["age_min"] = (now - last["last_ts"]).dt.total_seconds() / 60.0
@@ -195,6 +423,7 @@ def kpi_freshness(df: pd.DataFrame, sid_col: str, ts_col: str, slo_min: int, bin
         "freshness_p95_ok": (p95 <= slo_min) if np.isfinite(p95) else None,
     }
 
+
 def kpi_completeness_files_aware(
     df: pd.DataFrame,
     sid_col: str,
@@ -208,16 +437,47 @@ def kpi_completeness_files_aware(
     end_ref: Optional[pd.Timestamp] = None,
 ) -> Tuple[dict, pd.DataFrame, pd.DataFrame, pd.DataFrame, int, int]:
     """
-    Renvoie:
-      - kpis dict (coverage_global_pct, coverage_active_pct, ...)
-      - by_station_pa : presence-aware par station (obs, expected_i, coverage_pct)
-      - cov_by_hour   : moyenne par heure locale (presence-aware par station, PAR HEURE)
-      - by_station_global_filesaware : station_id, obs, expected_global, coverage_pct_global
-      - days_present_all, bins_per_day (pour audit/JSON)
-    Règles:
-      • Global (files-aware): expected_global = (#jours de FICHIERS présents) * (bins/jour)
-      • Presence-aware heure: expected_i(h, station) = (#jours où la station a AU MOINS 1 bin à l’heure h) * (bins/heure)
-      • Fenêtre = (t > start) & (t <= end_ref) avec end_ref = fin J-1 aligné
+    Calculer les KPIs de complétude (files-aware & presence-aware).
+
+    Définitions
+    -----------
+    - Fenêtre : (start_ref, end_ref] avec end_ref = fin J-1 alignée.
+    - days_present_all :
+        # de jours (fichiers) réellement présents dans la fenêtre.
+    - expected_global :
+        days_present_all × bins_par_jour.
+    - coverage_global_pct :
+        moyenne des coverage_pct_global par station (files-aware).
+    - by_station_pa :
+        coverage presence-aware par station (expected_i individuel).
+    - cov_by_hour :
+        coverage moyen par heure locale (presence-aware par heure).
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Événements filtrés.
+    sid_col : str
+        Colonne station.
+    ts_col : str
+        Colonne timestamp.
+    current_days : int
+        Taille de la fenêtre actuelle (en jours).
+    bin_min : int
+        Taille du pas en minutes.
+    tz : str or None
+        Timezone pour les heures locales (coverage_by_hour).
+    active_min_frac : float, optionnel
+        Filtre des stations "actives" (ratio obs/expected_i minimal).
+    weighted : bool
+        Si True, moyenne pondérée par expected_i pour coverage_active.
+    end_ref : pandas.Timestamp, optionnel
+        Fin de fenêtre (J-1 aligné). Si None, recalcul via _yesterday_end_floor.
+
+    Retour
+    ------
+    tuple
+        (kpis, by_station_pa, cov_by_hour, by_station_global, days_present_all, bins_per_day)
     """
     if current_days <= 0 or df.empty:
         empty = pd.DataFrame()
@@ -334,8 +594,34 @@ def kpi_completeness_files_aware(
     }
     return k, by_station_pa, cov_by_hour, by_station_global, days_present_all, bins_per_day
 
-def kpi_latency(df: pd.DataFrame, ts_col: str, ing_col: Optional[str], cap_min: Optional[int] = None) -> Tuple[dict, Optional[pd.DataFrame]]:
-    if not ing_col or not (ing_col in df.columns) or df[ing_col].isna().all():
+
+def kpi_latency(
+    df: pd.DataFrame,
+    ts_col: str,
+    ing_col: Optional[str],
+    cap_min: Optional[int] = None
+) -> Tuple[dict, Optional[pd.DataFrame]]:
+    """
+    Calculer la latence ingestion→event (en minutes) et ses quantiles.
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Données contenant timestamps event et ingestion.
+    ts_col : str
+        Nom de la colonne event timestamp.
+    ing_col : str or None
+        Nom de la colonne ingestion timestamp.
+    cap_min : int or None
+        Cap maximum de latence (minutes) pour robustesse.
+
+    Retour
+    ------
+    (dict, DataFrame or None)
+        - dict avec latency_p50_min, latency_p95_min.
+        - DataFrame latence brute par station (optionnel) pour debug.
+    """
+    if not ing_col or not ( ing_col in df.columns ) or df[ing_col].isna().all():
         return {"latency_p50_min": np.nan, "latency_p95_min": np.nan}, None
     lat = df.dropna(subset=[ts_col, ing_col]).copy()
     lat["latency_min"] = (lat[ing_col] - lat[ts_col]).dt.total_seconds() / 60.0
@@ -349,7 +635,25 @@ def kpi_latency(df: pd.DataFrame, ts_col: str, ing_col: Optional[str], cap_min: 
     cols_out = ["station_id","latency_min"] if "station_id" in lat.columns else ["latency_min"]
     return {"latency_p50_min": _r(p50, 2), "latency_p95_min": _r(p95, 2)}, lat[cols_out]
 
+
 def duplication_stats(df: pd.DataFrame, sid_col: str, ts_col: str) -> pd.DataFrame:
+    """
+    Compter le nombre de doublons (ts, station) par station.
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Données d’événements.
+    sid_col : str
+        Colonne station.
+    ts_col : str
+        Colonne timestamp.
+
+    Retour
+    ------
+    pandas.DataFrame
+        Colonnes: [sid_col, "dups"], trié par dups décroissant.
+    """
     if df.empty:
         return pd.DataFrame(columns=[sid_col, "dups"])
     dups = df.duplicated(subset=[ts_col, sid_col]).groupby(df[sid_col]).sum().astype(int)
@@ -358,7 +662,44 @@ def duplication_stats(df: pd.DataFrame, sid_col: str, ts_col: str) -> pd.DataFra
     out["dups"] = pd.to_numeric(out["dups"], errors="coerce").fillna(0).astype(int)
     return out
 
-def flat_sequences(df: pd.DataFrame, sid_col: str, ts_col: str, bikes_col: str, min_steps: int, current_days: int, bin_min: int) -> pd.DataFrame:
+
+def flat_sequences(
+    df: pd.DataFrame,
+    sid_col: str,
+    ts_col: str,
+    bikes_col: str,
+    min_steps: int,
+    current_days: int,
+    bin_min: int
+) -> pd.DataFrame:
+    """
+    Détecter des séquences plates (bikes constants) par station.
+
+    Une séquence plate est définie par une suite de pas consécutifs
+    où bikes ne varie pas (delta=0), d’une longueur >= min_steps.
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Données complètes.
+    sid_col : str
+        Colonne station.
+    ts_col : str
+        Colonne timestamp.
+    bikes_col : str
+        Colonne nombre de vélos.
+    min_steps : int
+        Longueur minimale de la séquence plate (en bins).
+    current_days : int
+        Fenêtre de jours considérée (J-N..J-1).
+    bin_min : int
+        Taille du pas en minutes (pour convertir steps → minutes).
+
+    Retour
+    ------
+    pandas.DataFrame
+        Colonnes: [sid_col, "steps", "start", "end", "duration_min"].
+    """
     if df.empty:
         return pd.DataFrame(columns=[sid_col,"steps","start","end","duration_min"])
     # Fenêtre cohérente (J-1)
@@ -384,6 +725,30 @@ def flat_sequences(df: pd.DataFrame, sid_col: str, ts_col: str, bikes_col: str, 
 # ─────────────────────────── Main ───────────────────────────
 
 def main() -> int:
+    """
+    Entrypoint CLI pour le job Data Health.
+
+    Pipeline
+    --------
+    1. Calculer la fenêtre temporelle [J-N .. J-1] en UTC, alignée sur BIN_MIN.
+    2. Lister et lire les fichiers events_YYYY-MM-DD.parquet dans cette fenêtre.
+    3. Détecter les colonnes clés et typer les données.
+    4. Calculer :
+        - Fraîcheur (kpi_freshness)
+        - Complétude (kpi_completeness_files_aware)
+        - Latence ingestion (kpi_latency)
+        - Duplications (duplication_stats)
+        - Séquences plates (flat_sequences)
+    5. Construire les tables station_health + coverage_by_hour.
+    6. Générer les anomalies (flat / duplicates / missing).
+    7. Uploader l’ensemble en JSON sous:
+       {GCS_MONITORING_PREFIX}/monitoring/data/health/latest
+
+    Retour
+    ------
+    int
+        Code de sortie (0 = succès).
+    """
     # Options spécifiques au job (seuils & granularité)
     TZNAME            = MON_TZ
     CURRENT_DAYS      = int(MON_LAST_DAYS)  # ← unifié
@@ -528,6 +893,11 @@ def main() -> int:
         name_lookup = dict(zip(name_lookup_df["station_id"].astype(str), name_lookup_df["name"].astype(str)))
 
     def _nm(sid: str) -> Optional[str]:
+        """
+        Chercher le nom de station correspondant à un station_id.
+
+        Retourne None si `name_lookup` n’est pas initialisé ou si absent.
+        """
         if not name_lookup: return None
         return name_lookup.get(str(sid))
 
@@ -578,6 +948,14 @@ def main() -> int:
 
     # Post-traitement anomalies
     def _postproc(an_rows: List[Dict[str, object]], sort_key: Optional[str] = None) -> List[Dict[str, object]]:
+        """
+        Trier / tronquer / échantillonner les anomalies avant JSON.
+
+        - sort_key : clé de tri décroissant.
+        - ANOM_TOPK : garde les top-k.
+        - ANOM_SAMPLE : sous-échantillonnage systématique (pas).
+        - ROUND_ND : arrondi des floats.
+        """
         rows = list(an_rows)
         if not rows: return rows
         if sort_key and all((sort_key in r) for r in rows):
@@ -679,6 +1057,10 @@ def main() -> int:
     }
 
     def _upload_anom(name: str, rows: List[Dict[str, object]]):
+        """
+        Uploader une liste d’anomalies (rows) sous anomalies/<name>.json
+        et l’ajouter au manifest.
+        """
         uri = f"{anomalies_prefix}/{name}.json"
         # correction: pas d'accolade en trop
         uri = f"{anomalies_prefix}/{name}.json"

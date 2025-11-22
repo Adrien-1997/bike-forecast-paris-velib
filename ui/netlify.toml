@@ -1,16 +1,18 @@
+# ================================
+# Netlify — Build & Runtime config
+# ================================
+
 [build]
 command = "npm run build"
 publish  = ".next"
 
 [build.environment]
-# Le front appelle directement la Function Netlify api-proxy
 NEXT_PUBLIC_API_BASE = "/.netlify/functions/api-proxy"
 
-# Liens publics Stripe
 NEXT_PUBLIC_STRIPE_MONTHLY_5 = "https://buy.stripe.com/14A7sM2pzdaY5Kd4nc4Ja03"
-NEXT_PUBLIC_STRIPE_DON_5 = "https://buy.stripe.com/6oU00kfclc6U3C5g5U4Ja02"
-NEXT_PUBLIC_STRIPE_DON_10 = "https://buy.stripe.com/5kQ3cw0hr1sgdcFcTI4Ja00"
-NEXT_PUBLIC_STRIPE_DON_20 = "https://buy.stripe.com/28E4gA8NXfj60pT9Hw4Ja01"
+NEXT_PUBLIC_STRIPE_DON_5      = "https://buy.stripe.com/6oU00kfclc6U3C5g5U4Ja02"
+NEXT_PUBLIC_STRIPE_DON_10     = "https://buy.stripe.com/5kQ3cw0hr1sgdcFcTI4Ja00"
+NEXT_PUBLIC_STRIPE_DON_20     = "https://buy.stripe.com/28E4gA8NXfj60pT9Hw4Ja01"
 
 [functions]
 directory = "netlify/functions"
@@ -22,7 +24,7 @@ package = "@netlify/plugin-nextjs"
 [[headers]]
 for = "/*"
   [headers.values]
-  Content-Security-Policy = "frame-ancestors 'self' https://velo-paris.fr https://*.velo-paris.fr https://lucky-sunshine-834fe9.netlify.app"
+  Content-Security-Policy = "frame-ancestors 'self' https://velo-paris.fr https://*.velo-paris.fr"
   Referrer-Policy = "strict-origin-when-cross-origin"
 
 [[headers]]

@@ -1,4 +1,5 @@
 # service/jobs/build_datasets.py
+
 # Daily build (à partir d'un compact_YYYY-MM-DD.parquet) :
 #  - exports/events.parquet               (jour ancre)
 #  - exports/events_YYYY-MM-DD.parquet
@@ -25,6 +26,57 @@
 #
 # Exécution :
 #   python -m service.jobs.build_datasets
+
+"""
+Vélib’ Forecast – Daily datasets builder.
+
+Rôle du job
+-----------
+À partir d’un **compact_YYYY-MM-DD.parquet** (granularité 5 minutes) :
+- produit les exports "événements" du jour ancre :
+    - events.parquet (alias latest)
+    - events_YYYY-MM-DD.parquet
+- produit les exports "perf" (targets + baseline + prédiction modèle) :
+    - perf.parquet (alias latest)
+    - perf_YYYY-MM-DD.parquet
+
+Schéma général
+--------------
+1. Lecture du compact du jour ancre (et éventuellement d’une "queue" du jour-1
+   pour éviter la cassure à minuit sur les features).
+2. Normalisation du schéma (timestamps, station_id, bikes, météo...).
+3. Construction du dataset d’événements enrichi :
+    - occ_ratio
+    - is_penury / is_saturation
+    - status_code
+    - h / min
+4. Construction d’une base de performance T → T+h pour chaque horizon :
+    - y_true, y_baseline_persist, bikes, capacity, occ_ratio.
+5. Construction des features d’inférence strictement alignées sur le training :
+    - via `_add_features_spatial` importé de `service.core.forecast`.
+6. Inférence des prédictions modèle pour chaque horizon :
+    - chargement via `predict_from_features_df` (GCS file ou prefix).
+    - post-traitement de la cible (clip 0..capacity, cast en Int64).
+7. Écriture des Parquet events_YYYY-MM-DD.parquet et perf_YYYY-MM-DD.parquet
+   sous `GCS_EXPORTS_PREFIX`.
+
+Variables d’environnement
+-------------------------
+Obligatoires:
+- GCS_DAILY_PREFIX   : gs://bucket/velib/daily
+- GCS_EXPORTS_PREFIX : gs://bucket/velib/exports
+
+Modèles:
+- MODEL_URI_15, MODEL_URI_60, etc.
+  → URI GCS d’un fichier joblib ou d’un **prefix** contenant latest.joblib.
+
+Optionnelles:
+- FORECAST_HORIZONS : "15,60" par défaut.
+- PENURY_THRESH     : seuil pénurie (bikes ≤ N).
+- SATURATION_THRESH : seuil saturation (capacity - bikes ≤ N).
+- DAY               : jour ancre "YYYY-MM-DD" (défaut today UTC).
+- HISTORY_BACK_MIN  : minutes d’historique J-1 à concaténer (défaut 240).
+"""
 
 from __future__ import annotations
 import os, re, sys
@@ -64,15 +116,66 @@ HISTORY_BACK_MIN = int(os.environ.get("HISTORY_BACK_MIN", "240"))
 # ───────────────────────────── GCS helpers ─────────────────────────────
 
 def _split(gs: str) -> Tuple[str, str]:
+    """
+    Découper une URI GCS `gs://bucket/path` en (bucket, key).
+
+    Paramètres
+    ----------
+    gs : str
+        URI GCS à analyser.
+
+    Retour
+    ------
+    (str, str)
+        Nom du bucket et chemin de l’objet (sans slash final).
+
+    Lève
+    ----
+    AssertionError
+        Si la chaîne ne commence pas par 'gs://'.
+    """
     assert gs.startswith("gs://"), f"bad GCS uri: {gs}"
     b, k = gs[5:].split("/", 1)
     return b, k.rstrip("/")
 
+
 def _open_blob(gs: str):
+    """
+    Renvoyer un objet `Blob` GCS pour une URI donnée.
+
+    Paramètres
+    ----------
+    gs : str
+        URI GCS de la forme 'gs://bucket/path/to/object'.
+
+    Retour
+    ------
+    google.cloud.storage.Blob
+        Blob GCS correspondant.
+    """
     b, k = _split(gs)
     return storage.Client().bucket(b).blob(k)
 
+
 def _read_gcs_parquet(gs: str) -> pd.DataFrame:
+    """
+    Lire un fichier Parquet stocké sur GCS dans un DataFrame pandas.
+
+    Paramètres
+    ----------
+    gs : str
+        URI GCS du Parquet à lire.
+
+    Retour
+    ------
+    pandas.DataFrame
+        Contenu du fichier Parquet.
+
+    Lève
+    ----
+    FileNotFoundError
+        Si le blob n’existe pas.
+    """
     blob = _open_blob(gs)
     if not blob.exists():
         raise FileNotFoundError(gs)
@@ -81,7 +184,18 @@ def _read_gcs_parquet(gs: str) -> pd.DataFrame:
     buf.seek(0)
     return pq.read_table(buf).to_pandas()
 
+
 def _write_gcs_parquet(df: pd.DataFrame, gs: str):
+    """
+    Écrire un DataFrame pandas en Parquet sur GCS (compression snappy).
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        DataFrame à sérialiser.
+    gs : str
+        URI GCS de destination (fichier Parquet).
+    """
     b, k = _split(gs)
     buf = BytesIO()
     pq.write_table(pa.Table.from_pandas(df, preserve_index=False), buf, compression="snappy")
@@ -89,7 +203,18 @@ def _write_gcs_parquet(df: pd.DataFrame, gs: str):
     storage.Client().bucket(b).blob(k).upload_from_file(buf, content_type="application/octet-stream")
     print(f"[build_datasets] wrote → {gs} (rows={len(df):,})")
 
+
 def _copy_gcs(src_gs: str, dst_gs: str):
+    """
+    Copier un objet GCS vers un autre emplacement GCS.
+
+    Paramètres
+    ----------
+    src_gs : str
+        URI GCS source.
+    dst_gs : str
+        URI GCS destination.
+    """
     src_b, src_k = _split(src_gs)
     dst_b, dst_k = _split(dst_gs)
     cli = storage.Client()
@@ -102,6 +227,21 @@ def _copy_gcs(src_gs: str, dst_gs: str):
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 def _anchor_day_utc() -> str:
+    """
+    Résoudre le "jour ancre" en date ISO (UTC).
+
+    Stratégie
+    ---------
+    1. Si l’ENV `DAY` est défini :
+        - Si le format est YYYY-MM-DD, le renvoyer tel quel.
+        - Sinon, essayer de le parser comme datetime et renvoyer .date().
+    2. Sinon, utiliser la date UTC du moment.
+
+    Retour
+    ------
+    str
+        Chaîne ISO "YYYY-MM-DD".
+    """
     day_env = os.environ.get("DAY")
     if day_env:
         d = day_env.strip()
@@ -113,7 +253,21 @@ def _anchor_day_utc() -> str:
             pass
     return datetime.now(timezone.utc).date().isoformat()
 
+
 def _list_available_dailies(prefix: str) -> List[str]:
+    """
+    Lister toutes les dates de dailies disponibles (compact_YYYY-MM-DD.parquet).
+
+    Paramètres
+    ----------
+    prefix : str
+        Préfixe GCS (GCS_DAILY_PREFIX).
+
+    Retour
+    ------
+    list[str]
+        Liste triée de dates "YYYY-MM-DD" trouvées.
+    """
     bkt, pfx = _split(prefix)
     cli = storage.Client()
     days = []
@@ -125,7 +279,29 @@ def _list_available_dailies(prefix: str) -> List[str]:
     days.sort()
     return days
 
+
 def _find_best_daily(prefix: str, anchor_day: str) -> Optional[str]:
+    """
+    Choisir la meilleure date de daily disponible par rapport au jour ancre.
+
+    Règles
+    ------
+    - Si des dailies ≤ anchor_day existent → prendre la plus récente.
+    - Sinon → prendre la première date > anchor_day.
+    - Sinon → None (rien disponible).
+
+    Paramètres
+    ----------
+    prefix : str
+        Préfixe GCS GCS_DAILY_PREFIX.
+    anchor_day : str
+        Jour ancre "YYYY-MM-DD".
+
+    Retour
+    ------
+    str or None
+        Jour retenu, ou None si aucun fichier compact n’est dispo.
+    """
     avail = _list_available_dailies(prefix)
     if not avail:
         return None
@@ -140,6 +316,18 @@ def _find_best_daily(prefix: str, anchor_day: str) -> Optional[str]:
 # ───────────────────────────── Normalisation ─────────────────────────────
 
 def _enforce_schema(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Forcer le schéma standard des events (COLS) avec types homogènes.
+
+    Règles
+    ------
+    - Ajoute les colonnes manquantes initialisées à None.
+    - Convertit :
+        • ts_utc, tbin_utc → datetime UTC naïf.
+        • station_id, status, name → string.
+        • bikes, capacity, mechanical, ebike → Int64 (nullable).
+        • lat, lon, météo → float.
+    """
     for c in COLS:
         if c not in df.columns:
             df[c] = None
@@ -163,7 +351,21 @@ def _enforce_schema(df: pd.DataFrame) -> pd.DataFrame:
         out[c] = out[c].astype("Int64")
     return out
 
+
 def _dedup_latest(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Supprimer les doublons sur (station_id, tbin_utc) en gardant le dernier ts_utc.
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        Données d’événements.
+
+    Retour
+    ------
+    pandas.DataFrame
+        DataFrame dédupliqué avec une ligne par (station_id, tbin_utc).
+    """
     if not {"station_id","tbin_utc","ts_utc"}.issubset(df.columns):
         return df
     df = df.sort_values(["station_id","tbin_utc","ts_utc"])
@@ -192,6 +394,19 @@ def _maybe_read_prev_tail(prefix: str, day_iso: str, back_min: int) -> pd.DataFr
 # ───────────────────────────── Events build (jour unique) ─────────────────────────────
 
 def _build_events(df_day: pd.DataFrame, penury: int, saturation: int) -> pd.DataFrame:
+    """
+    Construire le dataset d’événements enrichis pour un jour (avec historique).
+
+    Enrichissements
+    ---------------
+    - occ_ratio       : bikes / capacity.
+    - is_penury       : bikes ≤ PENURY_THRESH.
+    - is_saturation   : capacity - bikes ≤ SATURATION_THRESH.
+    - status_code     : encodage Int64 de la variable catégorielle `status`.
+    - h / min         : heure & minute de tbin_utc.
+
+    Le résultat est trié par (tbin_utc, station_id) et typé proprement.
+    """
     df = _enforce_schema(df_day)
     df = _dedup_latest(df)
 
@@ -218,7 +433,7 @@ def _build_events(df_day: pd.DataFrame, penury: int, saturation: int) -> pd.Data
         "occ_ratio","is_penury","is_saturation",
         "h","min",
     ]
-    out = df[keep].sort_values(["tbin_utc","station_id"]).reset_index(drop=True)
+    out = df[keep].sort_values(["tbin_utc","station_id"]).reset_index(drop_index=True)
     out["station_id"] = out["station_id"].astype("string")
     out["tbin_utc"]   = pd.to_datetime(out["tbin_utc"], errors="coerce")
     return out
@@ -226,6 +441,29 @@ def _build_events(df_day: pd.DataFrame, penury: int, saturation: int) -> pd.Data
 # ───────────────────────────── Perf base (T, T+h) ─────────────────────────────
 
 def _build_perf_base(events: pd.DataFrame, horizons_min: List[int]) -> pd.DataFrame:
+    """
+    Construire la base de performance T → T+h pour tous les horizons.
+
+    Pour chaque horizon h (en minutes) :
+    - hb = h/BIN_MIN bins.
+    - T = tbin_utc (temps source).
+    - tbin_target = T + hb * BIN_MIN (cible).
+    - y_true = bikes à tbin_target.
+    - y_baseline_persist = bikes(T) (persistante).
+    - On conserve également bikes(T), capacity(T), occ_ratio(T).
+
+    Paramètres
+    ----------
+    events : pandas.DataFrame
+        Dataset events du jour (already enriched via `_build_events`).
+    horizons_min : list[int]
+        Horizons en minutes (ex: [15, 60]).
+
+    Retour
+    ------
+    pandas.DataFrame
+        Base de performance avec une ligne par (T, station, horizon_bins).
+    """
     if events.empty:
         return pd.DataFrame(columns=[
             "tbin_utc","station_id","horizon_bins","tbin_target",
@@ -267,6 +505,18 @@ def _build_inference_features(events: pd.DataFrame, horizon_bins: int = 3) -> pd
     Fabrique STRICTEMENT alignée avec le training :
     - utilise _add_features_spatial (lags/rollings complets, lags météo, statiques, KNN)
     - prépare tbin_latest & capacity_bin pour predict_from_features_df
+
+    Paramètres
+    ----------
+    events : pandas.DataFrame
+        Dataset d’événements (incluant éventuellement la queue J-1).
+    horizon_bins : int, défaut 3
+        Horizon utilisé pour la fabrique (_add_features_spatial).
+
+    Retour
+    ------
+    pandas.DataFrame
+        DataFrame de features prêtes pour `predict_from_features_df`.
     """
     ev = _enforce_schema(events)
     ev = _dedup_latest(ev)
@@ -288,6 +538,24 @@ def _build_inference_features(events: pd.DataFrame, horizon_bins: int = 3) -> pd
 # ───────────────────────────── Inférence (y_pred_int) ─────────────────────────────
 
 def _infer_y_pred(perf_base: pd.DataFrame, feats_all: pd.DataFrame, horizons_min: List[int]) -> pd.DataFrame:
+    """
+    Inférer les prédictions `y_pred_int` pour chaque (T, station, horizon).
+
+    Pipeline
+    --------
+    1. Pour chaque horizon h (en minutes) → horizon_bins hb:
+       - extraire la sous-base perf_base[horizon_bins==hb].
+       - construire la table d’input X via merge avec feats_all (tbin_utc, station_id).
+    2. Charger le modèle pour cet horizon:
+       - MODEL_URI_hmin peut être un fichier ou un préfixe (latest.joblib).
+       - appel à `predict_from_features_df`.
+    3. Réconcilier la prédiction avec les lignes de perf (clé station_id + tbin_target).
+    4. Arrondir et clipper la prédiction en [0, capacity].
+
+    En sortie, on renvoie la base perf avec:
+        tbin_utc, station_id, horizon_bins,
+        y_true, y_baseline_persist, y_pred_int, bikes, capacity, occ_ratio, h, min.
+    """
     if perf_base.empty:
         merged = perf_base.assign(y_pred_int=pd.Series([pd.NA]*len(perf_base), dtype="Int64"))
         t = pd.to_datetime(merged["tbin_utc"], errors="coerce")
@@ -301,6 +569,16 @@ def _infer_y_pred(perf_base: pd.DataFrame, feats_all: pd.DataFrame, horizons_min
         uri_map[hb] = os.environ.get(f"MODEL_URI_{hmin}")  # fichier *ou* prefix (résolu en latest)
 
     def _pick_pred_cols(df: pd.DataFrame) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Heuristique pour trouver les colonnes de prédiction dans le DF de sortie.
+
+        Renvoie:
+        - int_col   : une colonne d’entiers si dispo (bikes_pred_int, y_pred_int…).
+        - float_col : sinon, une colonne de floats (bikes_pred, y_pred, yhat…).
+
+        Si aucune colonne standard n’est trouvée, tente un fallback sur les
+        colonnes commençant par 'y_pred', 'yhat' ou 'bikes_pred'.
+        """
         int_prefs   = ["bikes_pred_int", "y_pred_int"]
         float_prefs = ["bikes_pred", "y_pred", "yhat", "prediction", "pred"]
         int_col = next((c for c in int_prefs if c in df.columns), None)
@@ -423,6 +701,29 @@ def _infer_y_pred(perf_base: pd.DataFrame, feats_all: pd.DataFrame, horizons_min
 # ───────────────────────────── Main (daily) ─────────────────────────────
 
 def main() -> int:
+    """
+    Entrypoint CLI pour le job quotidien build_datasets.
+
+    Étapes
+    ------
+    1. Résoudre le jour ancre (DAY ou today UTC) et sélectionner le meilleur
+       compact_YYYY-MM-DD.parquet disponible sous GCS_DAILY_PREFIX.
+    2. Définir la fenêtre [day_start, day_end[ en UTC.
+    3. Lire le compact du jour + la "queue" de J-1 (HISTORY_BACK_MIN).
+    4. Construire les events combinés sur (queue + jour) puis filtrer sur le
+       jour ancre uniquement pour l’export.
+    5. Construire la base perf à partir des events du jour.
+    6. Construire les features d’inférence sur l’historique (queue+jour).
+    7. Inférer les prédictions pour chaque horizon (MODEL_URI_*).
+    8. Écrire :
+        - exports/events_YYYY-MM-DD.parquet
+        - exports/perf_YYYY-MM-DD.parquet
+
+    Retour
+    ------
+    int
+        Code de sortie (0 = succès).
+    """
     DAILY_PREFIX   = os.environ.get("GCS_DAILY_PREFIX")
     EXPORTS_PREFIX = os.environ.get("GCS_EXPORTS_PREFIX")
     HORIZONS       = [int(x.strip()) for x in os.environ.get("FORECAST_HORIZONS","15,60").split(",") if x.strip()]

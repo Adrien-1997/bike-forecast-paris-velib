@@ -1,4 +1,57 @@
 # service/jobs/build_network_dynamics.py
+
+"""
+Vélib’ Forecast — Network Dynamics monitoring job (LATEST ONLY).
+
+Role
+----
+This job reads the *event* parquet files:
+
+    gs://.../velib/exports/events_YYYY-MM-DD.parquet
+
+over a sliding window of `MON_LAST_DAYS` days (in UTC), and builds several
+JSON artifacts used by the **Network Dynamics** page of the Monitoring UI:
+
+- heatmaps & profiles (dow × hour) for:
+    * mean occupancy
+    * penury rate
+    * saturation rate
+- hourly penury/saturation rates (0–23h)
+- penury / saturation episodes by station (≥ ~1 hour)
+- aggregates "by zone" (lat/lon coarse grid)
+- tension index by station (penury_rate + saturation_rate)
+- regularity_today: correlation between today's occupancy curve and
+  the "typical" curve for the same weekday over the last ~90 days.
+
+Outputs (LATEST only)
+---------------------
+All artifacts are published under:
+
+    <GCS_MONITORING_PREFIX>/monitoring/network/dynamics/latest/
+
+with a `manifest.json` describing the window, thresholds, and produced files.
+
+Environment
+-----------
+Required:
+    GCS_EXPORTS_PREFIX    = gs://bucket/velib/exports
+    GCS_MONITORING_PREFIX = gs://bucket/velib  (or .../monitoring)
+
+Optional (only MON_*):
+    MON_TZ                = Europe/Paris  (timezone for local calendars)
+    MON_LAST_DAYS         = 7            (window length, in days)
+    MON_PENURY_THRESH     = 2            (bikes <= T → penury candidate)
+    MON_SATURATION_THRESH = 2            (capacity - bikes <= T → saturation candidate)
+
+Notes
+-----
+- All outputs are *LATEST ONLY* (no dated folders); the UI always reads
+  from `.../network/dynamics/latest/...`.
+- JSON is sanitized: NaN/±Inf converted to null.
+- Penury / saturation flags are made **exclusive** at row level:
+  a row cannot be both penury and saturation.
+"""
+
 from __future__ import annotations
 import os, re, json, sys
 from io import BytesIO
@@ -23,11 +76,44 @@ SCHEMA_VERSION = "1.3"  # ENV unifié MON_*, fenêtre stricte, manifest, LATEST 
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV — unifié (pas de fallbacks exotiques)
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _env(name: str, default=None):
+    """
+    Read an environment variable with a default fallback.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name.
+    default : Any
+        Fallback value if the variable is missing or empty.
+
+    Returns
+    -------
+    Any
+        Raw string value from the environment, or the default.
+    """
     v = os.environ.get(name)
     return v if (v is not None and v != "") else default
 
 def _env_int(name: str, default: int) -> int:
+    """
+    Read an integer-valued environment variable.
+
+    If parsing fails, the provided default is returned.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name.
+    default : int
+        Fallback integer value.
+
+    Returns
+    -------
+    int
+        Parsed integer or default.
+    """
     try:
         return int(_env(name, default))
     except Exception:
@@ -51,12 +137,44 @@ if not (GCS_MONITORING_PREFIX and str(GCS_MONITORING_PREFIX).startswith("gs://")
 # ──────────────────────────────────────────────────────────────────────────────
 # GCS helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _split(gs: str) -> Tuple[str, str]:
+    """
+    Split a GCS URI `gs://bucket/path` into (bucket, key).
+
+    Parameters
+    ----------
+    gs : str
+        GCS URI.
+
+    Returns
+    -------
+    (str, str)
+        Bucket name and object key (without trailing slash).
+
+    Raises
+    ------
+    AssertionError
+        If the URI does not start with `gs://`.
+    """
     assert gs.startswith("gs://"), f"bad GCS uri: {gs}"
     b, k = gs[5:].split("/", 1)
     return b, k.rstrip("/")
 
 def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
+    """
+    Read a Parquet blob from GCS into a pandas DataFrame.
+
+    Parameters
+    ----------
+    blob : google.cloud.storage.Blob
+        GCS blob pointing to a parquet file.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame loaded from the parquet content.
+    """
     buf = BytesIO()
     blob.download_to_file(buf)
     buf.seek(0)
@@ -64,6 +182,26 @@ def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
     return tbl.to_pandas()
 
 def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datetime) -> List["storage.Blob"]:
+    """
+    List `events_YYYY-MM-DD.parquet` blobs in a given UTC date window.
+
+    The filter is done on the date embedded in the file name.
+
+    Parameters
+    ----------
+    exports_prefix : str
+        Base GCS prefix for exports (GCS_EXPORTS_PREFIX).
+    start_date : datetime
+        Start of the window (inclusive, UTC).
+    end_date : datetime
+        End of the window (inclusive, UTC).
+
+    Returns
+    -------
+    list[google.cloud.storage.Blob]
+        Sorted list of blobs matching `events_YYYY-MM-DD.parquet`
+        within the requested date range.
+    """
     bkt, key_prefix = _split(exports_prefix)
     client = storage.Client()
     bucket = client.bucket(bkt)
@@ -100,7 +238,33 @@ def _upload_json_gs(obj: dict | list, gs_uri: str, log_prefix: str = "network.dy
 # ──────────────────────────────────────────────────────────────────────────────
 # Core helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
+    """
+    Auto-detect core columns in the events dataframe.
+
+    The function is tolerant to different naming conventions and returns a
+    mapping with the following keys (values may be None if not found):
+
+        ts, station, bikes, docks, capacity, name, lat, lon, is_pen, is_sat
+
+    Minimal required columns are: timestamp, station_id, bikes.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Raw events dataframe.
+
+    Returns
+    -------
+    dict
+        Mapping from logical column names to actual DataFrame column names.
+
+    Raises
+    ------
+    KeyError
+        If minimal columns are not present.
+    """
     lower = {c.lower(): c for c in df.columns}
     def any_of(*cands):
         for c in cands:
@@ -123,10 +287,38 @@ def _detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
                 name=name, lat=lat, lon=lon, is_pen=is_pen, is_sat=is_sat)
 
 def _to_local(s_utc_like: pd.Series, tzname: str) -> pd.Series:
+    """
+    Convert a timestamp-like Series to a localized datetime (tz-aware).
+
+    Parameters
+    ----------
+    s_utc_like : pandas.Series
+        Series convertible to datetime (assumed UTC).
+    tzname : str
+        Target timezone name (e.g. "Europe/Paris").
+
+    Returns
+    -------
+    pandas.Series
+        Timezone-aware series converted to the target timezone.
+    """
     s = pd.to_datetime(s_utc_like, utc=True, errors="coerce")
     return s.dt.tz_convert(tzname)
 
 def _safe_num(v: object) -> Optional[float]:
+    """
+    Safely cast a value to float, returning None for NaN/Inf or errors.
+
+    Parameters
+    ----------
+    v : Any
+        Input value.
+
+    Returns
+    -------
+    float | None
+        Finite float or None.
+    """
     try:
         f = float(v)
         return f if np.isfinite(f) else None
@@ -136,6 +328,7 @@ def _safe_num(v: object) -> Optional[float]:
 # ──────────────────────────────────────────────────────────────────────────────
 # Occupation + masques EXCLUSIFS
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _estimate_capacity_window(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.Series:
     """Capacité estimée par station : priorité capacité fournie ; sinon q98(bikes+docks) ; sinon q98(bikes)."""
     sid = cols["station"]; bikes = cols["bikes"]; docks = cols["docks"]; cap = cols["capacity"]
@@ -163,7 +356,21 @@ def _estimate_capacity_window(df: pd.DataFrame, cols: Dict[str, Optional[str]]) 
 def _compute_occ_and_masks(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.DataFrame:
     """
     Ajoute : occ (0..1 ou NaN), valid (bool), is_pen, is_sat (EXCLUSIFS) pour CHAQUE LIGNE.
+
     Important : on utilise toujours df['cap_est'] alignée ligne à ligne (merge par station).
+
+    Règles
+    ------
+    - cap_est estimée par station si absente (voir `_estimate_capacity_window`)
+    - occ = bikes / cap_est, borné à [0,1], NaN si cap_est non valide
+    - valid = isfinite(occ)
+    - penury brute :
+        * bikes <= MON_PENURY_THRESH
+    - saturation brute :
+        * si docks dispo : docks == 0
+        * sinon : capacity - bikes <= MON_SATURATION_THRESH
+    - is_sat = saturation_brute & valid
+    - is_pen = penury_brute & valid & ~is_sat   (exclusivité)
     """
     bikes = cols["bikes"]; docks = cols["docks"]; sid = cols["station"]
 
@@ -206,7 +413,19 @@ def _compute_occ_and_masks(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> 
 # ──────────────────────────────────────────────────────────────────────────────
 # Dynamics computations (JSON-oriented)
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _heatmap_and_profiles(ev: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str) -> dict:
+    """
+    Build dow×hour heatmaps and daily profiles of occupancy.
+
+    Heatmaps:
+      - occ_mean[dow][hour]
+      - penury_rate[dow][hour]
+      - saturation_rate[dow][hour]
+
+    Profiles:
+      - for each dow, the list of 24 occ_mean values (0..1 or None).
+    """
     ts = cols["ts"]
     ldt = _to_local(ev[ts], tzname)
     df = ev.assign(dow=ldt.dt.dayofweek, hour=ldt.dt.hour).copy()
@@ -238,6 +457,11 @@ def _heatmap_and_profiles(ev: pd.DataFrame, cols: Dict[str, Optional[str]], tzna
     }
 
 def _hourly_pen_sat(ev: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str) -> dict:
+    """
+    Compute hourly penury/saturation rates aggregated over the full window.
+
+    Output: one row per hour 0..23 with mean penury_rate and saturation_rate.
+    """
     ts = cols["ts"]
     ldt = _to_local(ev[ts], tzname)
     df = ev.assign(hour=ldt.dt.hour).copy()
@@ -255,6 +479,22 @@ def _hourly_pen_sat(ev: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: st
     return {"schema_version": SCHEMA_VERSION, "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"), "rows": rows}
 
 def _episodes(ev: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, last_days: int) -> dict:
+    """
+    Detect penury / saturation episodes per station over the last N days.
+
+    Definition
+    ----------
+    - The window is restricted to the last `last_days` (local time).
+    - Sampling step (minutes) is estimated from median inter-timestamp diff.
+    - An episode is a consecutive run of True flags (penury or saturation)
+      of at least ~1 hour (computed as 60 / step_min rounded).
+
+    Result
+    ------
+    A list of episodes with:
+      station_id, type ("penury"/"saturation"), start_utc, end_utc,
+      steps, duration_min.
+    """
     ts = cols["ts"]; sid = cols["station"]
     if last_days <= 0 or ev.empty:
         return {"schema_version": SCHEMA_VERSION, "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"), "rows": []}
@@ -305,6 +545,19 @@ def _episodes(ev: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, las
             "last_days": last_days, "rows": sorted(rows, key=lambda r: (r["station_id"], r["start_utc"]))}
 
 def _by_zone(ev: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, last_days: int) -> dict:
+    """
+    Aggregate dynamics metrics by coarse spatial zones (lat/lon grid).
+
+    - Window restricted to last `last_days` (local time).
+    - Each zone is defined by rounding (lat, lon) to 3 decimals and
+      concatenating as "<lat>|<lon>".
+    - For each zone:
+        * occ_mean
+        * penury_rate
+        * saturation_rate
+        * cap_sum   (sum of station capacities in the zone)
+        * n_obs     (number of valid occupancy observations)
+    """
     ts = cols["ts"]; sid = cols["station"]; latc = cols["lat"]; lonc = cols["lon"]
     ldt = _to_local(ev[ts], tzname)
     tmax = ldt.max(); tmin = tmax - pd.Timedelta(days=last_days)
@@ -353,6 +606,19 @@ def _by_zone(ev: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, last
             "last_days": last_days, "rows": rows}
 
 def _tension_by_station(ev: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, last_days: int) -> dict:
+    """
+    Compute a tension index per station over the last `last_days`.
+
+    For each station, we aggregate:
+      - penury_rate
+      - saturation_rate
+      - occ_mean
+      - name, lat, lon
+      - n_obs (valid occupancy observations)
+      - tension_index = penury_rate + saturation_rate
+
+    The resulting rows are sorted by decreasing tension_index.
+    """
     ts = cols["ts"]; sid = cols["station"]; namec = cols["name"]; latc = cols["lat"]; lonc = cols["lon"]
     ldt = _to_local(ev[ts], tzname)
     tmax = ldt.max(); tmin = tmax - pd.Timedelta(days=last_days)
@@ -404,6 +670,27 @@ def _tension_by_station(ev: pd.DataFrame, cols: Dict[str, Optional[str]], tzname
             "last_days": last_days, "rows": rows}
 
 def _regularity_today(ev: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str) -> dict:
+    """
+    Measure how "regular" today's occupancy curve is, per station.
+
+    Idea
+    ----
+    For each station:
+      1. Extract today's occupancy curve (local date of last event file).
+      2. Build a "typical" occupancy curve for the same weekday:
+         median occupancy by hh:mm across past days (same dow, last ~90 days).
+      3. Compute the Pearson correlation between:
+         - today's curve
+         - the typical curve
+         Only if there are ≥ 8 overlapping time points and both curves have
+         non-zero standard deviation.
+
+    Output
+    ------
+    A row per station:
+      - station_id
+      - regularity_corr_today_vs_typical (float in [-1, 1] or None)
+    """
     ts = cols["ts"]; sid = cols["station"]; bikes = cols["bikes"]
     if ev.empty:
         return {"schema_version": SCHEMA_VERSION, "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"), "rows": []}
@@ -470,7 +757,40 @@ def _regularity_today(ev: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: 
 # ──────────────────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────────────────
+
 def main() -> int:
+    """
+    CLI entrypoint for the Network Dynamics job (LATEST ONLY).
+
+    Pipeline
+    --------
+    1. Define a strict UTC window of `MON_LAST_DAYS` days:
+         start = 00:00:00 of (today - (MON_LAST_DAYS - 1))
+         end   = now (UTC)
+    2. List and read all `events_YYYY-MM-DD.parquet` in the window.
+       If none are found, publish a minimal manifest and stop.
+    3. Detect columns and normalize dtypes (timestamps, numerics, strings).
+       Filter events strictly within [start, end].
+    4. Determine `day_for_today_utc` from the last events file name.
+    5. Compute dynamics artifacts:
+         - heatmaps & profiles,
+         - hourly penury/saturation,
+         - episodes per station,
+         - by_zone aggregates,
+         - tension_by_station,
+         - regularity_today.
+    6. Upload each artifact as JSON under:
+         <GCS_MONITORING_PREFIX>/monitoring/network/dynamics/latest/
+    7. Build and upload `manifest.json` summarizing:
+         - schema version, window_days, tz,
+         - thresholds, sources, artifacts list,
+         - day_for_today_utc.
+
+    Returns
+    -------
+    int
+        Exit code (0 = success).
+    """
     now = datetime.now(timezone.utc)
 
     # Fenêtre STRICTE = MON_LAST_DAYS

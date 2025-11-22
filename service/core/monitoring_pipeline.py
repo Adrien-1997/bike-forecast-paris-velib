@@ -1,3 +1,5 @@
+# service/core/monitoring_pipeline.py
+
 # =============================================================================
 #  Vélib’ Forecast — Monitoring Pipeline (v2)
 # =============================================================================
@@ -102,6 +104,25 @@
 #   • Designed to run daily via Cloud Run Job or Cloud Scheduler.
 # =============================================================================
 
+"""
+Monitoring pipeline orchestrator for Vélib' Forecast.
+
+Ce module ne fait **qu'une chose** : lancer, dans le bon ordre, toutes les
+jobs de monitoring (data, modèle, réseau, intro) en appliquant quelques
+règles de configuration :
+
+- résolution de la liste de steps (CLI / env / DEFAULT_STEPS),
+- application de valeurs par défaut pour les fenêtres temporelles (14 / 28 jours),
+- gestion optionnelle d'un verrou GCS (GCS_LOCK) pour éviter les exécutions concurrentes,
+- propagation minimale des variables d'environnement (fenêtres, horizons, URIs).
+
+Important :
+-----------
+- Le pipeline n'écrit **rien** dans les datasets ni les modèles : il ne
+  fabrique que des artefacts JSON consommés par l'UI de monitoring.
+- Le comportement en cas d'erreur est contrôlé par CONTINUE_ON_ERROR.
+"""
+
 from __future__ import annotations
 import os, sys, shlex, contextlib
 from dataclasses import dataclass
@@ -116,6 +137,8 @@ except Exception:
 # ──────────────────────────────────────────────────────────────────────────────
 # Chaîne MONITORING unifiée (datasets/compact exclus par défaut)
 # ──────────────────────────────────────────────────────────────────────────────
+
+#: Steps par défaut pour la pipeline de monitoring (ordre logique).
 DEFAULT_STEPS = [
     "data_health",
     "data_drift",
@@ -150,20 +173,64 @@ MODULES: Dict[str, str] = {
     "intro":                "service.jobs.build_monitoring_intro",
 }
 
+
 @dataclass
 class Cfg:
+    """
+    Configuration runtime de la pipeline de monitoring.
+
+    Attributes
+    ----------
+    steps : list[str]
+        Steps à exécuter (data_health, model_performance, ...).
+    dry_run : bool
+        Si True, affiche les commandes sans les exécuter.
+    continue_on_error : bool
+        Si False, arrêt au premier step en erreur.
+    python_bin : str
+        Binaire Python utilisé pour lancer les modules (par défaut sys.executable).
+    gcs_lock : str | None
+        URI GCS d'un lock optionnel pour éviter les exécutions concurrentes.
+    """
     steps: List[str]
     dry_run: bool
     continue_on_error: bool
     python_bin: str
     gcs_lock: Optional[str]
 
+
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
+    """
+    Lire une variable d'environnement avec valeur par défaut.
+
+    Parameters
+    ----------
+    name : str
+        Nom de la variable.
+    default : str | None
+        Valeur fallback si la variable est absente ou vide.
+
+    Returns
+    -------
+    str | None
+        Valeur résolue ou `default`.
+    """
     v = os.environ.get(name)
     return v if (v is not None and v != "") else default
 
+
 def _parse_steps(arg_line: Optional[str]) -> List[str]:
-    """Priorité CLI (--steps=...), puis env STEPS; sinon DEFAULT_STEPS."""
+    """
+    Résoudre la liste de steps à partir du CLI et de l'env.
+
+    Priorité :
+    ----------
+    1) CLI : --steps=STEP1,STEP2,...
+    2) ENV : STEPS=...
+    3) DEFAULT_STEPS
+
+    Un step inconnu provoque une ValueError avec la liste des steps valides.
+    """
     cli = None
     if arg_line:
         for a in arg_line.split():
@@ -184,7 +251,28 @@ def _parse_steps(arg_line: Optional[str]) -> List[str]:
         out.append(s)
     return out
 
+
 def _acquire_lock(uri: Optional[str]):
+    """
+    Tenter d'acquérir un verrou dans GCS pour éviter les exécutions concurrentes.
+
+    Stratégie :
+    -----------
+    - Si `uri` est None → lock désactivé (retourne None).
+    - Si google-cloud-storage n'est pas dispo → avertissement + pas de lock.
+    - Si upload avec `if_generation_match=0` échoue → le lock existe déjà
+      ou erreur de création → on log et on signale l'absence de lock.
+
+    Parameters
+    ----------
+    uri : str | None
+        URI GCS du lock (ex: gs://bucket/velib/locks/monitoring.lock).
+
+    Returns
+    -------
+    google.cloud.storage.blob.Blob | None
+        Blob GCS représentant le lock, ou None si non acquis.
+    """
     if not uri:
         print("[lock] disabled (no GCS_LOCK)")
         return None
@@ -202,14 +290,36 @@ def _acquire_lock(uri: Optional[str]):
         print("[lock] busy (or create error) → exit 0")
         return None
 
+
 def _release_lock(blob):
+    """
+    Libérer le verrou GCS si présent.
+
+    Toute exception lors du delete est silencieusement ignorée.
+    """
     if not blob:
         return
     with contextlib.suppress(Exception):
         blob.delete()
         print("[lock] released")
 
+
 def _run_module(python_bin: str, module: str) -> int:
+    """
+    Exécuter un module Python (`python -m <module>`) et retourner le code de sortie.
+
+    Parameters
+    ----------
+    python_bin : str
+        Binaire Python à utiliser.
+    module : str
+        Nom du module (ex: 'service.jobs.build_data_health').
+
+    Returns
+    -------
+    int
+        Code de retour du sous-processus (0 = succès).
+    """
     cmd = [python_bin, "-m", module]
     print("[run]", " ".join(shlex.quote(x) for x in cmd))
     try:
@@ -222,7 +332,18 @@ def _run_module(python_bin: str, module: str) -> int:
         print(f"[run][error] {module} → {e}", file=sys.stderr)
         return 1
 
+
 def _echo_env(keys: List[str], title: str = "[env]") -> None:
+    """
+    Loguer une sélection de variables d'environnement (sans secrets).
+
+    Parameters
+    ----------
+    keys : list[str]
+        Variables à afficher si elles sont présentes.
+    title : str
+        Préfixe de la ligne log.
+    """
     pairs = []
     for k in keys:
         v = os.environ.get(k)
@@ -231,15 +352,39 @@ def _echo_env(keys: List[str], title: str = "[env]") -> None:
     if pairs:
         print(f"{title} " + " ".join(pairs))
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Par-défaut “fenêtres jours” : 14j partout, OVERVIEW à 28j
 # (ne force rien si l’utilisateur a déjà posé la variable)
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _set_default(name: str, value: str) -> None:
+    """
+    Poser une variable d'environnement si elle n'existe pas déjà.
+
+    Parameters
+    ----------
+    name : str
+        Nom de la variable.
+    value : str
+        Valeur à définir si absente.
+    """
     if not os.environ.get(name):
         os.environ[name] = value
 
+
 def _apply_default_windows() -> None:
+    """
+    Appliquer les valeurs par défaut des fenêtres temporelles de monitoring.
+
+    Convention :
+    ------------
+    - 14 jours partout (santé, drift, perf, dynamiques, stations, explainability),
+    - 28 jours pour l'overview réseau (fenêtre plus longue pour les KPIs globaux).
+
+    Important : cette fonction **n'écrase pas** les variables déjà définies.
+    Elle ne fait que fixer des defaults.
+    """
     # Data Health
     _set_default("DATA_HEALTH_LAST_DAYS", "14")     # si ton job lit LAST_DAYS
     _set_default("DATA_HEALTH_CURRENT_DAYS", "14")  # compat avec ton implémentation actuelle
@@ -268,7 +413,30 @@ def _apply_default_windows() -> None:
     # (facultatif) référence utilisée dans l’overview si besoin
     _set_default("OVERVIEW_REF_DAYS", "28")
 
+
 def main(argv: List[str] | None = None) -> int:
+    """
+    Point d'entrée principal de la pipeline de monitoring.
+
+    Rôle :
+    ------
+    - Résoudre la configuration (`Cfg`) à partir des arguments + env.
+    - Appliquer les valeurs par défaut des fenêtres (14/28 jours).
+    - Afficher les variables d'environnement pertinentes (sanity check).
+    - Acquérir éventuellement un verrou GCS (GCS_LOCK).
+    - Exécuter séquentiellement les steps demandés via `_run_module`.
+    - Respecter CONTINUE_ON_ERROR pour décider de s'arrêter ou non.
+
+    Parameters
+    ----------
+    argv : list[str] | None
+        Arguments CLI (par défaut `sys.argv`).
+
+    Returns
+    -------
+    int
+        Code de retour global (0 = succès, sinon dernier code d'erreur rencontré).
+    """
     argv = sys.argv if argv is None else argv
     arg_line = " ".join(argv[1:]) if len(argv) > 1 else None
     try:
@@ -327,7 +495,7 @@ def main(argv: List[str] | None = None) -> int:
     # lock
     lock = _acquire_lock(cfg.gcs_lock)
     if cfg.gcs_lock and lock is None:
-        # lock demandé mais pas obtenu
+        # lock demandé mais pas obtenu → on sort silencieusement (exit 0)
         return 0
 
     try:
@@ -348,6 +516,7 @@ def main(argv: List[str] | None = None) -> int:
         return exit_code
     finally:
         _release_lock(lock)
+
 
 if __name__ == "__main__":
     sys.exit(main())

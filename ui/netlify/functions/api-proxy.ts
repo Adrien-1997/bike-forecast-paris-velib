@@ -1,11 +1,14 @@
+// netlify/functions/api-proxy.ts
 import type { Handler, HandlerEvent } from "@netlify/functions";
 
 const BASE = (process.env.CLOUD_RUN_BASE || "").replace(/\/$/, "");
 const API_PREFIX = (process.env.API_PREFIX || "").replace(/^\/|\/$/g, "");
+const BEARER = process.env.API_GLOBAL_TOKEN ? `Bearer ${process.env.API_GLOBAL_TOKEN}` : "";
 
 function buildForwardHeaders(src: Record<string, string | undefined> | undefined): Headers {
   const h = new Headers();
   if (!src) return h;
+
   for (const [k, v] of Object.entries(src)) {
     if (!v) continue;
     const kl = k.toLowerCase();
@@ -13,8 +16,18 @@ function buildForwardHeaders(src: Record<string, string | undefined> | undefined
     if (kl === "host" || kl === "connection" || kl === "transfer-encoding") continue;
     h.set(k, v);
   }
-  // ⚠️ Empêche la compression côté upstream pour éviter la double-gestion
+
+  // Toujours demander du JSON
+  if (!h.has("accept")) h.set("accept", "application/json");
+
+  // ⚠️ Empêche la double compression
   h.set("accept-encoding", "identity");
+
+  // 🔐 Injecte le token si absent côté client
+  if (!h.has("authorization") && BEARER) {
+    h.set("authorization", BEARER);
+  }
+
   return h;
 }
 
@@ -44,13 +57,12 @@ export const handler: Handler = async (event: HandlerEvent) => {
     const ab = await res.arrayBuffer();
     const buf = Buffer.from(ab);
 
-    // Recompose des entêtes propres pour le client
+    // Entêtes propres pour le client
     const out: Record<string, string> = {};
     res.headers.forEach((v, k) => {
       const kl = k.toLowerCase();
-      // ⚠️ on supprime toute indication de compression & hop-by-hop
       if (kl === "transfer-encoding" || kl === "connection" || kl === "content-encoding") return;
-      if (kl === "content-length") return; // on remettra la nôtre
+      if (kl === "content-length") return;
       out[k] = v;
     });
     out["Content-Length"] = String(buf.length);

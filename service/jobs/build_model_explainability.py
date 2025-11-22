@@ -1,4 +1,5 @@
 # service/jobs/build_model_explainability.py
+
 """
 Vélib' Forecast — Model Explainability (LATEST only, XGBoost native FI)
 Unifié ENV : MON_TZ / MON_LAST_DAYS / MON_HORIZONS
@@ -26,6 +27,20 @@ Tuning résidus/incertitude/FI :
 - EXPLAIN_FI_TOPK_TO_PUBLISH
 
 Sortie : latest only (pas de dossier daté)
+
+Rôle global du job
+------------------
+Ce job construit la "brique explainability" du monitoring modèle :
+- lecture du dernier dataset de performance (perf.parquet ou perf_YYYY-MM-DD.parquet),
+- filtrage sur une fenêtre glissante en jours,
+- séparation par horizons (h = 15, 60, ...),
+- calcul des artefacts suivants, pour chaque horizon :
+    • résidus (histogrammes, QQ-plot, ACF, épisodes),
+    • calibration (fit global, par quantile, par heure, biais spatial par station),
+    • incertitude (couverture des bandes, sigma paramétrique ou quantiles de résidus),
+    • feature importance native XGBoost (gain / cover / weight),
+- publication en JSON sous:
+    GCS_MONITORING_PREFIX/monitoring/model/explainability/latest/h{H}/...
 """
 
 from __future__ import annotations
@@ -68,16 +83,63 @@ FI_TOPK_TO_PUBLISH  = int(os.environ.get("EXPLAIN_FI_TOPK_TO_PUBLISH", "60"))
 
 # ────────────────────────── ENV unifié ───────────────────────────────
 def _env(name: str, default=None):
+    """
+    Lire une variable d'environnement avec une valeur par défaut.
+
+    Paramètres
+    ----------
+    name : str
+        Nom de la variable d’environnement.
+    default : Any
+        Valeur de repli si la variable n’est pas définie ou vide.
+
+    Retour
+    ------
+    str | Any
+        Valeur de la variable ou valeur par défaut.
+    """
     v = os.environ.get(name)
     return v if (v is not None and v != "") else default
 
 def _env_int(name: str, default: int) -> int:
+    """
+    Lire une variable d'environnement en entier avec fallback robuste.
+
+    Si la conversion échoue, renvoie la valeur par défaut.
+
+    Paramètres
+    ----------
+    name : str
+        Nom de la variable.
+    default : int
+        Valeur de repli.
+
+    Retour
+    ------
+    int
+        Valeur entière parsée ou valeur de repli.
+    """
     try:
         return int(_env(name, default))
     except Exception:
         return default
 
 def _parse_horizons() -> List[int]:
+    """
+    Résoudre la liste des horizons en minutes à analyser.
+
+    Priorité des sources :
+    1. MON_HORIZONS
+    2. EXPLAIN_HORIZONS
+    3. PERF_HORIZONS
+    4. FORECAST_HORIZONS
+    5. valeur par défaut "15"
+
+    Retour
+    ------
+    list[int]
+        Liste triée et dédupliquée d'horizons (> 0).
+    """
     # Priorité MON_HORIZONS, sinon compat : EXPLAIN_HORIZONS / PERF_HORIZONS / FORECAST_HORIZONS
     raw = (
         _env("MON_HORIZONS")
@@ -112,15 +174,61 @@ if not (GCS_MONITORING_PREFIX and str(GCS_MONITORING_PREFIX).startswith("gs://")
 
 # ────────────────────────── Helpers GCS/Parquet ──────────────────────
 def _split(gs: str) -> Tuple[str, str]:
+    """
+    Découper une URI GCS `gs://bucket/path` en (bucket, key).
+
+    Paramètres
+    ----------
+    gs : str
+        URI GCS de la forme 'gs://bucket/chemin'.
+
+    Retour
+    ------
+    (str, str)
+        Nom du bucket et clé d’objet (chemin sans slash final).
+
+    Lève
+    ----
+    AssertionError
+        Si l’URI ne commence pas par 'gs://'.
+    """
     assert gs.startswith("gs://"), f"bad GCS uri: {gs}"
     b, k = gs[5:].split("/", 1)
     return b, k.rstrip("/")
 
 def _exists(gs: str) -> bool:
+    """
+    Tester l'existence d'un objet GCS.
+
+    Paramètres
+    ----------
+    gs : str
+        URI GCS de l’objet.
+
+    Retour
+    ------
+    bool
+        True si le blob existe, False sinon.
+    """
     b, k = _split(gs)
     return storage.Client().bucket(b).blob(k).exists()
 
 def _list_under(prefix_gs: str, regex: Optional[re.Pattern]=None) -> List["storage.Blob"]:
+    """
+    Lister les blobs sous un préfixe GCS, avec filtre regex optionnel.
+
+    Paramètres
+    ----------
+    prefix_gs : str
+        Préfixe GCS (dossier logique).
+    regex : re.Pattern, optionnel
+        Filtre sur le nom des blobs.
+
+    Retour
+    ------
+    list[google.cloud.storage.Blob]
+        Liste des blobs correspondants.
+    """
     bkt, key = _split(prefix_gs)
     cli = storage.Client()
     blobs = list(cli.list_blobs(bkt, prefix=key.strip("/") + "/"))
@@ -129,12 +237,38 @@ def _list_under(prefix_gs: str, regex: Optional[re.Pattern]=None) -> List["stora
     return blobs
 
 def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
+    """
+    Lire un blob Parquet GCS en DataFrame pandas.
+
+    Paramètres
+    ----------
+    blob : google.cloud.storage.Blob
+        Blob à lire.
+
+    Retour
+    ------
+    pandas.DataFrame
+        Données du Parquet.
+    """
     buf = BytesIO()
     blob.download_to_file(buf)
     buf.seek(0)
     return pq.read_table(buf).to_pandas()
 
 def _upload_json_gs(obj: object, gs_uri: str):
+    """
+    Sérialiser un objet Python en JSON et l’envoyer sur GCS.
+
+    - Nettoyage minimal des floats (inf → None).
+    - JSON compact (separators=(",", ":")).
+
+    Paramètres
+    ----------
+    obj : object
+        Objet JSON-sérialisable (dict, list, ...).
+    gs_uri : str
+        URI GCS de destination.
+    """
     def _san(o):
         if isinstance(o, dict):  return {k: _san(v) for k, v in o.items()}
         if isinstance(o, list):  return [_san(v) for v in o]
@@ -148,6 +282,27 @@ def _upload_json_gs(obj: object, gs_uri: str):
 
 # ────────────────────────── Lecture perf ─────────────────────────────
 def _read_latest_perf(exports_prefix: str) -> Tuple[pd.DataFrame, Optional[str]]:
+    """
+    Lire le dernier dataset de performance disponible.
+
+    Stratégie
+    ---------
+    1. Si `perf.parquet` existe → on le lit, puis on déduit `perf_day`
+       à partir de la colonne temporelle la plus pertinente.
+    2. Sinon → on liste `perf_YYYY-MM-DD.parquet` et on prend le dernier
+       (tri lexicographique sur le suffixe date).
+
+    Paramètres
+    ----------
+    exports_prefix : str
+        Préfixe GCS des exports (GCS_EXPORTS_PREFIX).
+
+    Retour
+    ------
+    (DataFrame, str | None)
+        - perf : dataset de performance brut.
+        - perf_day : jour ISO (YYYY-MM-DD) associé, ou None si non déterminable.
+    """
     base = exports_prefix.rstrip("/")
     main = f"{base}/perf.parquet"
     pat = re.compile(r"/perf_(\d{4}-\d{2}-\d{2})\.parquet$")
@@ -176,6 +331,35 @@ def _read_latest_perf(exports_prefix: str) -> Tuple[pd.DataFrame, Optional[str]]
 
 # ────────────────────────── Colonnes & horizons ──────────────────────
 def _pick_cols(perf: pd.DataFrame) -> Dict[str, Optional[str]]:
+    """
+    Détecter de façon robuste les colonnes structurantes du dataset perf.
+
+    On supporte plusieurs variantes de nommage pour:
+    - timestamp      (ts)
+    - station_id     (station)
+    - y_true / y_pred
+    - lat/lon
+    - bandes d'incertitude (ylo / yhi) ou sigma
+    - nom de station
+    - horizon (en bins ou en minutes)
+
+    Paramètres
+    ----------
+    perf : pandas.DataFrame
+        Dataset de performance brut.
+
+    Retour
+    ------
+    dict
+        Mapping avec les clés:
+        ts, station, y_true, y_pred, lat, lon, ylo, yhi,
+        sigma, name, hbins, hmin.
+
+    Lève
+    ----
+    KeyError
+        Si ts, station ou y_true sont introuvables.
+    """
     cols = set(perf.columns)
     def pick(cands):
         for c in cands:
@@ -204,6 +388,25 @@ def _pick_cols(perf: pd.DataFrame) -> Dict[str, Optional[str]]:
                 hbins=hbins, hmin=hmin)
 
 def _normalize_types(perf: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.DataFrame:
+    """
+    Normaliser les types des colonnes clés (timestamp, station, y, etc.).
+
+    - ts : datetime64 UTC
+    - station : string
+    - y_true / y_pred / ylo / yhi / sigma / horizons : numériques
+
+    Paramètres
+    ----------
+    perf : pandas.DataFrame
+        DataFrame de performance brut.
+    cols : dict
+        Mapping issu de `_pick_cols`.
+
+    Retour
+    ------
+    pandas.DataFrame
+        DataFrame copié/typé.
+    """
     df = perf.copy()
     df[cols["ts"]] = pd.to_datetime(df[cols["ts"]], utc=True, errors="coerce")
     df[cols["station"]] = df[cols["station"]].astype("string")
@@ -223,6 +426,27 @@ def _normalize_types(perf: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.D
     return df
 
 def _normalize_hbin_series(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.Series:
+    """
+    Construire une colonne d’horizon en BINS (`__hbin`) à partir du dataset perf.
+
+    Priorité
+    --------
+    1. Colonne horizon_bins (ou variante).
+    2. Colonne horizon_min convertie en bins via BIN_MIN.
+    3. Sinon, série de NA.
+
+    Paramètres
+    ----------
+    df : pandas.DataFrame
+        DataFrame de performance.
+    cols : dict
+        Mapping `_pick_cols`.
+
+    Retour
+    ------
+    pandas.Series
+        Série Int64 indexée comme df, avec la valeur d’horizon en bins.
+    """
     if cols.get("hbins") and cols["hbins"] in df.columns:
         s = pd.to_numeric(df[cols["hbins"]], errors="coerce")
         return s.round().astype("Int64")
@@ -233,12 +457,42 @@ def _normalize_hbin_series(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> 
 
 # ────────────────────────── Utils (stats) ────────────────────────────
 def _group_apply(gb, func):
+    """
+    Wrapper `groupby.apply` compatible avec pandas < 2.2 (include_groups).
+
+    Paramètres
+    ----------
+    gb : pandas.core.groupby.GroupBy
+        GroupBy sur lequel appliquer la fonction.
+    func : callable
+        Fonction à appliquer à chaque groupe.
+
+    Retour
+    ------
+    pandas.DataFrame | pandas.Series
+        Résultat de l’apply.
+    """
     try:
         return gb.apply(func, include_groups=False)
     except TypeError:
         return gb.apply(func)
 
 def _round_float(x: float, nd: int = 6) -> float:
+    """
+    Arrondir un float à `nd` décimales, en gérant NaN / inf.
+
+    Paramètres
+    ----------
+    x : float
+        Valeur à arrondir.
+    nd : int
+        Nombre de décimales.
+
+    Retour
+    ------
+    float
+        Valeur arrondie ou NaN float en cas d’erreur/non finitude.
+    """
     try:
         if not np.isfinite(x): return float("nan")
         return float(np.round(x, nd))
@@ -246,6 +500,21 @@ def _round_float(x: float, nd: int = 6) -> float:
         return float("nan")
 
 def _round_list(xs, nd: int = 6):
+    """
+    Arrondir tous les flottants d’une liste, en laissant les autres objets intacts.
+
+    Paramètres
+    ----------
+    xs : list
+        Liste hétérogène (floats, ints, ...).
+    nd : int
+        Nombre de décimales pour les floats.
+
+    Retour
+    ------
+    list
+        Liste arrondie.
+    """
     out = []
     for v in xs:
         if isinstance(v, (int, float, np.floating)):
@@ -255,6 +524,29 @@ def _round_list(xs, nd: int = 6):
     return out
 
 def _qq_points(x: np.ndarray, m: int = RESID_QQ_POINTS) -> Tuple[List[float], List[float]]:
+    """
+    Construire des points pour QQ-plot (N(0,1) théorique vs résidus normalisés).
+
+    Implémentation
+    --------------
+    - Normalisation des résidus en z = (x - mu)/sd.
+    - Approximation de l’inverse de la CDF normale (Beasley-Springer/Moro like).
+    - Retourne deux listes:
+        • th  : quantiles théoriques,
+        • emp : quantiles empiriques.
+
+    Paramètres
+    ----------
+    x : np.ndarray
+        Résidus bruts.
+    m : int
+        Nombre de points à générer.
+
+    Retour
+    ------
+    (list[float], list[float])
+        (théoriques, empiriques) arrondis.
+    """
     x = x[np.isfinite(x)]
     if x.size == 0 or m <= 1:
         return [], []
@@ -272,6 +564,21 @@ def _qq_points(x: np.ndarray, m: int = RESID_QQ_POINTS) -> Tuple[List[float], Li
     return _round_list(th.tolist()), _round_list(emp.tolist())
 
 def _acf(values: pd.Series, nlags: int = RESID_ACF_NLAGS) -> List[float]:
+    """
+    Calculer une ACF simple (auto-corrélation) jusqu'à `nlags`.
+
+    Paramètres
+    ----------
+    values : pandas.Series
+        Série temporelle (par ex. résidus agrégés par bin).
+    nlags : int
+        Nombre maximum de lags.
+
+    Retour
+    ------
+    list[float]
+        Valeurs d’ACF du lag 0 à nlags, arrondies.
+    """
     x = pd.Series(values).astype(float)
     x = x - x.mean()
     acf = np.zeros(nlags + 1)
@@ -285,14 +592,41 @@ def _acf(values: pd.Series, nlags: int = RESID_ACF_NLAGS) -> List[float]:
 
 # ────────────────────────── Residuals ────────────────────────────────
 def build_residuals_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], tz: str) -> Dict[str, object]:
+    """
+    Construire les artefacts de résidus pour un dataset de perf (un horizon).
+
+    Produit:
+    - hist : histogramme symétrique des résidus (coupé au 99e percentile absolu)
+    - qq   : points de QQ-plot (théoriques vs empiriques, normalisés)
+    - acf  : auto-corrélation (résidus moyens par timestamp)
+    - hetero : MAE par quantiles de y_true (hétéroscédasticité)
+    - episodes : plus longues séquences consécutives de résidus |e| ≥ TH
+                 (par station), TH=4.0 ici.
+
+    Paramètres
+    ----------
+    perf : pandas.DataFrame
+        Sous-ensemble perf (éventuellement filtré par horizon).
+    cols : dict
+        Mapping de colonnes `_pick_cols`.
+    tz : str
+        Timezone utilisée pour certains regroupements temporels.
+
+    Retour
+    ------
+    dict
+        Document JSON-ready avec tous les artefacts de résidus.
+    """
     df = perf.copy()
     df["ts"] = pd.to_datetime(df[cols["ts"]], utc=True, errors="coerce")
     df["station_id"] = df[cols["station"]].astype("string")
     y_true = pd.to_numeric(df[cols["y_true"]], errors="coerce")
     y_pred = pd.to_numeric(df[cols["y_pred"]], errors="coerce") if cols["y_pred"] else pd.Series(np.nan, index=df.index)
 
-    used = df.assign(y_true=y_true, y_pred=y_pred).dropna(subset=["y_true", "y_pred"]).copy()
     base_doc = {"schema_version": SCHEMA_VERSION, "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z")}
+
+    # Filtrage sur les lignes où y_true & y_pred sont définis
+    used = df.assign(y_true=y_true, y_pred=y_pred).dropna(subset=["y_true", "y_pred"]).copy()
     if used.empty:
         return {**base_doc, "hist": [], "qq": {"th": [], "emp": []}, "acf": [], "hetero": [], "episodes": []}
 
@@ -301,6 +635,7 @@ def build_residuals_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], tz:
     if used.empty:
         return {**base_doc, "hist": [], "qq": {"th": [], "emp": []}, "acf": [], "hetero": [], "episodes": []}
 
+    # Histogramme tronqué au 99e percentile absolu
     vals = used["resid"].to_numpy(dtype=float)
     max_abs = float(np.nanpercentile(np.abs(vals), 99)) if vals.size else 1.0
     if not np.isfinite(max_abs) or max_abs == 0: max_abs = 1.0
@@ -309,10 +644,14 @@ def build_residuals_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], tz:
              "bin_right": _round_float(float(bin_edges[i+1])),
              "count": int(hist_counts[i])} for i in range(len(hist_counts))]
 
+    # QQ-plot
     th, emp = _qq_points(vals, m=RESID_QQ_POINTS)
+
+    # ACF sur résidus moyens par ts (dimension temporelle)
     mean_by_ts = used.groupby("ts")["resid"].mean()
     acf_vals = _acf(mean_by_ts, nlags=RESID_ACF_NLAGS)
 
+    # Hétéroscédasticité: MAE par quantiles de y_true
     q = pd.qcut(used["y_true"], q=20, duplicates="drop")
     het = (_group_apply(
         used.assign(bin=q).groupby("bin", observed=False),
@@ -321,6 +660,7 @@ def build_residuals_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], tz:
 
     hetero = [{"quantile": f"q{i+1}", "mae": _round_float(float(r["mae"])), "n": int(r["n"])} for i, (_, r) in enumerate(het.iterrows())]
 
+    # Episodes: séquences consécutives de gros résidus par station
     TH = 4.0
     def _episodes(g: pd.DataFrame) -> pd.Series:
         x = (np.abs(g["resid"].values) >= TH).astype(int)
@@ -342,6 +682,30 @@ def build_residuals_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], tz:
 
 # ────────────────────────── Calibration ──────────────────────────────
 def build_calibration_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], tz: str) -> Dict[str, object]:
+    """
+    Construire les artefacts de calibration modèle.
+
+    Produit:
+    - fit global (y_true ≈ alpha + beta * y_pred),
+    - binned : moyenne y_true / y_pred par quantile de y_pred,
+    - by_hour : fit (alpha, beta) par heure locale,
+    - rel_error_levels : erreur relative (type MAPE) par tertile de y_true,
+    - bias_by_station : biais moyen spatial par station (avec lat/lon/nom).
+
+    Paramètres
+    ----------
+    perf : pandas.DataFrame
+        Dataset perf à expliquer.
+    cols : dict
+        Mapping `_pick_cols`.
+    tz : str
+        Timezone pour la variable heure locale.
+
+    Retour
+    ------
+    dict
+        Document JSON-ready de calibration.
+    """
     df = perf.copy()
     df["ts"] = pd.to_datetime(df[cols["ts"]], utc=True, errors="coerce")
     lts = df["ts"].dt.tz_convert(tz)
@@ -357,6 +721,7 @@ def build_calibration_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], t
         out.update({"fit": {"alpha": None, "beta": None, "n": 0}, "binned": [], "by_hour": [], "rel_error_levels": [], "bias_by_station": []})
         return out
 
+    # Fit global simple: y_true ≈ alpha + beta * y_pred
     x = used["y_pred"].astype(float).values
     yy = used["y_true"].astype(float).values
     if np.isfinite(x).all() and np.isfinite(yy).all() and x.size > 1:
@@ -365,6 +730,7 @@ def build_calibration_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], t
     else:
         alpha = beta = float("nan")
 
+    # Binned calibration par quantiles de y_pred
     q = pd.qcut(used["y_pred"], q=20, duplicates="drop")
     cal_bin = (_group_apply(
         used.groupby(q, observed=False),
@@ -375,6 +741,7 @@ def build_calibration_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], t
     binned = [{"quantile": str(r["quantile"]), "y_pred_mean": float(r["y_pred_mean"]),
                "y_true_mean": float(r["y_true_mean"]), "n": int(r["n"])} for _, r in cal_bin.iterrows()]
 
+    # Calibration par heure locale
     def _beta(g: pd.DataFrame) -> pd.Series:
         if len(g) < 2 or g["y_pred"].isna().all():
             return pd.Series({"alpha": np.nan, "beta": np.nan, "n": len(g)})
@@ -386,6 +753,7 @@ def build_calibration_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], t
                     "beta":  (None if not np.isfinite(r["beta"])  else float(r["beta"])),
                     "n": int(r["n"])} for _, r in by_hour.iterrows()]
 
+    # Erreur relative (MAPE-like) par niveau de charge (tertiels)
     tert = pd.qcut(used["y_true"], q=3, duplicates="drop", labels=["Bas","Moyen","Haut"])
     rel = (_group_apply(
         used.assign(level=tert).groupby("level", observed=False),
@@ -393,6 +761,7 @@ def build_calibration_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], t
     ).reset_index())
     rel_doc = [{"level": str(r["level"]), "mape_like": float(r["mape_like"]), "n": int(r["n"])} for _, r in rel.iterrows()]
 
+    # Biais spatial par station (avec métadonnées de localisation)
     bias_station = (
         used.assign(resid=(used["y_true"] - used["y_pred"]))
             .groupby(cols["station"])  # type: ignore[index]
@@ -435,11 +804,36 @@ def build_calibration_docs(perf: pd.DataFrame, cols: Dict[str, Optional[str]], t
 
 # ────────────────────────── Uncertainty ──────────────────────────────
 def build_uncertainty_doc(perf: pd.DataFrame, cols: Dict[str, Optional[str]]) -> Dict[str, object]:
+    """
+    Construire un résumé d’incertitude (couverture des bandes) pour le modèle.
+
+    Trois cas gérés (dans cet ordre) :
+    1. Bandes [lo, hi] déjà fournies → coverage empirique.
+    2. Colonne sigma (écart-type prédit) → bandes paramétriques y±z*sigma.
+    3. Pas de bandes/sigma → quantiles de résidus (global ou par heure).
+
+    Paramètres
+    ----------
+    perf : pandas.DataFrame
+        Dataset de performance.
+    cols : dict
+        Mapping `_pick_cols`.
+
+    Retour
+    ------
+    dict
+        Document JSON-ready avec méthode, nominal et couverture empirique.
+    """
     out = {"schema_version": SCHEMA_VERSION,
            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z")}
     NOM = float(os.environ.get("EXPLAIN_PI_NOMINAL", "0.90"))
 
     def _z_for_nominal(p: float) -> float:
+        """
+        Lookup simple pour z-score correspond au niveau nominal p d’une N(0,1).
+
+        Interpolation linéaire entre clés connues si p n’est pas exact.
+        """
         lut = {0.80:1.28155, 0.85:1.43953, 0.90:1.64485, 0.95:1.95996, 0.98:2.32635, 0.99:2.57583}
         if p in lut: return lut[p]
         keys = sorted(lut.keys())
@@ -457,6 +851,7 @@ def build_uncertainty_doc(perf: pd.DataFrame, cols: Dict[str, Optional[str]]) ->
     df = df.assign(y_true=y, y_pred=yp)
     df["ts"] = pd.to_datetime(df[cols["ts"]], utc=True, errors="coerce")
 
+    # 1) Bandes déjà fournies (ylo,yhi)
     if cols.get("ylo") and cols.get("yhi"):
         lo = pd.to_numeric(df[cols["ylo"]], errors="coerce")
         hi = pd.to_numeric(df[cols["yhi"]], errors="coerce")
@@ -468,6 +863,7 @@ def build_uncertainty_doc(perf: pd.DataFrame, cols: Dict[str, Optional[str]]) ->
         out.update({"method": "provided_bands", "nominal": None, "coverage": {"empirical": float(inside.mean()), "n": int(len(used))}})
         return out
 
+    # 2) sigma + y_pred → bandes paramétriques
     if cols.get("sigma") and cols.get("y_pred"):
         sd = pd.to_numeric(perf[cols["sigma"]], errors="coerce")
         used = df.assign(sigma=sd).dropna(subset=["y_pred","sigma","y_true"])
@@ -479,6 +875,7 @@ def build_uncertainty_doc(perf: pd.DataFrame, cols: Dict[str, Optional[str]]) ->
             out.update({"method": "parametric_sigma", "nominal": NOM, "coverage": {"empirical": float(inside.mean()), "n": int(len(used))}})
             return out
 
+    # 3) Quantiles de résidus (global ou par heure)
     if cols.get("y_pred"):
         resid = (df["y_true"] - df["y_pred"]).astype(float)
         used = df.assign(resid=resid).dropna(subset=["y_pred","resid","y_true"])
@@ -509,6 +906,19 @@ def build_uncertainty_doc(perf: pd.DataFrame, cols: Dict[str, Optional[str]]) ->
 
 # ────────────────────────── Feature Importance (XGB) ─────────────────
 def _load_joblib_from_gcs(gs_uri: str):
+    """
+    Charger un objet joblib (modèle, pipeline, dict, ...) depuis GCS.
+
+    Paramètres
+    ----------
+    gs_uri : str
+        URI GCS du fichier joblib.
+
+    Retour
+    ------
+    Any
+        Objet désérialisé via joblib.load.
+    """
     assert gs_uri.startswith("gs://")
     bkt, key = gs_uri[5:].split("/", 1)
     buf = BytesIO()
@@ -517,6 +927,30 @@ def _load_joblib_from_gcs(gs_uri: str):
     return joblib_load(buf)
 
 def _extract_booster(obj) -> xgb.Booster:
+    """
+    Extraire un xgboost.Booster depuis un objet enveloppe.
+
+    Cas gérés :
+    - obj est déjà un Booster.
+    - obj a une méthode get_booster().
+    - obj est un Pipeline / ColumnTransformer (named_steps) contenant un step XGB.
+    - obj est un dict avec clés communes ("model", "estimator", ...).
+
+    Paramètres
+    ----------
+    obj : Any
+        Objet joblib chargé.
+
+    Retour
+    ------
+    xgboost.Booster
+        Booster XGBoost prêt pour get_score.
+
+    Lève
+    ----
+    TypeError
+        Si aucun booster ne peut être extrait.
+    """
     if isinstance(obj, xgb.Booster):
         return obj
     if hasattr(obj, "get_booster"):
@@ -536,6 +970,27 @@ def _extract_booster(obj) -> xgb.Booster:
     raise TypeError(f"Cannot extract Booster from type={type(obj)}")
 
 def _resolve_model_uri(hmin: int, horizons: List[int]) -> Optional[str]:
+    """
+    Résoudre l’URI GCS du modèle pour un horizon donné (en minutes).
+
+    Priorité
+    --------
+    1. MODEL_URI_{H}
+    2. si un seul horizon → MODEL_URI
+    3. MODEL_URI_TEMPLATE (avec {H}/{h})
+
+    Paramètres
+    ----------
+    hmin : int
+        Horizon en minutes (15, 60, ...).
+    horizons : list[int]
+        Liste des horizons utilisés (pour décider du fallback MODEL_URI).
+
+    Retour
+    ------
+    str | None
+        URI GCS si résolu, sinon None.
+    """
     env_key = f"MODEL_URI_{hmin}"
     if os.environ.get(env_key): 
         return os.environ[env_key]
@@ -547,6 +1002,29 @@ def _resolve_model_uri(hmin: int, horizons: List[int]) -> Optional[str]:
     return None
 
 def build_feature_importance_doc_native_xgb(hmin: int, horizons: List[int]) -> Dict[str, object]:
+    """
+    Construire un document de feature importance natif XGBoost pour un horizon.
+
+    Méthode
+    -------
+    - Charge le modèle correspondant à l'horizon (URI résolue).
+    - Extrait le Booster.
+    - Utilise booster.get_score(importance_type="gain"/"weight"/"cover").
+    - Normalise et calcule des parts (gain_share, cover_share).
+    - Trie et tronque à FI_TOPK_TO_PUBLISH features.
+
+    Paramètres
+    ----------
+    hmin : int
+        Horizon en minutes.
+    horizons : list[int]
+        Liste globale des horizons (pour fallback MODEL_URI).
+
+    Retour
+    ------
+    dict
+        Document JSON-ready (rows + notes éventuelles).
+    """
     now = datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
     base = {
         "schema_version": SCHEMA_VERSION,
@@ -599,12 +1077,52 @@ def build_feature_importance_doc_native_xgb(hmin: int, horizons: List[int]) -> D
 
 # ────────────────────────── Publication latest ───────────────────────
 def _publish_latest(base_alias: str, horizon_min: int, payloads: Dict[str, dict]) -> None:
+    """
+    Publier un bundle d’artefacts explainability pour un horizon donné.
+
+    Chaque payload est écrit dans:
+        {base_alias}/h{H}/{name}.json
+
+    Paramètres
+    ----------
+    base_alias : str
+        Préfixe de base (monitoring/model/explainability/latest).
+    horizon_min : int
+        Horizon en minutes (sert à construire h{H}).
+    payloads : dict[str, dict]
+        Mapping nom_fichier → objet JSON.
+    """
     hdir = f"h{int(horizon_min)}"
     for name, obj in payloads.items():
         _upload_json_gs(obj, f"{base_alias}/{hdir}/{name}.json")
 
 # ────────────────────────── Main ─────────────────────────────────────
 def main() -> int:
+    """
+    Entrypoint CLI pour le job Model Explainability.
+
+    Pipeline
+    --------
+    1. Afficher un récap ENV (GCS prefixes, MON_TZ, MON_LAST_DAYS, MON_HORIZONS).
+    2. Résoudre `base_alias` de sortie (monitoring/model/explainability/latest).
+    3. Lire le dernier perf (perf.parquet ou perf_YYYY-MM-DD.parquet).
+    4. Si perf vide → publier manifest minimal et sortir.
+    5. Détecter les colonnes, normaliser les types.
+    6. Restreindre la fenêtre temporelle à MON_LAST_DAYS si > 0.
+    7. Normaliser les horizons en bins (__hbin) et déterminer les hbins ciblés:
+        - si champs d'horizon dispos → segmenter par horizon,
+        - sinon → fallback "global" et publier sous h{H} pour tous les MON_HORIZONS.
+    8. Pour chaque horizon (ou global):
+        - construire overview, residuals_doc, calibration_doc, uncertainty_doc,
+          feature_importance_doc,
+        - publier dans latest/h{H}/.
+    9. Écrire manifest.json global.
+
+    Retour
+    ------
+    int
+        Code de sortie (0 = succès).
+    """
     # Audit d'env (beau header)
     print("[env] GCS_EXPORTS_PREFIX=", GCS_EXPORTS_PREFIX)
     print("[env] GCS_MONITORING_PREFIX=", GCS_MONITORING_PREFIX)
@@ -637,6 +1155,7 @@ def main() -> int:
     cols = _pick_cols(perf)
     perf = _normalize_types(perf, cols)
 
+    # Fenêtre temporelle glissante sur MON_LAST_DAYS (si > 0)
     if MON_LAST_DAYS and MON_LAST_DAYS > 0:
         cutoff = now - timedelta(days=MON_LAST_DAYS)
         ts_all = pd.to_datetime(perf[cols["ts"]], utc=True, errors="coerce")
@@ -645,13 +1164,16 @@ def main() -> int:
         after = len(perf)
         print(f"[model.explain] window_days={MON_LAST_DAYS} → kept {after:,}/{before:,} rows since {cutoff.isoformat()}")
 
+    # Horizon en bins
     perf["__hbin"] = _normalize_hbin_series(perf, cols)
 
+    # Stat globales pour fallback
     ts = pd.to_datetime(perf[cols["ts"]], utc=True, errors="coerce")
     ts_min = ts.min(); ts_max = ts.max()
     n_rows = int(len(perf))
     n_stations = int(perf[cols["station"]].nunique())
 
+    # Horizon disponibles vs demandés
     available_hbins = sorted([int(x) for x in pd.Series(perf["__hbin"].dropna().unique()).tolist() if pd.notna(x)])
     requested_hbins = sorted(list(set([max(1, int(round(h / BIN_MIN))) for h in MON_HORIZONS])))
     target_hbins = [hb for hb in requested_hbins if hb in available_hbins] if available_hbins else ([] if requested_hbins else [])
@@ -659,6 +1181,7 @@ def main() -> int:
     manifests_items: List[Dict[str, object]] = []
     do_segment_by_h = bool(len(available_hbins) > 0)
 
+    # Cas "normal" : segmentation par horizon_bins
     if do_segment_by_h and target_hbins:
         print(f"[model.explain] horizons disponibles={available_hbins} | demandés={requested_hbins} | ciblés={target_hbins}")
         for hb in target_hbins:
@@ -704,6 +1227,7 @@ def main() -> int:
                 "artifacts": list(payloads.keys())
             })
 
+    # Fallback : aucun champ horizon exploitable, on publie un global pour chaque H demandé
     else:
         fallback_targets = (MON_HORIZONS if MON_HORIZONS else [15])
         print(f"[model.explain] aucun champ d'horizon exploitable — fallback sous h{{H}} pour H={fallback_targets}")

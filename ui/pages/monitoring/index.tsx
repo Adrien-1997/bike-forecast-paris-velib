@@ -7,7 +7,7 @@ import LoadingBar, { type LoadingBarStatus } from "@/components/common/LoadingBa
 import KpiBar from "@/components/monitoring/KpiBar";
 import { getMonitoringIntro, type IntroDoc } from "@/lib/services/monitoring/intro";
 
-// ───────────────────────── Helpers format ─────────────────────────
+/* ─────────────────────── Helpers format ─────────────────────── */
 const fmtPct = (x: unknown, d = 1) =>
   x == null || Number.isNaN(Number(x)) ? "—" : `${Number(x).toFixed(d)}%`;
 
@@ -29,7 +29,7 @@ const fmtDateTime = (iso?: string | null) => (iso ? new Date(iso).toLocaleString
 const ledClass = (s: "ok" | "warn" | "down") =>
   s === "ok" ? "dot dot--ok" : s === "warn" ? "dot dot--warn" : "dot dot--down";
 
-// ───────────────────────── Component ─────────────────────────
+/* ───────────────────────── Component ───────────────────────── */
 export default function MonitoringIntroPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -81,13 +81,13 @@ export default function MonitoringIntroPage() {
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav title="Monitoring" generatedAt={generatedAt ?? undefined} />
 
-        {/* Loading + erreur avec espacement */}
+        {/* Loading + erreur */}
         <div className="loadingbar-wrap mb-3">
           <LoadingBar status={barStatus} />
         </div>
         {error && <div className="banner banner--error mt-2">{error}</div>}
 
-        {/* Hero + KpiBar */}
+        {/* Hero + KPI */}
         <section className="panel hero">
           <div className="hero__title">
             <h2>Bienvenue sur le tableau de bord Monitoring</h2>

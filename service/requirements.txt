@@ -1,17 +1,40 @@
+# =============================================================================
+# Vélib’ Forecast — Python dependencies
+# =============================================================================
+# Scope :
+#   - jobs batch (service/jobs)
+#   - core ML / features (service/core)
+#   - éventuelle API/CLI autour des mêmes briques
+#
+# Organisation :
+#   - Core        : fondations numériques / tabulaires / I/O
+#   - Storage/IO  : GCS + moteur analytique (DuckDB)
+#   - ML          : entraînement des modèles XGBoost + utilitaires
+# =============================================================================
+
+# ---------------------------------------------------------------------------
 # Core
-numpy>=1.26,<3
-pandas==2.2.2
-pyarrow==17.0.0
-python-dateutil==2.9.0.post0
-urllib3==2.2.2
-requests==2.32.3
-gcsfs
+# ---------------------------------------------------------------------------
 
+numpy>=1.26,<3           # moteur numérique (vecteurs, matrices, fonctions math)
+pandas==2.2.2            # DataFrame + time-series : coeur de toutes les transformations
+pyarrow==17.0.0          # colonne / Arrow, I/O parquet performant, compat DuckDB
+python-dateutil==2.9.0.post0  # parsing / manipulation avancée de dates (complément datetime)
+urllib3==2.2.2           # couche HTTP bas niveau (utilisée par requests et d'autres libs)
+requests==2.32.3         # client HTTP simple (APIs externes, debug rapide)
+gcsfs                    # système de fichiers GCS compatible fsspec (pandas/duckdb sur gs://)
+
+# ---------------------------------------------------------------------------
 # Storage / IO
-duckdb==1.1.3
-google-cloud-storage==2.18.2
+# ---------------------------------------------------------------------------
 
+duckdb==1.1.3            # moteur analytique en process (SQL sur parquet, agrégations rapides)
+google-cloud-storage==2.18.2  # client officiel GCS (upload/download, locks, listing…)
+
+# ---------------------------------------------------------------------------
 # ML (training)
-scikit-learn==1.5.1
-xgboost==2.1.1
-joblib==1.4.2
+# ---------------------------------------------------------------------------
+
+scikit-learn==1.5.1      # utilitaires ML (metrics, splits, préprocessing léger)
+xgboost==2.1.1           # modèle principal de forecasting (regression gradient boosting)
+joblib==1.4.2            # sérialisation des modèles + parallélisation simple

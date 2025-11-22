@@ -59,7 +59,8 @@ try:
         model_explainability,
         data_health,
         data_drift,
-        intro,  # ✅ ajout
+        data_freshness,   # ✅ ajout ici
+        intro,
     )
 except Exception:
     try:
@@ -71,7 +72,8 @@ except Exception:
             model_explainability,
             data_health,
             data_drift,
-            intro,  # ✅ ajout
+            data_freshness,   # ✅ ajout ici
+            intro,
         )
     except Exception:
         from routes.monitoring import (
@@ -82,7 +84,8 @@ except Exception:
             model_explainability,
             data_health,
             data_drift,
-            intro,  # ✅ ajout
+            data_freshness,   # ✅ ajout ici
+            intro,
         )
 
 # ─────────── App ───────────
@@ -139,6 +142,7 @@ app.include_router(history.router)
 app.include_router(badges.router)
 app.include_router(snapshot.router)
 app.include_router(weather.router)
+
 # Monitoring
 app.include_router(network_overview.router)
 app.include_router(network_dynamics.router)
@@ -147,7 +151,8 @@ app.include_router(model_performance.router)
 app.include_router(model_explainability.router)
 app.include_router(data_health.router)
 app.include_router(data_drift.router)
-app.include_router(intro.router)  # ✅ nouveau
+app.include_router(data_freshness.router)   # ✅ nouveau
+app.include_router(intro.router)
 
 # ─────────── Debug ───────────
 @app.on_event("startup")

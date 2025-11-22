@@ -1,29 +1,72 @@
-# =============================================================================
 # service/jobs/build_data_drift.py
-# =============================================================================
-# Vélib’ Forecast — Data Drift
-# Schema v1.4 (exclut coords/temps des features + garde-fous robustes)
-#
-# ▶ ENV UNIFIÉ (un seul nom par variable)
-#   - GCS_EXPORTS_PREFIX      (gs://.../velib/exports)          [requis]
-#   - GCS_MONITORING_PREFIX   (gs://.../velib[/monitoring])      [requis]
-#   - MON_TZ                  (ex: Europe/Paris)                 [def=Europe/Paris]
-#   - MON_LAST_DAYS           (fenêtre courante, int)            [def=14]
-#   - MON_REF_DAYS            (fenêtre de référence, int)        [def=28]
-#   - FORECAST_HORIZONS       (liste "15,60")                    [ignoré ici]
-#
-# Sorties (LATEST only):
-#   {GCS_MONITORING_PREFIX}/monitoring/data/drift/latest/
-#     - psi_by_feature.json
-#     - ks_by_feature.json
-#     - deltas_by_feature.json
-#     - psi_global_daily_ema.json
-#     - summary.json
-#     - alerts.json
-#     - bounds.json
-#     - zones.json
-#     - features_detected.json
-# =============================================================================
+
+"""
+Vélib’ Forecast — Data Drift builder (Schema v1.4)
+
+This job:
+- Reads event exports (events_YYYY-MM-DD.parquet) from the exports bucket.
+- Normalizes the event schema (timestamps, station_id, numerics).
+- Splits data into a **reference** window and a **current** window.
+- Computes feature-wise drift metrics:
+    - Population Stability Index (PSI)
+    - Kolmogorov–Smirnov statistic (KS)
+    - Standardized mean and variance deltas
+- Computes a global PSI proxy and a daily EMA on `occ_ratio`.
+- Produces per-zone drift metrics (PSI by spatial zone) for maps.
+- Writes a LATEST-only JSON bundle for the monitoring UI:
+
+  {GCS_MONITORING_PREFIX}/monitoring/data/drift/latest/
+    - psi_by_feature.json
+    - ks_by_feature.json
+    - deltas_by_feature.json
+    - psi_global_daily_ema.json
+    - summary.json
+    - alerts.json
+    - bounds.json
+    - zones.json
+    - features_detected.json
+
+Environment
+-----------
+Unified env variable names (single source of truth):
+
+- GCS_EXPORTS_PREFIX
+    gs://.../velib/exports
+    Required. Root prefix containing events_YYYY-MM-DD.parquet.
+
+- GCS_MONITORING_PREFIX
+    gs://.../velib[/monitoring]
+    Required. Root prefix for monitoring artifacts; '/monitoring' is appended
+    automatically if missing.
+
+- MON_TZ
+    Monitoring timezone (e.g. "Europe/Paris").
+    Default: "Europe/Paris".
+
+- MON_LAST_DAYS
+    Current drift window size (in days). Example: 14.
+
+- MON_REF_DAYS
+    Reference drift window size (in days). Example: 28.
+
+- FORECAST_HORIZONS
+    Comma-separated list of forecast horizons ("15,60").
+    Not used in this job, kept for interface consistency.
+
+Drift design principles
+-----------------------
+- Only **true features** are used for drift (no raw timestamps, no lat/lon,
+  no sine/cosine encodings or derived time indicators).
+- PSI / KS are computed on daily averages per station.
+- Numeric features must have at least 5 valid points in both ref & current
+  windows, otherwise the feature is skipped with a log message.
+- Global PSI is:
+    - PSI on `occ_ratio` if present,
+    - otherwise median PSI across features.
+- Alerts are raised on global PSI thresholds:
+    - >= 0.25 → high
+    - >= 0.10 → medium
+"""
 
 from __future__ import annotations
 import os, re, json, sys
@@ -47,20 +90,67 @@ except Exception as e:
 SCHEMA_VERSION = "1.4"
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ENV — un seul nom par variable
+# ENV — unified names
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _env(name: str, default=None):
+    """
+    Read an environment variable, with a default when missing or empty.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name.
+    default :
+        Default value to return when the variable is unset or empty.
+
+    Returns
+    -------
+    Any
+        The environment value (string) or the provided default.
+    """
     v = os.environ.get(name)
     return v if (v is not None and v != "") else default
 
+
 def _env_int(name: str, default: int) -> int:
+    """
+    Read an integer environment variable with a default.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name.
+    default : int
+        Default integer value when parsing fails or variable is missing.
+
+    Returns
+    -------
+    int
+        Parsed integer value.
+    """
     try:
         return int(_env(name, default))
     except Exception:
         return default
 
+
 def _env_list_int(name: str, default_csv: str) -> list[int]:
+    """
+    Read a comma-separated list of ints from an environment variable.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name.
+    default_csv : str
+        Default CSV string to use when the variable is missing.
+
+    Returns
+    -------
+    list of int
+        Parsed list of integers; invalid tokens are silently discarded.
+    """
     raw = str(_env(name, default_csv))
     out: list[int] = []
     for tok in raw.split(","):
@@ -78,7 +168,7 @@ GCS_MONITORING_PREFIX = _env("GCS_MONITORING_PREFIX")
 MON_TZ                = _env("MON_TZ", "Europe/Paris")
 MON_LAST_DAYS         = _env_int("MON_LAST_DAYS", 14)
 MON_REF_DAYS          = _env_int("MON_REF_DAYS", 28)
-FORECAST_HORIZONS     = _env_list_int("FORECAST_HORIZONS", "15,60")  # (non utilisé ici)
+FORECAST_HORIZONS     = _env_list_int("FORECAST_HORIZONS", "15,60")  # (not used here)
 
 # Sanity checks GCS
 if not (GCS_EXPORTS_PREFIX and GCS_EXPORTS_PREFIX.startswith("gs://")):
@@ -91,18 +181,63 @@ if not (GCS_MONITORING_PREFIX and GCS_MONITORING_PREFIX.startswith("gs://")):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _split(gs: str) -> Tuple[str, str]:
+    """
+    Split a GCS URI `gs://bucket/path` into (bucket, key).
+
+    Parameters
+    ----------
+    gs : str
+        GCS URI starting with "gs://".
+
+    Returns
+    -------
+    (str, str)
+        Tuple (bucket_name, object_key).
+    """
     assert gs.startswith("gs://"), f"bad GCS uri: {gs}"
     b, k = gs[5:].split("/", 1)
     return b, k.rstrip("/")
 
+
 def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
+    """
+    Download a Parquet blob from GCS and load it as a pandas DataFrame.
+
+    Parameters
+    ----------
+    blob : google.cloud.storage.Blob
+        Parquet file blob.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with the Parquet content.
+    """
     buf = BytesIO()
     blob.download_to_file(buf)
     buf.seek(0)
     tbl = pq.read_table(buf)
     return tbl.to_pandas()
 
+
 def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datetime) -> List["storage.Blob"]:
+    """
+    List event blobs (events_YYYY-MM-DD.parquet) within a given UTC date window.
+
+    Parameters
+    ----------
+    exports_prefix : str
+        GCS prefix where events_*.parquet are stored (GCS_EXPORTS_PREFIX).
+    start_date : datetime
+        Inclusive UTC start date.
+    end_date : datetime
+        Inclusive UTC end date.
+
+    Returns
+    -------
+    list of google.cloud.storage.Blob
+        Sorted list of blobs matching the date constraints.
+    """
     bkt, key_prefix = _split(exports_prefix)
     client = storage.Client()
     bucket = client.bucket(bkt)
@@ -119,7 +254,23 @@ def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datet
     out.sort(key=lambda b: b.name)
     return out
 
+
 def _upload_json_gs(obj: dict | list, gs_uri: str):
+    """
+    Upload a JSON-serializable object as a JSON file to GCS.
+
+    Notes
+    -----
+    - All floats are sanitized to avoid NaN/Inf (replaced by null).
+    - JSON is encoded as UTF-8 and written with compact separators.
+
+    Parameters
+    ----------
+    obj : dict or list
+        JSON-serializable object to upload.
+    gs_uri : str
+        Destination GCS URI (gs://bucket/path/to/file.json).
+    """
     def _san(o):
         if isinstance(o, dict):
             return {k: _san(v) for k, v in o.items()}
@@ -135,13 +286,13 @@ def _upload_json_gs(obj: dict | list, gs_uri: str):
     print(f"[data.drift] wrote → {gs_uri} ({len(data):,} bytes)")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Normalisation des events (schéma build_datasets.py)
+# Event normalization (build_datasets.py schema)
 # ──────────────────────────────────────────────────────────────────────────────
 
 KEY_STR = {"station_id", "status", "name"}
 KEY_TIME = {"tbin_utc", "ts", "timestamp"}
 
-# Exclusions explicites pour le drift
+# Explicit exclusions for drift features
 EXCLUDE_EXACT = {
     # identifiers & time-like
     "station_id", "date_local", "dow", "hour", "h", "min", "ts_local",
@@ -156,37 +307,64 @@ EXCLUDE_PATTERNS = [
 ]
 
 def _is_time_or_coord(col: str) -> bool:
+    """
+    Return True if a column is time-like or coordinate-like and must be excluded.
+
+    Rules
+    -----
+    - Exclude explicit names (station_id, lat, lon, tbin_utc, etc.).
+    - Exclude columns matching EXCLUDE_PATTERNS (e.g., *_sin, *_cos, hour_*).
+    """
     if col in EXCLUDE_EXACT:
         return True
     return any(re.match(p, col) for p in EXCLUDE_PATTERNS)
 
+
 def _ensure_events(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Attend au minimum: tbin_utc, station_id.
-    - Force tbin_utc en datetime64[ns] UTC (naive).
-    - Ne JAMAIS convertir les colonnes datetime en numériques.
-    - Convertit en numériques (coerce) les colonnes object/bool pertinentes.
+    Normalize event DataFrame and preserve critical types.
+
+    Requirements
+    ------------
+    - Must contain at least 'tbin_utc' and 'station_id'.
+
+    Transformations
+    ---------------
+    - 'station_id' → string.
+    - 'tbin_utc'   → datetime64[ns] naive (UTC).
+    - datetime columns are left untouched.
+    - numeric columns are left untouched.
+    - other object/bool columns are coerced to numeric when possible.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Raw event data.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Normalized events DataFrame.
     """
     if not {"tbin_utc", "station_id"}.issubset(df.columns):
         raise RuntimeError("Missing minimal columns: tbin_utc/station_id")
 
     out = df.copy()
 
-    # station_id en string
+    # station_id as string
     out["station_id"] = out["station_id"].astype("string")
 
-    # tbin_utc en datetime naive (UTC)
+    # tbin_utc as naive UTC datetime
     out["tbin_utc"] = pd.to_datetime(out["tbin_utc"], errors="coerce", utc=True).dt.tz_convert(None)
 
-    # Pour chaque colonne:
+    # For each column: coerce object/bool to numeric, leave datetime/numeric intact
     for c in out.columns:
         if c in KEY_STR or c in KEY_TIME:
-            continue  # ne pas toucher station_id/status/name et timestamps
+            continue  # station_id/status/name and timestamps untouched
         if pd.api.types.is_datetime64_any_dtype(out[c]):
-            continue  # sécurité: ne touche pas les datetime
+            continue
         if pd.api.types.is_numeric_dtype(out[c]):
-            continue  # déjà numérique
-        # object/bool -> to_numeric(coerce)
+            continue
         try:
             out[c] = pd.to_numeric(out[c], errors="coerce")
         except Exception:
@@ -194,7 +372,30 @@ def _ensure_events(df: pd.DataFrame) -> pd.DataFrame:
 
     return out
 
+
 def _to_local(df: pd.DataFrame, tz: Optional[str]) -> pd.DataFrame:
+    """
+    Add local time columns from UTC tbin_utc.
+
+    Columns added
+    -------------
+    - date_local : local calendar date
+    - dow        : day of week (0=Monday)
+    - hour       : local hour
+    - ts_local   : localized timestamp
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input DataFrame with 'tbin_utc' column.
+    tz : str or None
+        Timezone name (e.g., 'Europe/Paris'). If None, remain in UTC.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with additional local time columns.
+    """
     dt = pd.to_datetime(df["tbin_utc"], errors="coerce", utc=True)
     dt_local = dt.dt.tz_convert(tz) if tz else dt
     return df.assign(date_local=dt_local.dt.date, dow=dt_local.dt.dayofweek, hour=dt_local.dt.hour, ts_local=dt_local)
@@ -204,14 +405,53 @@ def _to_local(df: pd.DataFrame, tz: Optional[str]) -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _valid_series(x) -> pd.Series:
-    """Force Series 1D numérique sans NaN; retourne Series vide si impossible."""
+    """
+    Convert input to a 1D numeric Series without NaNs.
+
+    Parameters
+    ----------
+    x : array-like
+        Input values.
+
+    Returns
+    -------
+    pandas.Series
+        Clean numeric series; returns an empty Series when coercion fails.
+    """
     try:
         s = pd.to_numeric(pd.Series(x, copy=False), errors="coerce").dropna()
         return s if isinstance(s, pd.Series) else pd.Series([], dtype=float)
     except Exception:
         return pd.Series([], dtype=float)
 
+
 def _psi_continuous(ref: pd.Series, cur: pd.Series, bins: int = 20, eps: float = 1e-9) -> float:
+    """
+    Compute a binned Population Stability Index (PSI) between two samples.
+
+    Steps
+    -----
+    - Clean both samples with _valid_series.
+    - Build quantile-based bins from the reference sample.
+    - Compute distributions (p_ref, p_cur) across these bins.
+    - PSI = sum((p_ref - p_cur) * log(p_ref / p_cur)).
+
+    Parameters
+    ----------
+    ref : pandas.Series
+        Reference sample.
+    cur : pandas.Series
+        Current sample.
+    bins : int, default 20
+        Target number of quantile bins.
+    eps : float, default 1e-9
+        Small value added to probabilities for numerical stability.
+
+    Returns
+    -------
+    float
+        PSI value; NaN when data is insufficient or degenerate.
+    """
     a = _valid_series(ref)
     b = _valid_series(cur)
     if len(a) < 5 or len(b) < 5:
@@ -232,7 +472,29 @@ def _psi_continuous(ref: pd.Series, cur: pd.Series, bins: int = 20, eps: float =
     pb = (cb / cb.sum()).astype(float) + eps
     return float(np.sum((pa - pb) * np.log(pa / pb)))
 
+
 def _ks_stat(ref: pd.Series, cur: pd.Series) -> float:
+    """
+    Compute a discretized Kolmogorov–Smirnov statistic between two samples.
+
+    Implementation notes
+    --------------------
+    - Use combined quantiles from both samples as grid.
+    - Approximate CDFs via histograms.
+    - Return max absolute difference between the two CDFs.
+
+    Parameters
+    ----------
+    ref : pandas.Series
+        Reference sample.
+    cur : pandas.Series
+        Current sample.
+
+    Returns
+    -------
+    float
+        KS statistic; NaN when data is insufficient or degenerate.
+    """
     a = _valid_series(ref)
     b = _valid_series(cur)
     if len(a) < 5 or len(b) < 5:
@@ -254,7 +516,28 @@ def _ks_stat(ref: pd.Series, cur: pd.Series) -> float:
     cdfb = np.cumsum(cb) / cb.sum()
     return float(np.max(np.abs(cdfa - cdfb)))
 
+
 def _delta_mean_var(ref: pd.Series, cur: pd.Series) -> tuple[float, float]:
+    """
+    Compute standardized mean and variance deltas between two samples.
+
+    Definitions
+    -----------
+    - dm = (mean_cur - mean_ref) / std_ref
+    - dv = (var_cur - var_ref) / var_ref
+
+    Parameters
+    ----------
+    ref : pandas.Series
+        Reference sample.
+    cur : pandas.Series
+        Current sample.
+
+    Returns
+    -------
+    (float, float)
+        Tuple (delta_mean, delta_var), possibly NaN when data is insufficient.
+    """
     a = _valid_series(ref)
     b = _valid_series(cur)
     if len(a) < 5 or len(b) < 5:
@@ -266,7 +549,35 @@ def _delta_mean_var(ref: pd.Series, cur: pd.Series) -> tuple[float, float]:
     dv = (b.var(ddof=1) - avar) / (avar + 1e-9)
     return (float(dm), float(dv))
 
+
 def _split_windows(df: pd.DataFrame, current_days: int, reference_days: int) -> tuple[pd.DataFrame, pd.DataFrame, Dict[str, pd.Timestamp]]:
+    """
+    Split events into reference and current time windows.
+
+    Windows
+    -------
+    - tmax = max(tbin_utc)
+    - current window   : [tmax - current_days, tmax]
+    - reference window : [tmax - current_days - reference_days, tmax - current_days)
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Normalized events with 'tbin_utc'.
+    current_days : int
+        Size of the current window (days).
+    reference_days : int
+        Size of the reference window (days).
+
+    Returns
+    -------
+    (DataFrame, DataFrame, dict)
+        Tuple (ref_df, cur_df, bounds) where bounds contains timestamps:
+        - tmax
+        - t_cur_start
+        - t_ref_start
+        - t_ref_end
+    """
     if df.empty:
         return df.iloc[0:0].copy(), df.iloc[0:0].copy(), {}
     tmax = df["tbin_utc"].max()
@@ -278,7 +589,30 @@ def _split_windows(df: pd.DataFrame, current_days: int, reference_days: int) -> 
     bounds = {"tmax": tmax, "t_cur_start": t_cur_start, "t_ref_start": t_ref_start, "t_ref_end": t_ref_end}
     return ref, cur, bounds
 
+
 def _assign_zone(df: pd.DataFrame) -> pd.Series:
+    """
+    Compute a generic "zone" identifier per station for spatial drift.
+
+    Strategy
+    --------
+    1. Prefer a semantic zone field if present:
+        - 'arrondissement', 'arr', 'zone', 'district'
+    2. Otherwise, derive a pseudo-zone from lat/lon by rounding:
+        - lat_rounded = round(lat * 100) / 100
+        - lon_rounded = round(lon * 100) / 100
+        - zone = "lat_rounded,lon_rounded"
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame with optional 'lat' and 'lon' columns.
+
+    Returns
+    -------
+    pandas.Series
+        Series of zone identifiers (object dtype).
+    """
     for c in ("arrondissement", "arr", "zone", "district"):
         if c in df.columns:
             return df[c].astype(str)
@@ -291,26 +625,68 @@ def _assign_zone(df: pd.DataFrame) -> pd.Series:
     z.loc[mask] = lat_r.astype(str) + "," + lon_r.astype(str)
     return z
 
+
 def _compute_drift(events: pd.DataFrame, current_days: int, reference_days: int, tz: Optional[str]) -> dict:
+    """
+    Compute data drift metrics for the events dataset.
+
+    Steps
+    -----
+    1. Add local time columns (date_local, dow, hour, ts_local).
+    2. Split into reference and current windows based on MON_REF_DAYS / MON_LAST_DAYS.
+    3. Aggregate events to daily averages per station.
+    4. Automatically discover numeric candidate features (excluding coord/time).
+    5. For each feature:
+        - PSI (continuous)
+        - KS statistic
+        - standardized mean and variance deltas
+    6. Compute global PSI (on occ_ratio when available, else median PSI).
+    7. Compute a daily EMA on occ_ratio for trend visualization.
+    8. Build zone-level PSI metrics (by occ_ratio if available, else bikes).
+    9. Build summary and alert payloads.
+
+    Parameters
+    ----------
+    events : pandas.DataFrame
+        Normalized events DataFrame as returned by `_ensure_events`.
+    current_days : int
+        Number of days in the current window.
+    reference_days : int
+        Number of days in the reference window.
+    tz : str or None
+        Timezone for local calendar aggregation.
+
+    Returns
+    -------
+    dict
+        Dictionary with:
+        - psi_df, ks_df, deltas_df : feature-wise metrics (DataFrames)
+        - psi_daily_ema            : daily EMA DataFrame
+        - summary                  : global summary dict
+        - alerts                   : list of alert dicts
+        - bounds                   : dict with UTC window bounds
+        - zones                    : dict with zone-level PSI rows
+        - feature_list             : list of numeric feature names used
+    """
     df = _to_local(events, tz)
     ref, cur, bounds = _split_windows(df, current_days=current_days, reference_days=reference_days)
 
-    # agrégation par (date_local, station) — moyenne journalière
+    # Aggregation per (date_local, station) — daily averages
     def agg(d: pd.DataFrame):
-        # Colonnes numériques candidates (on exclut coord/temps ici aussi)
+        # Numeric candidate columns (exclude coord/time here too)
         num_cols = [
             c for c in d.columns
             if c not in {"station_id","tbin_utc","status","name","date_local","dow","hour","ts_local"}
             and pd.api.types.is_numeric_dtype(d[c])
             and not _is_time_or_coord(c)
         ]
-        # On garde lat/lon séparément pour la carte des zones
+        # Keep lat/lon separately for zones map
         keep = ["date_local","station_id"] + num_cols + [c for c in ("lat","lon") if c in d.columns]
         return d[keep].groupby(["date_local","station_id"], dropna=True).mean(numeric_only=True).reset_index()
 
     ref = agg(ref); cur = agg(cur)
 
-    # auto features: numériques communes, hors coord/temps
+    # Auto features: numeric intersection, excluding coord/time
     common_num = [
         c for c in ref.columns
         if c not in {"date_local","station_id"} and c in cur.columns
@@ -339,14 +715,14 @@ def _compute_drift(events: pd.DataFrame, current_days: int, reference_days: int,
     ks_df = pd.DataFrame(rows_ks)
     d_df = pd.DataFrame(rows_delta)
 
-    # EMA quotidienne sur occ_ratio (si dispo)
+    # Daily EMA on occ_ratio (if available)
     ema_df = pd.DataFrame(columns=["date_local","psi_ema"])
     if "occ_ratio" in events.columns:
         by_day = df.groupby("date_local")["occ_ratio"].apply(
             lambda s: float(np.nanmean(pd.to_numeric(s, errors='coerce')))
         ).reset_index()
         by_day = by_day.sort_values("date_local")
-        alpha = 2 / (7 + 1.0)
+        alpha = 2 / (7 + 1.0)  # 7-day EMA
         ema, last = [], None
         for _, r in by_day.iterrows():
             x = r["occ_ratio"]
@@ -356,7 +732,7 @@ def _compute_drift(events: pd.DataFrame, current_days: int, reference_days: int,
             ema.append(last)
         ema_df = pd.DataFrame({"date_local": by_day["date_local"].astype(str), "psi_ema": ema})
 
-    # Résumé + alertes
+    # Global PSI
     psi_global = None
     if not psi_df.empty:
         if "occ_ratio" in list(psi_df["feature"]):
@@ -379,7 +755,7 @@ def _compute_drift(events: pd.DataFrame, current_days: int, reference_days: int,
         "top_feature_psi": (float(psi_df.sort_values("psi", ascending=False).iloc[0]["psi"]) if not psi_df.empty and psi_df.sort_values("psi", ascending=False).iloc[0]["psi"] is not None else None),
     }
 
-    # Zones PSI (occ_ratio si dispo, sinon bikes) — robuste
+    # Zone-level PSI (occ_ratio if available, else bikes) — robust
     zones_doc = {"rows": []}
     try:
         rows = []
@@ -431,7 +807,27 @@ def _compute_drift(events: pd.DataFrame, current_days: int, reference_days: int,
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main() -> int:
-    # Fenêtre de lecture sur GCS = >= max(MON_LAST_DAYS, MON_REF_DAYS, 7)
+    """
+    CLI entrypoint for the data drift monitoring job.
+
+    Steps
+    -----
+    1. Determine the UTC reading window:
+       days = max(MON_LAST_DAYS, MON_REF_DAYS, 7).
+    2. List and read all events_YYYY-MM-DD.parquet in that window.
+    3. Normalize events with `_ensure_events`.
+    4. Compute drift metrics via `_compute_drift`.
+    5. Normalize monitoring prefix (ensure a `/monitoring` segment).
+    6. Write a LATEST-only JSON bundle under:
+
+       {GCS_MONITORING_PREFIX}/monitoring/data/drift/latest
+
+    Returns
+    -------
+    int
+        Exit code (0 on success, 2 on fatal error).
+    """
+    # Reading window on GCS = >= max(MON_LAST_DAYS, MON_REF_DAYS, 7)
     now = datetime.now(timezone.utc)
     window_days = max(int(MON_LAST_DAYS), int(MON_REF_DAYS), 7)
     start = (now - timedelta(days=window_days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -463,7 +859,7 @@ def main() -> int:
     ev_norm = _ensure_events(ev)
     res = _compute_drift(ev_norm, current_days=int(MON_LAST_DAYS), reference_days=int(MON_REF_DAYS), tz=MON_TZ)
 
-    # Normalise le préfixe monitoring (ajoute /monitoring si absent)
+    # Normalize monitoring prefix (append /monitoring if absent)
     mon_base = GCS_MONITORING_PREFIX.rstrip("/")
     if not mon_base.endswith("/monitoring"):
         mon_base = mon_base + "/monitoring"

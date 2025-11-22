@@ -1,4 +1,64 @@
 # service/jobs/build_network_overview.py
+
+"""
+Vélib’ Forecast — Network Overview monitoring job (LATEST ONLY).
+
+Role
+----
+This job reads the *events* parquet files:
+
+    gs://.../velib/exports/events_YYYY-MM-DD.parquet
+
+over a rolling window of days and builds all the JSON artifacts needed by the
+**Network Overview** page of the Monitoring UI:
+
+- kpis.json
+    * global KPIs (stations_active, snapshot availability, 7-day coverage,
+      volatility today, etc.)
+- snapshot_distribution.json
+    * counts and percentages (bikes available, docks available, penury,
+      saturation) for the last network snapshot
+- snapshot_map.json
+    * per-station snapshot info for the map (bikes, docks_avail, penury/saturation flags)
+- today_curve.json
+    * time series of "% of stations with ≥1 bike" during the chosen "today"
+      (day_for_today_utc)
+- ref_median_curve.json
+    * reference median curve across past days with the same weekday (UTC, 5-min bins)
+- kpis_today_vs_lags.json
+    * day-level KPIs for today vs J-7 / J-14 / J-21 (availability & penury/saturation)
+- stations_tension.json
+    * per-station penury/saturation rates (for “tension” ranking)
+
+All outputs are published under:
+
+    <GCS_MONITORING_PREFIX>/monitoring/network/overview/latest/
+
+with a top-level `manifest.json` that describes the window, timezone, sources
+and artifacts produced.
+
+Environment
+-----------
+Required:
+    GCS_EXPORTS_PREFIX    = gs://bucket/velib/exports
+    GCS_MONITORING_PREFIX = gs://bucket/velib      (or .../monitoring)
+
+Optional (unified MON_* with legacy fallbacks):
+    MON_TZ         = Europe/Paris
+    MON_LAST_DAYS  = 7    (used e.g. for coverage & tension)
+    MON_REF_DAYS   = 28   (history length for reference median curve)
+
+Legacy aliases still honoured:
+    OVERVIEW_TZ, OVERVIEW_LAST_DAYS, OVERVIEW_REF_DAYS
+
+Notes
+-----
+- JSON is sanitized: NaN/±Inf → null.
+- Outputs are *LATEST ONLY*: no dated folders; the UI always reads from `latest/`.
+- `day_for_today_utc` is derived from the last available `events_YYYY-MM-DD.parquet`
+  file name; all "today vs ref" calculations are anchored on that UTC day.
+"""
+
 from __future__ import annotations
 import os, re, json, sys
 from io import BytesIO
@@ -24,10 +84,42 @@ SCHEMA_VERSION = "1.3"  # 1.2 → 1.3 (ENV unifié MON_*, manifest, LATEST only)
 # ENV helpers (unifiés)
 # ──────────────────────────────────────────────────────────────────────────────
 def _env(name: str, default=None):
+    """
+    Read an environment variable with a default fallback.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name.
+    default : Any
+        Fallback value if the variable is missing or empty.
+
+    Returns
+    -------
+    Any
+        Raw string value from the environment, or the default.
+    """
     v = os.environ.get(name)
     return v if (v is not None and v != "") else default
 
 def _env_int(name: str, default: int) -> int:
+    """
+    Read an integer-valued environment variable.
+
+    If parsing fails, the provided default is returned.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name.
+    default : int
+        Default integer value.
+
+    Returns
+    -------
+    int
+        Parsed integer or default.
+    """
     try:
         return int(_env(name, default))
     except Exception:
@@ -37,11 +129,42 @@ def _env_int(name: str, default: int) -> int:
 # GCS helpers
 # ──────────────────────────────────────────────────────────────────────────────
 def _split(gs: str) -> Tuple[str, str]:
+    """
+    Split a GCS URI `gs://bucket/path` into (bucket, key).
+
+    Parameters
+    ----------
+    gs : str
+        GCS URI.
+
+    Returns
+    -------
+    (str, str)
+        Bucket name and object key (without trailing slash).
+
+    Raises
+    ------
+    AssertionError
+        If the URI does not start with `gs://`.
+    """
     assert gs.startswith("gs://"), f"bad GCS uri: {gs}"
     b, k = gs[5:].split("/", 1)
     return b, k.rstrip("/")
 
 def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
+    """
+    Read a Parquet blob from GCS into a pandas DataFrame.
+
+    Parameters
+    ----------
+    blob : google.cloud.storage.Blob
+        GCS blob pointing to a parquet file.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame loaded from the parquet content.
+    """
     buf = BytesIO()
     blob.download_to_file(buf)
     buf.seek(0)
@@ -49,6 +172,26 @@ def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
     return tbl.to_pandas()
 
 def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datetime) -> List["storage.Blob"]:
+    """
+    List `events_YYYY-MM-DD.parquet` blobs in a given UTC date window.
+
+    The filter is done on the date embedded in the file name.
+
+    Parameters
+    ----------
+    exports_prefix : str
+        Base GCS prefix for exports (GCS_EXPORTS_PREFIX).
+    start_date : datetime
+        Start of the window (inclusive, UTC).
+    end_date : datetime
+        End of the window (inclusive, UTC).
+
+    Returns
+    -------
+    list[google.cloud.storage.Blob]
+        Sorted list of blobs matching `events_YYYY-MM-DD.parquet`
+        within the requested date range.
+    """
     bkt, key_prefix = _split(exports_prefix)
     client = storage.Client()
     bucket = client.bucket(bkt)
@@ -66,6 +209,18 @@ def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datet
     return out
 
 def _upload_json_gs(obj: dict, gs_uri: str, log_prefix: str = "network.overview"):
+    """
+    Upload a JSON document to GCS, with NaN/±Inf sanitized to null.
+
+    Parameters
+    ----------
+    obj : dict
+        JSON-serializable payload (will be sanitized).
+    gs_uri : str
+        Target GCS URI.
+    log_prefix : str, default "network.overview"
+        Prefix used in log messages.
+    """
     # JSON safe: remplace NaN/±Inf par null
     def _san(o):
         if isinstance(o, dict):
@@ -86,6 +241,31 @@ def _upload_json_gs(obj: dict, gs_uri: str, log_prefix: str = "network.overview"
 # Core helpers
 # ──────────────────────────────────────────────────────────────────────────────
 def _detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
+    """
+    Auto-detect core columns in the events dataframe.
+
+    The function is tolerant to different naming conventions and returns a
+    mapping with the following keys (values may be None if not found):
+
+        ts, station, bikes, capacity, docks, name, lat, lon
+
+    Minimal required columns are: timestamp, station_id, bikes.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Raw events dataframe.
+
+    Returns
+    -------
+    dict
+        Mapping from logical column names to actual DataFrame column names.
+
+    Raises
+    ------
+    KeyError
+        If minimal columns are not present.
+    """
     lower = {c.lower(): c for c in df.columns}
     def any_of(*cands):
         for c in cands:
@@ -105,24 +285,75 @@ def _detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
     return dict(ts=ts, station=st, bikes=bikes, capacity=cap, docks=docks, name=name, lat=lat, lon=lon)
 
 def _to_local(s_utc_like: pd.Series, tzname: str) -> pd.Series:
+    """
+    Convert a timestamp-like Series to a localized datetime (tz-aware).
+
+    Parameters
+    ----------
+    s_utc_like : pandas.Series
+        Series convertible to datetime (assumed UTC).
+    tzname : str
+        Target timezone name (e.g. "Europe/Paris").
+
+    Returns
+    -------
+    pandas.Series
+        Timezone-aware series converted to the target timezone.
+    """
     s = pd.to_datetime(s_utc_like, utc=True, errors="coerce")
     return s.dt.tz_convert(tzname)
 
 def _today_bounds_local(series_local: pd.Series) -> Tuple[pd.Timestamp, pd.Timestamp]:
+    """
+    Get local day bounds [start, end) for the last timestamp in a local series.
+
+    Parameters
+    ----------
+    series_local : pandas.Series
+        Localized datetime series.
+
+    Returns
+    -------
+    (pandas.Timestamp, pandas.Timestamp)
+        Start (00:00) and end (next day 00:00) of that local day.
+    """
     tmax = series_local.max()
     start = tmax.normalize()
     end = start + pd.Timedelta(days=1)
     return start, end
 
 def _safe_ratio(n: float, d: float) -> float:
+    """
+    Safely compute (n / d * 100), rounded to 2 decimals.
+
+    Returns NaN if d == 0.
+    """
     return float("nan") if d == 0 else round(100.0 * n / d, 2)
 
 def _part_bool(x: pd.Series) -> float:
+    """
+    Percentage (0–100) of True values in a boolean series.
+
+    Returns NaN for empty series.
+    """
     if x.size == 0:
         return float("nan")
     return float((x.mean() * 100.0).round(2))
 
 def _safe_num(v: object) -> Optional[float]:
+    """
+    Safely cast a value to float, returning None for NaN/Inf or errors.
+
+    Parameters
+    ----------
+    v : Any
+        Input value.
+
+    Returns
+    -------
+    float | None
+        Finite float or None.
+    """
     try:
         f = float(v)
         return f if np.isfinite(f) else None
@@ -130,6 +361,44 @@ def _safe_num(v: object) -> Optional[float]:
         return None
 
 def _compute_snapshot(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, station_universe: List[str]) -> Tuple[dict, pd.DataFrame, pd.DataFrame]:
+    """
+    Compute a global network snapshot and derived structures.
+
+    Snapshot definition
+    -------------------
+    - Take the last timestamp present in the window.
+    - Select all rows with exactly that timestamp.
+    - Derive per-station:
+        * has_bike, has_dock
+        * penury (bikes == 0)
+        * saturation (docks == 0)
+    - Compute global KPIs:
+        * stations_active vs universe
+        * availability_bike_pct, availability_dock_pct
+        * penury_pct, saturation_pct
+
+    Also returns:
+    - `dist`: a small distribution DataFrame for the snapshot
+    - `map_df`: indexed fields for the snapshot map (one row per station).
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Events dataframe, already filtered on the main time window.
+    cols : dict
+        Column mapping as returned by `_detect_columns`.
+    tzname : str
+        Timezone for snapshot_ts_local.
+    station_universe : list[str]
+        List of station IDs considered part of the universe.
+
+    Returns
+    -------
+    (dict, pandas.DataFrame, pandas.DataFrame)
+        - kpis: global snapshot KPIs (JSON-ready dict)
+        - dist: snapshot distribution (bike/dock/pen/sat)
+        - map_df: per-station snapshot rows for the map.
+    """
     df = df.copy()
     last_ts = pd.to_datetime(df[cols["ts"]], utc=True, errors="coerce").max()
     snap = df[df[cols["ts"]] == last_ts].copy()
@@ -205,6 +474,38 @@ def _compute_snapshot(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: 
     return kpis, dist, map_df
 
 def _coverage_volatility(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, last_days: int) -> Tuple[float,float]:
+    """
+    Compute 7-day coverage and "volatility_today" KPI.
+
+    Coverage (per station)
+    ----------------------
+    - Window: last `last_days` days (local time).
+    - For each station:
+        * coverage = (# timestamps seen for station) / (# distinct timestamps total)
+    - Global coverage_7d_pct = mean station coverage × 100.
+
+    Volatility today
+    ----------------
+    - Window: current local day (00:00–24:00).
+    - For each station: std-dev of bikes over the day.
+    - volatility_today = median of these std-devs.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Events dataframe on the full window.
+    cols : dict
+        Column mapping.
+    tzname : str
+        Timezone name.
+    last_days : int
+        Number of days used to measure coverage.
+
+    Returns
+    -------
+    (float, float)
+        coverage_pct, volatility_today.
+    """
     if last_days <= 0:
         return float("nan"), float("nan")
     ts_local = _to_local(df[cols["ts"]], tzname)
@@ -223,6 +524,31 @@ def _coverage_volatility(df: pd.DataFrame, cols: Dict[str, Optional[str]], tznam
     return coverage_pct, float(0.0 if pd.isna(vol) else round(vol, 2))
 
 def _today_vs_median_utc(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, ref_days: int, day_for_today_utc: datetime) -> Tuple[dict, dict]:
+    """
+    Build:
+      - today_curve: % of stations with ≥1 bike per 5-min bin
+        on the chosen UTC day (day_for_today_utc)
+      - ref_median_curve: median curve across `ref_days` past days
+        with the same weekday, per 5-min UTC bin.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Events dataframe on the full window.
+    cols : dict
+        Column mapping.
+    tzname : str
+        Timezone name (not used directly here but kept for symmetry).
+    ref_days : int
+        Number of days used to build the reference window.
+    day_for_today_utc : datetime
+        Reference UTC day used as "today".
+
+    Returns
+    -------
+    (dict, dict)
+        today_curve_doc, ref_median_doc (both JSON-ready dicts).
+    """
     """
     Construit:
       - today_curve: % stations avec ≥1 vélo par 5 min DU JOUR UTC CHOISI (day_for_today_utc)
@@ -271,14 +597,40 @@ def _today_vs_median_utc(df: pd.DataFrame, cols: Dict[str, Optional[str]], tznam
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
         "day_for_today_utc": start_utc.strftime("%Y-%m-%d"),
-        "median": [{"hhmm": str(h), "pct_median": _safe_num(v)} for h, v in ref_med.items()]
+        "median": {{"hhmm": str(h), "pct_median": _safe_num(v)} for h, v in ref_med.items()}
     }
     return today_doc, ref_doc
 
 def _kpis_today_vs_lags_utc(df: pd.DataFrame, cols: Dict[str, Optional[str]], day_for_today_utc: datetime) -> dict:
+    """
+    Compute day-level KPIs for today vs J-7 / J-14 / J-21 (UTC).
+
+    For each day we compute:
+      - avail_bike:  mean over the day of "% stations with ≥1 bike"
+      - avail_dock:  mean over the day of "% stations with ≥1 dock"
+      - pen:         mean over the day of "% stations in penury (bikes == 0)"
+      - sat:         mean over the day of "% stations in saturation (docks == 0)"
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Events dataframe.
+    cols : dict
+        Column mapping.
+    day_for_today_utc : datetime
+        Reference UTC day used as "today".
+
+    Returns
+    -------
+    dict
+        JSON document with fields "today" and "lags".
+    """
     ts_utc_all = pd.to_datetime(df[cols["ts"]], utc=True, errors="coerce")
 
     def day_kpis(day_start_utc: pd.Timestamp) -> dict:
+        """
+        Compute availability / penury / saturation KPIs for a single UTC day.
+        """
         day_end = day_start_utc + pd.Timedelta(days=1)
         d = df[(ts_utc_all >= day_start_utc) & (ts_utc_all < day_end)].copy()
         if d.empty:
@@ -313,6 +665,7 @@ def _kpis_today_vs_lags_utc(df: pd.DataFrame, cols: Dict[str, Optional[str]], da
     }
 
     def pack(d: dict) -> dict:
+        """Convert all numeric values to safe floats (None for NaN/Inf)."""
         return {k: (_safe_num(v) if v is not None else None) for k, v in d.items()}
 
     return {
@@ -324,6 +677,31 @@ def _kpis_today_vs_lags_utc(df: pd.DataFrame, cols: Dict[str, Optional[str]], da
     }
 
 def _stations_tension(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, last_days: int) -> dict:
+    """
+    Compute penury/saturation rates per station over the last `last_days` (local).
+
+    For each station:
+      - penury_rate     = mean over the window of (bikes == 0)
+      - saturation_rate = mean over the window of (docks == 0 or capacity - bikes <= 0)
+
+    This is used by the Monitoring UI to display a "tension" ranking.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Events dataframe on the full window.
+    cols : dict
+        Column mapping.
+    tzname : str
+        Timezone name.
+    last_days : int
+        Number of days for the window.
+
+    Returns
+    -------
+    dict
+        JSON document with "rows": [{station_id, penury_rate, saturation_rate}, ...].
+    """
     ts_loc = _to_local(df[cols["ts"]], tzname)
     tmax = ts_loc.max()
     start_ld = tmax - pd.Timedelta(days=last_days)
@@ -358,6 +736,44 @@ def _stations_tension(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: 
 # Main
 # ──────────────────────────────────────────────────────────────────────────────
 def main() -> int:
+    """
+    CLI entrypoint for the Network Overview job (LATEST ONLY).
+
+    Pipeline
+    --------
+    1. Read `GCS_EXPORTS_PREFIX`, `GCS_MONITORING_PREFIX`.
+    2. Resolve effective configuration:
+         - TZNAME (MON_TZ / OVERVIEW_TZ)
+         - LAST_DAYS (MON_LAST_DAYS / OVERVIEW_LAST_DAYS)
+         - REF_DAYS  (MON_REF_DAYS / OVERVIEW_REF_DAYS)
+    3. Define a UTC read window of `WINDOW_DAYS = max(LAST_DAYS, REF_DAYS, 7)`:
+         start = 00:00 of (now - (WINDOW_DAYS - 1))
+         end   = now (UTC)
+    4. List and read all `events_YYYY-MM-DD.parquet` in the window.
+       If none are found, publish a minimal manifest and return.
+    5. Detect columns, normalize dtypes, drop invalid rows, and enforce the
+       strict UTC window.
+    6. Build the station universe over the last `WINDOW_DAYS`.
+    7. Derive `day_for_today_utc` from the last events_* file (operational day).
+    8. Compute all artifacts:
+         - snapshot KPIs + distribution + map index,
+         - coverage & volatility,
+         - today vs median curves (UTC),
+         - today vs J-7 / J-14 / J-21 day-level KPIs,
+         - per-station tension (penury/saturation).
+    9. Upload all JSON artifacts under:
+         <GCS_MONITORING_PREFIX>/monitoring/network/overview/latest/
+    10. Build and upload a `manifest.json` describing:
+         - schema version, window_days, tz,
+         - sources (exports prefix),
+         - produced artifacts,
+         - day_for_today_utc.
+
+    Returns
+    -------
+    int
+        Exit code (0 = success).
+    """
     EXPORTS_PREFIX = _env("GCS_EXPORTS_PREFIX")    # gs://bucket/velib/exports
     MON_PREFIX     = _env("GCS_MONITORING_PREFIX") # gs://bucket/velib (ou .../monitoring)
     if not (EXPORTS_PREFIX and str(EXPORTS_PREFIX).startswith("gs://")):
