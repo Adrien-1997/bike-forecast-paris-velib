@@ -1,4 +1,4 @@
-# apps/api/routes/history.py
+# api/routes/history.py
 
 """History endpoint (disabled).
 

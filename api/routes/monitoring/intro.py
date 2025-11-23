@@ -1,4 +1,4 @@
-# apps/api/routes/monitoring/intro.py
+# api/routes/monitoring/intro.py
 
 """Monitoring — Intro (landing/overview) endpoint.
 

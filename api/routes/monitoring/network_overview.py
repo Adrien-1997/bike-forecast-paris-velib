@@ -1,36 +1,37 @@
-# apps/api/routes/network_dynamics.py
+# api/routes/network_overview.py
 
-"""Monitoring — Network Dynamics endpoints.
+"""Monitoring — Network Overview endpoints.
 
 Ce module expose les endpoints :
 
-    /monitoring/network/dynamics/...
+    /monitoring/network/overview/...
 
 Ils servent les artefacts JSON produits par le job
-`build_network_dynamics.py` sur GCS, typiquement organisés comme :
+`build_network_overview.py` sur GCS, typiquement organisés comme :
 
-    <GCS_MONITORING_PREFIX>/monitoring/network/dynamics/<latest|TS>/
-        heatmaps_profiles.json
-        hourly_pen_sat.json
-        episodes.json
-        by_zone.json
-        tension_by_station.json
-        regularity_today.json
+    <GCS_MONITORING_PREFIX>/monitoring/network/overview/<latest|TS>/
+        kpis.json
+        snapshot_distribution.json
+        today_curve.json
+        ref_median_curve.json
+        kpis_today_vs_lags.json
+        snapshot_map.json
+        stations_tension.json
 
 Principes :
-- Le backend **ne calcule rien** : il se contente de proxifier des JSON déjà
+- Le backend **ne calcule rien** ici : il ne fait que proxifier les JSON déjà
   préparés par les jobs batch.
 - Tous les chemins GCS sont dérivés de `GCS_MONITORING_PREFIX` (env),
   normalisé via `_mon_prefix_or_500()`.
 - Le paramètre `at` permet un time-travel simple :
     * `?at=latest` ou omis → snapshot courant,
     * `?at=YYYY-MM-DDTHH-MM-SSZ` → snapshot daté,
-    * toute valeur invalide → repli sur `latest`.
+    * toute valeur invalide → repli sur `latest` (et évite le path traversal).
 - Les nombres flottants non finis (NaN / ±Inf) sont convertis en `null`
   dans la réponse via `_json_sanitize`, pour garantir un JSON valide.
 
-Ces endpoints sont utilisés par la page "Network Dynamics" du monitoring
-(UI : heatmaps, épisodes de tension, régularité, etc.).
+Ces endpoints sont utilisés par la page "Network Overview" du monitoring
+(courbes d’occupation, KPIs globaux, distribution des snapshots, carte, etc.).
 """
 
 from __future__ import annotations
@@ -46,7 +47,8 @@ from fastapi.responses import JSONResponse
 try:
     from google.cloud import storage  # type: ignore
 except Exception as e:
-    # Ici GCS est requis : sans client storage, impossible de servir les artefacts.
+    # Pour les routes de monitoring, GCS est requis côté API :
+    # sans client storage, impossible de servir les artefacts.
     raise RuntimeError("google-cloud-storage requis côté API") from e
 
 
@@ -62,12 +64,12 @@ def _split_gs(uri: str) -> Tuple[str, str]:
     Parameters
     ----------
     uri : str
-        URI GCS commençant par `gs://`.
+        URI GCS devant commencer par `gs://`.
 
     Returns
     -------
     tuple[str, str]
-        Nom du bucket et chemin de l'objet.
+        `(bucket, key)`.
 
     Raises
     ------
@@ -81,7 +83,7 @@ def _split_gs(uri: str) -> Tuple[str, str]:
 
 
 def _gcs_read_json(gs_uri: str) -> dict:
-    """Télécharge un blob JSON GCS et le parse en dictionnaire Python.
+    """Télécharge un blob JSON depuis GCS et le parse en dictionnaire Python.
 
     Parameters
     ----------
@@ -135,15 +137,14 @@ def _mon_prefix_or_500() -> str:
     mon_raw = os.environ.get("GCS_MONITORING_PREFIX", "")
     mon = mon_raw.strip().strip("'\"").rstrip("/")
     if not mon.startswith("gs://"):
-        print(f"[network_dynamics] GCS_MONITORING_PREFIX invalide. Lu='{mon_raw}' nettoyé='{mon}'")
+        print(f"[network_overview] GCS_MONITORING_PREFIX invalide. Lu='{mon_raw}' nettoyé='{mon}'")
         raise HTTPException(status_code=500, detail="GCS_MONITORING_PREFIX manquant ou invalide")
-    print(f"[network_dynamics] GCS_MONITORING_PREFIX='{mon}'")
+    print(f"[network_overview] GCS_MONITORING_PREFIX='{mon}'")
     return mon
 
 
 # Timestamp "version" attendu pour le time-travel: 2025-10-23T14-30-00Z
 _AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z$")
-
 
 def _sanitize_at(at: Optional[str]) -> str:
     """Normalise le paramètre `at` (time-travel) en nom de dossier.
@@ -151,7 +152,7 @@ def _sanitize_at(at: Optional[str]) -> str:
     Règles :
     - `None`, vide ou "latest" (insensible à la casse) → `"latest"`,
     - chaîne qui matche `_AT_RE` → renvoyée telle quelle,
-    - tout le reste → `"latest"` (évite le path traversal / valeurs exotiques).
+    - tout le reste → `"latest"` (évite les valeurs exotiques / path traversal).
     """
     if not at or at.strip().lower() in ("", "latest"):
         return "latest"
@@ -165,7 +166,7 @@ def _sanitize_at(at: Optional[str]) -> str:
 def _json_sanitize(obj):
     """Remplace NaN/±Inf par None pour produire un JSON valide.
 
-    Fonction récursive appliquée à l’ensemble de la structure :
+    Fonction récursive appliquée à toute la structure :
     - dict  → application sur les valeurs,
     - list  → application sur les éléments,
     - float → si non fini (NaN / ±Inf) → None,
@@ -188,7 +189,7 @@ def _proxy_json(gs_uri: str, request: Request, ttl: int = 120) -> JSONResponse:
     gs_uri : str
         URI GCS du document à servir.
     request : Request
-        Requête FastAPI (actuellement non utilisée, conservée pour extension).
+        Requête FastAPI (actuellement non utilisée, gardée pour extension).
     ttl : int, default 120
         Durée de vie du cache HTTP (`max-age`) en secondes.
 
@@ -221,31 +222,33 @@ def _proxy_json(gs_uri: str, request: Request, ttl: int = 120) -> JSONResponse:
     return resp
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Endpoints DYNAMICS
+# Endpoints OVERVIEW
 # ──────────────────────────────────────────────────────────────────────────────
 
-DocNameDynamics = Literal[
-    "heatmaps_profiles",
-    "hourly_pen_sat",
-    "episodes",
-    "by_zone",
-    "tension_by_station",
-    "regularity_today",
+DocNameOverview = Literal[
+    "kpis",
+    "snapshot_distribution",
+    "today_curve",
+    "ref_median_curve",
+    "kpis_today_vs_lags",
+    "snapshot_map",
+    "stations_tension",
 ]
 
 # TTL (secondes) par type de document, ajusté selon la volatilité attendue
 _TTL_BY_DOC = {
-    "heatmaps_profiles": 300,   # plutôt stable
-    "hourly_pen_sat":    120,   # plus “live”
-    "episodes":          180,
-    "by_zone":           300,
-    "tension_by_station":180,
-    "regularity_today":  120,
+    "kpis": 60,
+    "snapshot_distribution": 120,
+    "today_curve": 60,
+    "ref_median_curve": 300,
+    "kpis_today_vs_lags": 120,
+    "snapshot_map": 60,
+    "stations_tension": 120,
 }
 
-@router.get("/dynamics/available")
-def network_dynamics_available():
-    """Petit index des documents de *network dynamics* disponibles.
+@router.get("/overview/available")
+def network_overview_available():
+    """Petit index des documents *network overview* disponibles.
 
     Response
     -------
@@ -258,12 +261,13 @@ def network_dynamics_available():
     afin de découvrir dynamiquement les documents servis par ce router.
     """
     docs = [
-        "heatmaps_profiles",
-        "hourly_pen_sat",
-        "episodes",
-        "by_zone",
-        "tension_by_station",
-        "regularity_today",
+        "kpis",
+        "snapshot_distribution",
+        "today_curve",
+        "ref_median_curve",
+        "kpis_today_vs_lags",
+        "snapshot_map",
+        "stations_tension",
     ]
     return {
         "docs": docs,
@@ -271,20 +275,20 @@ def network_dynamics_available():
     }
 
 
-@router.get("/dynamics/{doc}")
-def network_dynamics_doc(doc: DocNameDynamics, request: Request, at: Optional[str] = None):
+@router.get("/overview/{doc}")
+def network_overview_doc(doc: DocNameOverview, request: Request, at: Optional[str] = None):
     """
-    Proxy JSON pour les documents générés par le job `build_network_dynamics.py`.
+    Proxy JSON pour les documents générés par le job Overview.
 
     Exemples
     --------
-    - /monitoring/network/dynamics/heatmaps_profiles
-    - /monitoring/network/dynamics/episodes?at=2025-10-13T09-12-00Z
+    - /monitoring/network/overview/kpis
+    - /monitoring/network/overview/today_curve?at=2025-10-13T09-12-00Z
 
     Paramètres
     ----------
-    doc : DocNameDynamics, path
-        Nom logique du document à servir (voir `DocNameDynamics`).
+    doc : DocNameOverview, path
+        Nom logique du document à servir (voir `DocNameOverview`).
     at : str | None, query
         Slug de time-travel :
         - None / latest (ou invalide) → snapshot courant,
@@ -300,7 +304,7 @@ def network_dynamics_doc(doc: DocNameDynamics, request: Request, at: Optional[st
 
     # si l'ENV finit déjà par /monitoring, on ne le redouble pas
     base = f"{mon}/monitoring" if not mon.endswith("/monitoring") else mon
-    gs_uri = f"{base}/network/dynamics/{folder}/{doc}.json"
+    gs_uri = f"{base}/network/overview/{folder}/{doc}.json"
 
     ttl = _TTL_BY_DOC.get(doc, 120)
     return _proxy_json(gs_uri, request, ttl=ttl)

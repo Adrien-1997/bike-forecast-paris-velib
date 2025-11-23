@@ -5,14 +5,14 @@ Backend HTTP de l’application Vélib’ Forecast, exposant :
 - les endpoints de monitoring (overview réseau, stations, dynamique, performance modèle, explicabilité, data health, data drift…),
 - et quelques routes techniques (health, badges, snapshot live).
 
-Tout le code de l’API vit dans ce répertoire `apps/api`.
+Tout le code de l’API vit dans ce répertoire `api`.
 
 ---
 
 ## 1. Structure du dossier
 
 ```text
-apps/api/
+api/
 ├─ app.py                     # Entrypoint FastAPI (montage des routers, CORS, token global…)
 ├─ Dockerfile                 # Image Docker de l’API (python:3.11-slim + Uvicorn)
 ├─ requirements.txt           # Dépendances de l’API
@@ -56,7 +56,7 @@ et stockés sur GCS.
 L’API est entièrement paramétrée par des variables d’environnement Pydantic
 (voir `core/settings.py`). La configuration de référence est décrite dans :
 
-- `apps/api/api-env.yaml` : fichier **documenté** sans secrets, utilisable comme
+- `api/api-env.yaml` : fichier **documenté** sans secrets, utilisable comme
   base pour :
   - un `.env` local,
   - ou un bloc “Variables d’environnement” dans Cloud Run.
@@ -93,7 +93,7 @@ Points clés :
 Depuis la racine du repo :
 
 ```bash
-cd apps/api
+cd api
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
@@ -112,7 +112,7 @@ La documentation interactive sera disponible sur `http://localhost:5050/docs`.
 ### 3.2. Avec Docker
 
 ```bash
-cd apps/api
+cd api
 docker build -t velib-api .
 docker run --rm -p 8080:8080 --env-file api-env.yaml velib-api
 ```

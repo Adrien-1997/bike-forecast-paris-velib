@@ -1,4 +1,4 @@
-# apps/api/routes/snapshot.py
+# api/routes/snapshot.py
 
 """Live snapshot endpoint for Vélib’ Forecast.
 

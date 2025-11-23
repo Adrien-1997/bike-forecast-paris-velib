@@ -1,4 +1,4 @@
-# apps/api/routes/badges.py
+# api/routes/badges.py
 
 """Badges endpoint: small metadata for the UI header.
 

@@ -1,4 +1,4 @@
-# apps/api/routes/monitoring/data_freshness.py
+# api/routes/monitoring/data_freshness.py
 
 """Monitoring — Data Freshness endpoint.
 

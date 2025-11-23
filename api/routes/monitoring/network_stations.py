@@ -1,26 +1,28 @@
-# apps/api/routes/network_overview.py
+# api/routes/monitoring/network_stations.py
 
-"""Monitoring — Network Overview endpoints.
+"""Monitoring — Network Stations endpoints.
 
 Ce module expose les endpoints :
 
-    /monitoring/network/overview/...
+    /monitoring/network/stations/...
 
 Ils servent les artefacts JSON produits par le job
-`build_network_overview.py` sur GCS, typiquement organisés comme :
+`build_network_stations.py` sur GCS, typiquement organisés comme :
 
-    <GCS_MONITORING_PREFIX>/monitoring/network/overview/<latest|TS>/
+    <GCS_MONITORING_PREFIX>/monitoring/network/stations/<latest|TS>/
         kpis.json
-        snapshot_distribution.json
-        today_curve.json
-        ref_median_curve.json
-        kpis_today_vs_lags.json
-        snapshot_map.json
-        stations_tension.json
+        centroids.json
+        pca_scatter.json
+        pca_circle.json
+        stats7.json
+
+Et, pour compatibilité ascendante :
+
+    <GCS_MONITORING_PREFIX>/monitoring/network/stations.json   (legacy)
 
 Principes :
-- Le backend **ne calcule rien** ici : il ne fait que proxifier les JSON déjà
-  préparés par les jobs batch.
+- Le backend **ne calcule rien** : il ne fait que proxifier des JSON déjà
+  construits et uploadés par les jobs batch.
 - Tous les chemins GCS sont dérivés de `GCS_MONITORING_PREFIX` (env),
   normalisé via `_mon_prefix_or_500()`.
 - Le paramètre `at` permet un time-travel simple :
@@ -28,18 +30,18 @@ Principes :
     * `?at=YYYY-MM-DDTHH-MM-SSZ` → snapshot daté,
     * toute valeur invalide → repli sur `latest` (et évite le path traversal).
 - Les nombres flottants non finis (NaN / ±Inf) sont convertis en `null`
-  dans la réponse via `_json_sanitize`, pour garantir un JSON valide.
+  via `_json_sanitize`, afin de garantir un JSON valide côté client.
 
-Ces endpoints sont utilisés par la page "Network Overview" du monitoring
-(courbes d’occupation, KPIs globaux, distribution des snapshots, carte, etc.).
+Ces endpoints sont consommés par la page "Network Stations" du monitoring
+(clusters de stations, PCA, stats agrégées, etc.).
 """
 
 from __future__ import annotations
 import os
 import json
 import re
-from typing import Optional, Literal, Tuple
 import math
+from typing import Optional, Literal, Tuple
 
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -47,15 +49,14 @@ from fastapi.responses import JSONResponse
 try:
     from google.cloud import storage  # type: ignore
 except Exception as e:
-    # Pour les routes de monitoring, GCS est requis côté API :
-    # sans client storage, impossible de servir les artefacts.
+    # Ici GCS est requis : sans client storage, impossible de servir les artefacts.
     raise RuntimeError("google-cloud-storage requis côté API") from e
 
 
 router = APIRouter(prefix="/monitoring/network")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Helpers GCS
+# Helpers GCS (mêmes patterns que network_overview.py)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _split_gs(uri: str) -> Tuple[str, str]:
@@ -83,7 +84,7 @@ def _split_gs(uri: str) -> Tuple[str, str]:
 
 
 def _gcs_read_json(gs_uri: str) -> dict:
-    """Télécharge un blob JSON depuis GCS et le parse en dictionnaire Python.
+    """Télécharge un blob JSON depuis GCS et le parse en dict Python.
 
     Parameters
     ----------
@@ -127,7 +128,7 @@ def _mon_prefix_or_500() -> str:
     Returns
     -------
     str
-        Préfixe GCS normalisé.
+        Préfixe GCS normalisé (sans slash final).
 
     Raises
     ------
@@ -137,9 +138,9 @@ def _mon_prefix_or_500() -> str:
     mon_raw = os.environ.get("GCS_MONITORING_PREFIX", "")
     mon = mon_raw.strip().strip("'\"").rstrip("/")
     if not mon.startswith("gs://"):
-        print(f"[network_overview] GCS_MONITORING_PREFIX invalide. Lu='{mon_raw}' nettoyé='{mon}'")
+        print(f"[network_stations] GCS_MONITORING_PREFIX invalide. Lu='{mon_raw}' nettoyé='{mon}'")
         raise HTTPException(status_code=500, detail="GCS_MONITORING_PREFIX manquant ou invalide")
-    print(f"[network_overview] GCS_MONITORING_PREFIX='{mon}'")
+    print(f"[network_stations] GCS_MONITORING_PREFIX='{mon}'")
     return mon
 
 
@@ -221,74 +222,58 @@ def _proxy_json(gs_uri: str, request: Request, ttl: int = 120) -> JSONResponse:
     resp.headers.setdefault("Access-Control-Allow-Origin", "*")
     return resp
 
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Endpoints OVERVIEW
+# Endpoints STATIONS
 # ──────────────────────────────────────────────────────────────────────────────
 
-DocNameOverview = Literal[
-    "kpis",
-    "snapshot_distribution",
-    "today_curve",
-    "ref_median_curve",
-    "kpis_today_vs_lags",
-    "snapshot_map",
-    "stations_tension",
-]
+DocNameStations = Literal["kpis", "centroids", "pca_scatter", "pca_circle", "stats7"]
 
-# TTL (secondes) par type de document, ajusté selon la volatilité attendue
 _TTL_BY_DOC = {
     "kpis": 60,
-    "snapshot_distribution": 120,
-    "today_curve": 60,
-    "ref_median_curve": 300,
-    "kpis_today_vs_lags": 120,
-    "snapshot_map": 60,
-    "stations_tension": 120,
+    "centroids": 300,
+    "pca_scatter": 300,
+    "pca_circle": 300,
+    "stats7": 120,
 }
 
-@router.get("/overview/available")
-def network_overview_available():
-    """Petit index des documents *network overview* disponibles.
+@router.get("/stations/available")
+def network_stations_available():
+    """Index des documents *stations* + rappel du time-travel.
 
     Response
     -------
     {
-      "docs": [...],
+      "docs": ["kpis", "centroids", "pca_scatter", "pca_circle", "stats7"],
       "time_travel": "utiliser ?at=YYYY-MM-DDTHH-MM-SSZ ou sans param pour latest"
     }
 
-    Utile pour introspection rapide (via /docs) et pour le frontend,
-    afin de découvrir dynamiquement les documents servis par ce router.
+    Utile pour :
+    - introspection rapide via /docs,
+    - permettre au frontend de découvrir dynamiquement les documents servis
+      par ce router.
     """
-    docs = [
-        "kpis",
-        "snapshot_distribution",
-        "today_curve",
-        "ref_median_curve",
-        "kpis_today_vs_lags",
-        "snapshot_map",
-        "stations_tension",
-    ]
+    docs = ["kpis", "centroids", "pca_scatter", "pca_circle", "stats7"]
     return {
         "docs": docs,
         "time_travel": "utiliser ?at=YYYY-MM-DDTHH-MM-SSZ ou sans param pour latest"
     }
 
 
-@router.get("/overview/{doc}")
-def network_overview_doc(doc: DocNameOverview, request: Request, at: Optional[str] = None):
+@router.get("/stations/{doc}")
+def network_stations_doc(doc: DocNameStations, request: Request, at: Optional[str] = None):
     """
-    Proxy JSON pour les documents générés par le job Overview.
+    Proxy JSON pour les documents générés par le job Network Stations.
 
     Exemples
     --------
-    - /monitoring/network/overview/kpis
-    - /monitoring/network/overview/today_curve?at=2025-10-13T09-12-00Z
+    - /monitoring/network/stations/kpis
+    - /monitoring/network/stations/centroids?at=2025-10-13T09-12-00Z
 
     Paramètres
     ----------
-    doc : DocNameOverview, path
-        Nom logique du document à servir (voir `DocNameOverview`).
+    doc : {"kpis","centroids","pca_scatter","pca_circle","stats7"}
+        Nom logique du document à servir.
     at : str | None, query
         Slug de time-travel :
         - None / latest (ou invalide) → snapshot courant,
@@ -299,12 +284,37 @@ def network_overview_doc(doc: DocNameOverview, request: Request, at: Optional[st
     fastapi.responses.JSONResponse
         Contenu JSON "sanitisé" du document demandé.
     """
-    mon = _mon_prefix_or_500()  # ex: gs://velib-forecast-472820_cloudbuild/velib
-    folder = _sanitize_at(at)   # 'latest' ou timestamp normalisé
+    mon = _mon_prefix_or_500()   # ex: gs://velib-forecast-472820_cloudbuild/velib
+    folder = _sanitize_at(at)    # 'latest' ou timestamp normalisé
 
     # si l'ENV finit déjà par /monitoring, on ne le redouble pas
     base = f"{mon}/monitoring" if not mon.endswith("/monitoring") else mon
-    gs_uri = f"{base}/network/overview/{folder}/{doc}.json"
+    gs_uri = f"{base}/network/stations/{folder}/{doc}.json"
 
     ttl = _TTL_BY_DOC.get(doc, 120)
     return _proxy_json(gs_uri, request, ttl=ttl)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Legacy minimal (optionnel) : ancien JSON global si présent
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.get("/stations")
+def network_stations_legacy(request: Request):
+    """
+    Legacy endpoint — renvoie l'ancien JSON global si encore présent.
+
+    Path GCS visé :
+    ---------------
+    gs://<...>/monitoring/network/stations.json
+
+    Notes
+    -----
+    - Ce endpoint est conservé pour compatibilité avec d'anciennes versions
+      du frontend, avant l’introduction des fichiers par document/horizon.
+    """
+    mon = _mon_prefix_or_500()
+    base = f"{mon}/monitoring" if not mon.endswith("/monitoring") else mon
+    gs_uri = f"{base}/network/stations.json"
+    return _proxy_json(gs_uri, request, ttl=120)
+

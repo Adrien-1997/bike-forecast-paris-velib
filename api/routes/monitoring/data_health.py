@@ -1,4 +1,4 @@
-# apps/api/routes/monitoring/data_health.py
+# api/routes/monitoring/data_health.py
 
 """Monitoring — Data Health endpoints.
 

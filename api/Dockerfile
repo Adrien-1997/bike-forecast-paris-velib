@@ -1,4 +1,4 @@
-# apps/api/Dockerfile
+# api/Dockerfile
 
 # =============================================================================
 # Image Docker pour l'API Vélib' Forecast (FastAPI + Uvicorn).

@@ -1,4 +1,4 @@
-# apps/api/routes/monitoring_data_drift.py
+# api/routes/monitoring_data_drift.py
 
 """Monitoring — Data Drift endpoints.
 

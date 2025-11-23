@@ -1,4 +1,4 @@
-# apps/api/routes/forecast.py
+# api/routes/forecast.py
 
 """Forecast endpoints (batch forecasts served from GCS).
 

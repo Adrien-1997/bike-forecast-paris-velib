@@ -1,4 +1,4 @@
-﻿# apps/api/app.py
+﻿# api/app.py
 
 """Vélib' Forecast — Entrypoint FastAPI.
 
@@ -42,16 +42,16 @@ try:
     env_file = repo_root / ".env"
     if env_file.exists():
         load_dotenv(env_file, override=False)
-    print(f"[app] .env chargé ✓ (found='{found}', repo_root='{repo_root}')")
+    print(f"[api] .env chargé ✓ (found='{found}', repo_root='{repo_root}')")
 except Exception as e:
     # L’API reste fonctionnelle même si .env n’est pas trouvé : on se repose
     # alors uniquement sur les variables d’environnement déjà présentes.
-    print(f"[app] .env non chargé ({e})")
+    print(f"[api] .env non chargé ({e})")
 
 # ─────────── Alias 'core' ───────────
 # Permet d'importer `core` de façon homogène dans tout le projet, que l’on soit
-# dans un contexte `apps.api.*`, `api.*` ou directement `core.*`.
-for mod in ("apps.api.core", "api.core", "core"):
+# dans un contexte `api.*` ou directement `core.*`.
+for mod in ("api.core", "core"):
     try:
         sys.modules.setdefault("core", importlib.import_module(mod))
         break
@@ -62,23 +62,16 @@ for mod in ("apps.api.core", "api.core", "core"):
 # On tente plusieurs chemins pour récupérer l'instance `settings` (Pydantic),
 # afin que le fichier reste robuste aux variations de layout/imports.
 try:
-    from apps.api.core.settings import settings
+    from api.core.settings import settings
 except Exception:
-    try:
-        from .core.settings import settings
-    except Exception:
-        try:
-            from core.settings import settings
-        except Exception:
-            # En dernier recours, `settings` vaut None : l’API reste utilisable
-            # mais certaines fonctionnalités (CORS, etc.) seront dégradées.
-            settings = None
+    from .core.settings import settings
+
 
 # ─────────── Routes legacy ───────────
 # Endpoints principaux (avant monitoring) :
 # - /healthz, /stations, /forecast, /history, /badges, /snapshot, /weather, …
 try:
-    from apps.api.routes import health, stations, forecast, history, badges, snapshot, weather
+    from api.routes import health, stations, forecast, history, badges, snapshot, weather
 except Exception:
     try:
         from .routes import health, stations, forecast, history, badges, snapshot, weather
@@ -92,7 +85,7 @@ except Exception:
 # - data_health, data_drift, data_freshness
 # - intro (bloc de synthèse / landing monitoring)
 try:
-    from apps.api.routes.monitoring import (
+    from api.routes.monitoring import (
         network_overview,
         network_dynamics,
         network_stations,
