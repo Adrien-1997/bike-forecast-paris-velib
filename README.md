@@ -83,23 +83,23 @@ avec un **pipeline reproductible**, un **suivi de la qualité des données** et 
 │   ├── lib/                  # Services HTTP, helpers Plotly, index stations, etc.
 │   ├── public/               # Assets statiques (favicon, data/stations.index.json, ...)
 │   ├── styles/               # CSS globaux + CSS contextuels (landing, app, monitoring)
-│   └── ...                   # Config Next, types, scripts, etc.
+│   ├── scripts/              # Scripts utilitaires pour l’UI (ex: buildStationsIndex.ts)
+│   ├── Dockerfile            # Image Next.js / UI (si build séparé)
+│   ├── netlify.toml          # Configuration Netlify pour le build / déploiement UI
+│   ├── package.json          # Dépendances JS/TS (UI + scripts)
+│   ├── tsconfig.json         # Config TypeScript (UI)
+│   └── README.md             # README spécifique à l’UI (si présent)
 │
-├── scripts/                  # Scripts utilitaires (ex: buildStationsIndex.ts, etc.)
+├── scripts/                  # Scripts utilitaires globaux (hors UI)
 │
 ├── infra/                    # Scripts & fichiers d’infrastructure (GCP, Terraform, ...)
 │                             # → Dossier aujourd’hui ignoré par .gitignore
 │
 ├── docs/                     # Documentation complémentaire / assets (optionnel)
 │
-├── Dockerfile                # Image principale (API / jobs ou multi-stage selon usage)
-├── netlify.toml              # Configuration Netlify pour le build / déploiement UI
-├── bucket-lifecycle.json     # (optionnel) Gestion du cycle de vie GCS
 ├── .gcloudignore             # Fichiers ignorés lors des déploiements gcloud
 ├── .gitignore                # Ignorés Git (données lourdes, env, node_modules, ...)
-├── package.json              # Dépendances JS/TS (UI + scripts)
-├── tsconfig.json             # Config TypeScript
-└── README.md                 # Ce fichier
+└── README.md                 # Ce fichier (README racine)
 ```
 
 ---
@@ -309,7 +309,11 @@ Les styles spécifiques sont chargés via `monitoring.css`, `monitoringnav.css`,
 2. Déployer sur Cloud Run :
 
    ```bash
-   gcloud run deploy velib-forecast-api          --image gcr.io/$GCP_PROJECT/velib-forecast-api          --region europe-west1          --platform managed          --allow-unauthenticated
+   gcloud run deploy velib-forecast-api \
+     --image gcr.io/$GCP_PROJECT/velib-forecast-api \
+     --region europe-west1 \
+     --platform managed \
+     --allow-unauthenticated
    ```
 
 3. Déployer les jobs batch comme services Cloud Run séparés ou via Cloud Run Jobs,  
@@ -317,7 +321,7 @@ Les styles spécifiques sont chargés via `monitoring.css`, `monitoringnav.css`,
 
 ### 8.2. UI (Netlify / autre)
 
-- Netlify lit la configuration dans `netlify.toml` (répertoire `ui/`, commande `npm run build`, etc.).  
+- Netlify lit la configuration dans `ui/netlify.toml` (répertoire `ui/`, commande `npm run build`, etc.).  
 - La sortie Next.js (`.next` / `out`) est servie derrière le domaine public (ex: `velo-paris.fr`).  
 - L’UI communique avec l’API via `NEXT_PUBLIC_API_BASE_URL`.
 
