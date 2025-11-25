@@ -1,4 +1,19 @@
 // ui/pages/monitoring/network/dynamics.tsx
+//
+// =============================================================================
+// Page Monitoring — Réseau / Dynamiques
+// -----------------------------------------------------------------------------
+// Cette page présente les dynamiques globales du réseau Vélib’ :
+//   - Heatmaps 7×24 (occupation, pénurie, saturation),
+//   - Profils d’occupation par jour de semaine,
+//   - Pénurie & saturation par heure,
+//   - Liste / carte des épisodes récents (pénurie / saturation),
+//   - Indice de tension par station (classement + filtrage).
+//
+// Les données sont récupérées via le service monitoring/network_dynamics.
+// L’URL peut contenir un paramètre ?station_id=… pour filtrer les épisodes.
+// =============================================================================
+
 import Head from "next/head";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -23,24 +38,43 @@ import {
 } from "@/lib/services/monitoring/network_dynamics";
 
 /* ───────────────── Plotly (client only) ───────────────── */
+// Plotly est chargé côté client uniquement (ssr: false) pour éviter les accès
+// à window/document lors du rendu serveur.
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ssr: false,
   loading: () => <div className="empty">Chargement du graphique…</div>,
 });
 
 /* ───────────────── Utils ───────────────── */
+/**
+ * Helper pour Promise.allSettled :
+ *  - renvoie la valeur si la promesse est "fulfilled",
+ *  - sinon null (permet de gérer erreur partielle).
+ */
 function ok<T>(r: PromiseSettledResult<T>): T | null {
   return r.status === "fulfilled" ? r.value : null;
 }
+
+/**
+ * clamp01 : borne une valeur dans [0,1] avec tolérance aux null / NaN.
+ */
 function clamp01(x: number | null | undefined): number | null {
   if (!Number.isFinite(Number(x))) return null;
   return Math.max(0, Math.min(1, Number(x)));
 }
+
+/**
+ * clamp : borne une valeur dans [lo, hi].
+ */
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
 /* ───────────────── Episodes Map ───────────────── */
+/**
+ * EpisodePoint : structure utilisée pour l’affichage des épisodes sur la carte.
+ * Les épisodes peuvent être de type "penury" ou "saturation".
+ */
 type EpisodePoint = {
   station_id: string;
   name: string;
@@ -52,11 +86,16 @@ type EpisodePoint = {
   duration_min: number | null;
 };
 
+// Carte dynamique des épisodes réseau (Leaflet, côté client uniquement).
 const EpisodesMap = dynamic(async () => {
   const RL = await import("react-leaflet");
   const { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } = RL as any;
   const { useEffect, useMemo, useState } = await import("react");
 
+  /**
+   * FitBounds : adapte automatiquement le zoom/centre de la carte de façon à
+   * englober tous les points d’épisodes fournis.
+   */
   function FitBounds({ rows }: { rows: EpisodePoint[] }) {
     const map = useMap();
     useEffect(() => {
@@ -75,6 +114,10 @@ const EpisodesMap = dynamic(async () => {
     return null;
   }
 
+  /**
+   * MapInner : composant interne qui dessine les points d’épisodes
+   * (pénurie/saturation) avec un fond Carto Light + fallback OpenStreetMap.
+   */
   function MapInner({ rows }: { rows: EpisodePoint[] }) {
     const valid = useMemo(
       () => rows.filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon)),
@@ -83,6 +126,7 @@ const EpisodesMap = dynamic(async () => {
     const latMed = valid.length ? [...valid].map(r => r.lat).sort((a,b)=>a-b)[Math.floor(valid.length/2)] : 48.8566;
     const lonMed = valid.length ? [...valid].map(r => r.lon).sort((a,b)=>a-b)[Math.floor(valid.length/2)] : 2.3522;
 
+    // Fond Carto avec fallback OSM si indisponible.
     const [tileUrl, setTileUrl] = useState(
       "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
     );
@@ -127,7 +171,7 @@ const EpisodesMap = dynamic(async () => {
                     <div>Début : {new Date(r.start_utc).toLocaleString("fr-FR")}</div>
                     <div>Fin : {new Date(r.end_utc).toLocaleString("fr-FR")}</div>
                     <div>Durée : {fmtInt(r.duration_min)}</div>
-                    {/* lien retiré volontairement */}
+                    {/* lien retiré volontairement pour garder une carte purement informative */}
                     <div className="small" style={{ opacity: 0.7 }}>Voir épisodes (lien désactivé)</div>
                   </div>
                 </Tooltip>
@@ -136,7 +180,7 @@ const EpisodesMap = dynamic(async () => {
           })}
         </MapContainer>
 
-        {/* Légende */}
+        {/* Légende des types d’épisodes affichés sur la carte */}
         <div className="cluster-legend">
           <div className="cluster-legend__title">Épisodes</div>
           <div className="cluster-legend__row">
@@ -159,23 +203,28 @@ const EpisodesMap = dynamic(async () => {
 /* ───────────────── Page ───────────────── */
 export default function NetworkDynamicsPage() {
   const router = useRouter();
+  // station_id provenant potentiellement de la query string (?station_id=…)
   const qStation = typeof router.query.station_id === "string" ? router.query.station_id : "";
   const [stationId, setStationId] = useState<string>(qStation);
 
+  // Documents principaux récupérés via les services monitoring/network_dynamics.
   const [heat, setHeat] = useState<HeatmapsProfilesDoc | null>(null);
   const [hourly, setHourly] = useState<HourlyDoc | null>(null);
   const [episodes, setEpisodes] = useState<EpisodesDoc | null>(null);
   const [tension, setTension] = useState<TensionByStationDoc | null>(null);
   const [stationsIdx, setStationsIdx] = useState<Record<string, StationMeta>>({});
 
+  // dowSel : jour sélectionné pour les profils (1 = Lundi par défaut).
   const [dowSel, setDowSel] = useState<number>(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
+  // Sync de stationId si la query change.
   useEffect(() => { setStationId(qStation); }, [qStation]);
 
+  // Chargement initial des documents réseau + index stations.
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -202,6 +251,7 @@ export default function NetworkDynamicsPage() {
             : null
         );
 
+        // Index des stations (nom + lat/lon) pour les tableaux et la carte.
         fetchStationsIndex()
           .then((idx) => { if (alive) setStationsIdx(idx); })
           .catch(() => {});
@@ -214,10 +264,11 @@ export default function NetworkDynamicsPage() {
     return () => { alive = false; };
   }, []);
 
+  // Timestamp de génération (on prend le premier disponible).
   const generatedAt =
     heat?.generated_at ?? hourly?.generated_at ?? episodes?.generated_at ?? tension?.generated_at;
 
-  // KPIs
+  // KPIs synthétiques affichés dans la KpiBar.
   const stationsCount = useMemo(() => {
     const n = tension?.rows?.length;
     return Number.isFinite(Number(n)) ? Number(n) : NaN;
@@ -248,6 +299,7 @@ export default function NetworkDynamicsPage() {
     return m || NaN;
   }, [hourly]);
 
+  // Fenêtre temporelle (en jours) et version de schéma remontées côté back-end.
   const windowDays =
     episodes?.last_days ?? tension?.last_days ?? (heat as any)?.last_days ?? (heat as any)?.window_days ?? undefined;
 
@@ -255,9 +307,15 @@ export default function NetworkDynamicsPage() {
     episodes?.schema_version ?? tension?.schema_version ?? (hourly as any)?.schema_version ?? (heat as any)?.schema_version ?? undefined;
 
   /* ───────────────── Heatmaps 7×24 — compacts ───────────────── */
+  // Styles compacts pour les cartes 7×24 (occupation / pénurie / saturation).
   const compactPlotCardStyle = { padding: "8px 8px 6px 8px" } as const;
   const compactH3Style = { margin: "0 0 6px 0", fontSize: 16, lineHeight: 1.25 } as const;
 
+  /**
+   * heatmap : helper pour afficher une heatmap 7×24 standardisée.
+   *  - matrix : 7 lignes (jours) × 24 colonnes (heures),
+   *  - isPct01 : si true, les valeurs sont multipliées par 100 pour l’affichage.
+   */
   const heatmap = (title: string, matrix: (number | null)[][], isPct01 = false): JSX.Element => {
     const z =
       matrix?.map((row) =>
@@ -289,12 +347,14 @@ export default function NetworkDynamicsPage() {
   };
 
   /* ───────────────── Profils par jour ───────────────── */
+  // Profil d’occupation (en %) pour le jour sélectionné (dowSel).
   const selectedProfile = useMemo(() => {
     const key = String(dowSel ?? 1);
     const arr = heat?.profiles_occ_by_dow?.[key] ?? [];
     return arr.map((v) => (Number.isFinite(Number(v)) ? Number(v) * 100 : null));
   }, [heat, dowSel]);
 
+  // Y-max dynamique pour garder une échelle lisible quel que soit le jour.
   const profileYMax = useMemo(() => {
     const vals = (selectedProfile || []).filter((v) => Number.isFinite(Number(v))) as number[];
     const maxv = vals.length ? Math.max(...vals) : 100;
@@ -302,6 +362,7 @@ export default function NetworkDynamicsPage() {
   }, [selectedProfile]);
 
   /* ───────────────── Barres horaires ───────────────── */
+  // Barres groupées pénurie / saturation par heure locale.
   const hourlyBars: Partial<Plotly.PlotData>[] = useMemo(() => {
     const rows = hourly?.rows ?? [];
     const hours = [...Array(24)].map((_, i) => i);
@@ -327,6 +388,7 @@ export default function NetworkDynamicsPage() {
     ];
   }, [hourly]);
 
+  // Y-max dynamique pour les barres horaires (borne supérieure lissée).
   const hourlyYMax = useMemo(() => {
     const vals: number[] = [];
     for (const s of hourlyBars) {
@@ -339,6 +401,7 @@ export default function NetworkDynamicsPage() {
   }, [hourlyBars]);
 
   /* ───────────────── Episodes (filtre station) ───────────────── */
+  // Filtre des épisodes par station_id si un filtre est appliqué.
   const episodesFiltered = useMemo(() => {
     const rows = episodes?.rows ?? [];
     const sid = (stationId || "").trim();
@@ -347,6 +410,7 @@ export default function NetworkDynamicsPage() {
 
   /* ───────────────── Tension par station (recherche) ───────────────── */
   const [search, setSearch] = useState("");
+  // Liste de stations triées par tension_index, filtrable par nom / station_id.
   const tensionRows = useMemo(() => {
     const rows = tension?.rows ?? [];
     const q = (search || "").toLowerCase();
@@ -364,6 +428,7 @@ export default function NetworkDynamicsPage() {
   }, [tension, search, stationsIdx]);
 
   /* ───────────────── Rows pour EpisodesMap ───────────────── */
+  // Conversion EpisodesDoc → EpisodePoint (structure utilisée dans EpisodesMap).
   const episodePoints: EpisodePoint[] = useMemo(() => {
     const rows = episodesFiltered ?? [];
     const out: EpisodePoint[] = [];
@@ -406,7 +471,7 @@ export default function NetworkDynamicsPage() {
         <LoadingBar status={barStatus} />
         {error && <div className="alert error" style={{ marginTop: 8 }}>{error}</div>}
 
-        {/* KPIs */}
+        {/* KPIs globaux réseau (stations, épisodes, pics pen/sat) */}
         <section className="mt-4">
           <h2>Résumé réseau</h2>
           <KpiBar
@@ -423,7 +488,7 @@ export default function NetworkDynamicsPage() {
           </div>
         </section>
 
-        {/* Heatmaps */}
+        {/* Heatmaps 7×24 : Occupation / Pénurie / Saturation */}
         <section className="mt-6">
           <h2>Heatmaps 7×24</h2>
           {heat ? (
@@ -454,7 +519,7 @@ export default function NetworkDynamicsPage() {
           )}
         </section>
 
-        {/* Profils par jour */}
+        {/* Profils d’occupation par jour de semaine (série horaire 24 points) */}
         <section className="mt-6">
           <h2>Profils d’occupation par jour</h2>
           <div className="filters" style={{ marginBottom: 8 }}>
@@ -509,7 +574,7 @@ export default function NetworkDynamicsPage() {
           </div>
         </section>
 
-        {/* Barres horaires pen/sat */}
+        {/* Barres pénurie / saturation par heure locale */}
         <section className="mt-6">
           <h2>Pénurie & Saturation par heure</h2>
           <div className="plot-card" style={{ padding: "8px 8px 6px 8px" }}>
@@ -536,7 +601,7 @@ export default function NetworkDynamicsPage() {
           </div>
         </section>
 
-        {/* Épisodes */}
+        {/* Épisodes récents : filtre station + carte + liste détaillée */}
         <section className="mt-6">
           <h2>Épisodes (fenêtre récente)</h2>
           <div className="filters">
@@ -568,7 +633,7 @@ export default function NetworkDynamicsPage() {
             )}
           </div>
 
-          {/* Carte */}
+          {/* Carte des épisodes (points non cliquables) */}
           <div className="map-block">
             <div className="map-wrap h-360">
               {episodePoints.length ? <EpisodesMap rows={episodePoints} /> : <div className="empty">Aucun point à afficher.</div>}
@@ -578,7 +643,7 @@ export default function NetworkDynamicsPage() {
             Basemap : Carto Light (no labels). Rouge = pénurie ; Bleu = saturation. Un point par épisode détecté.
           </div>
 
-          {/* Liste des épisodes (stations non cliquables) */}
+          {/* Liste tabulaire des épisodes (stations non cliquables) */}
           {episodesFiltered?.length ? (
             <div className="card mt-4">
               <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>Liste des épisodes détectés</h3>
@@ -598,7 +663,7 @@ export default function NetworkDynamicsPage() {
                     const name = stationsIdx[r.station_id]?.name ?? r.station_id;
                     return (
                       <Row key={`${r.station_id}-${r.start_utc}-${i}`}>
-                        {/* Colonne gauche style "performance", sans lien */}
+                        {/* Colonne gauche style "performance", sans lien cliquable */}
                         <div style={{ minWidth: 0 }}>
                           <div
                             style={{
@@ -637,7 +702,7 @@ export default function NetworkDynamicsPage() {
           )}
         </section>
 
-        {/* Tension par station (stations non cliquables) */}
+        {/* Indice de tension par station : classement + recherche libre */}
         <section className="mt-6" style={{ marginBottom: 40 }}>
           <h2>Tension par station</h2>
           <div className="card">
@@ -673,7 +738,7 @@ export default function NetworkDynamicsPage() {
                     const displayName = (r as any)._name;
                     return (
                       <Row key={`${r.station_id}-${i}`}>
-                        {/* Colonne gauche style "performance", sans lien */}
+                        {/* Colonne gauche style "performance", sans lien cliquable */}
                         <div style={{ minWidth: 0 }}>
                           <div
                             style={{
@@ -723,6 +788,10 @@ export default function NetworkDynamicsPage() {
 }
 
 /* ───────────────────────── UI atoms (alignés monitoring.css) ───────────────────────── */
+/**
+ * Row : wrapper utilitaire pour une ligne de tableau,
+ * applique table-cell--right sur les 2 dernières colonnes quand il y a ≥ 6 colonnes.
+ */
 function Row({ children }: { children: ReactNode }) {
   const items = Array.isArray(children) ? children : [children];
   return (
@@ -738,6 +807,11 @@ function Row({ children }: { children: ReactNode }) {
     </div>
   );
 }
+
+/**
+ * HeaderCell : raccourci pour une cellule d’en-tête sticky,
+ * alignée avec les styles de monitoring.css.
+ */
 function HeaderCell({ children }: { children: ReactNode }) {
   return <div className="table-head table-head--sticky">{children}</div>;
 }

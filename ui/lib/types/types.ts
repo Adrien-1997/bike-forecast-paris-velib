@@ -1,4 +1,19 @@
 // ui/lib/types.ts
+//
+// =============================================================================
+// Global shared frontend types for Vélib' Forecast.
+//
+// Rôle :
+// - Centraliser les types partagés par les services (forecast, stations,
+//   météo, monitoring, badges, etc.).
+// - Garantir un contrat unique entre le backend (JSON) et le frontend (TS).
+// - Servir de "single source of truth" pour les structures réutilisées.
+//
+// Contraintes :
+// - Aucun import React/DOM : fichier purement déclaratif.
+// - Toute évolution de schéma côté backend doit être répercutée ici et dans
+//   les services correspondants.
+// =============================================================================
 
 // ─────────────────── Stations ───────────────────
 export type Station = {
@@ -106,7 +121,6 @@ export interface PerfDailyResponse {
   metrics: PerfDailyMetric[];
 }
 
-
 // ─────────────────── Monitoring — Model perf (segments) ──────────────────────
 // Format attendu (observé côté UI et manifest) : tableau plat d'objets
 export interface PerfSegment {
@@ -117,7 +131,6 @@ export interface PerfSegment {
 }
 // L’API renvoie généralement un tableau de PerfSegment
 export type PerfSegmentsResponse = PerfSegment[];
-
 
 // ─────────────────── Monitoring — Drift (summary) ───────────────────
 // Schéma observé sur /monitoring/drift/summary
@@ -131,13 +144,12 @@ export interface DriftFeatureRow {
 }
 
 export interface DriftSummary {
-  schema_version?: string;         // "1.0"
-  generated_at?: string;           // ISO
+  schema_version?: string;          // "1.0"
+  generated_at?: string;            // ISO
   reference_window?: string | null; // ex: "2025-09-25..2025-10-01"
   current_window?: string | null;   // ex: "2025-10-02..2025-10-08"
-  features?: DriftFeatureRow[];      // liste des features avec métriques
+  features?: DriftFeatureRow[];     // liste des features avec métriques
 }
 
 // Alias pratique pour services/pages
 export type DriftSummaryResponse = DriftSummary | null;
-

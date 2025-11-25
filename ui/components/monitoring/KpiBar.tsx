@@ -1,5 +1,5 @@
 // ui/components/monitoring/KpiBar.tsx
-
+//
 // =============================================================================
 // Barre de KPIs (cartes horizontales)
 //

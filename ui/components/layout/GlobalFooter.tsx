@@ -1,5 +1,5 @@
 // ui/components/layout/GlobalFooter.tsx
-
+//
 // =============================================================================
 // Footer global du site velo-paris.fr.
 //

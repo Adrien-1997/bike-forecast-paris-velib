@@ -1,4 +1,39 @@
 // ui/pages/index.tsx
+//
+// -----------------------------------------------------------------------------
+// Landing page "Vélo Paris" (marketing + démo embarquée + aperçu monitoring)
+//
+// Rôle :
+//   - Présenter le projet (hero, texte, chips techno, section "À propos").
+//   - Afficher une barre de KPIs animée (couverture, fraîcheur, nb stations,
+//     drift) alimentée par l’API /monitoring/intro.
+//   - Proposer une démo embarquée de l’app via un <iframe> sur /app/embed
+//     avec : lancement manuel, skeleton de chargement, plein écran (API native
+//     + fallback CSS) et bouton FAB mobile.
+//   - Montrer un aperçu du monitoring via 3 blocs :
+//       • Snapshot map réseau (OverviewSnapshotMap + mini Leaflet map),
+//       • Couverture par heure (CoverageByHour → Plotly bar chart),
+//       • Lift quotidien vs baseline (h=60, LiftCurve → Plotly line chart).
+//   - Décrire l’architecture (pipeline GCS / Cloud Run / FastAPI / Next.js),
+//     une FAQ, et un bloc "Soutenir" avec liens Stripe (env NEXT_PUBLIC_*).
+//
+// Principales dépendances :
+//   - GlobalHeader / GlobalFooter pour le chrome global de la landing.
+//   - Services monitoring : getMonitoringIntro, getOverviewSnapshotMap,
+//     getDataHealthCoverageByHour, getPerformanceLiftCurve.
+//   - Plotly côté client (react-plotly.js) + thème chartLayout/chartConfig.
+//   - Leaflet côté client pour la mini carte SnapshotMap (dynamic import).
+//
+// Accessibilité / UX :
+//   - Lien "skip to content", sections balisées (aria-labelledby), textes
+//     explicites, respect des préférences de mouvement réduit (animations KPI).
+//   - Header auto-hide au scroll, KPI bar auto-slide avec pause au hover,
+//     gestion robuste du plein écran (API native + classe .is-fs + no-scroll).
+//
+// NOTE : ce fichier ne fait pas appel au layout _app pour le header/footer :
+// le header/footer sont importés ici pour un contrôle total sur la landing.
+// -----------------------------------------------------------------------------
+
 import Script from "next/script";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";

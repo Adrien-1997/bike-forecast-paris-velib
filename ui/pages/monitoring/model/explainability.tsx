@@ -1,4 +1,26 @@
 // ui/pages/monitoring/model/explainability.tsx
+//
+// =============================================================================
+// Page Monitoring — Modèle / Explicabilité
+// -----------------------------------------------------------------------------
+// Cette page affiche les vues d’explicabilité du modèle de prévision :
+//   - structure des résidus (histogramme, QQ-plot, ACF, hétéroscédasticité),
+//   - calibration (globale + par heure + par niveau),
+//   - importance des variables (part + cumul),
+//   - épisodes d’erreurs par station (carte + tableau),
+//   - biais moyen par station.
+// 
+// Elle consomme les endpoints back-end suivants (par horizon h):
+//   - /monitoring/model/explainability/overview
+//   - /monitoring/model/explainability/residuals
+//   - /monitoring/model/explainability/calibration
+//   - /monitoring/model/explainability/uncertainty
+//   - /monitoring/model/explainability/feature_importance
+//
+// L’horizon de prévision (h en minutes) est piloté par HorizonToggle et
+// synchronisé avec le paramètre de query ?h=… (hook useQueryParamH).
+// =============================================================================
+
 import Head from "next/head";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
@@ -24,9 +46,12 @@ import {
 } from "@/lib/services/monitoring/model_explainability";
 
 // ⬇️ Index stations (JSON local: public/data/stations.index.json)
+//    Permet de décoder station_id → métadonnées (nom, lat/lon, etc.)
 import { loadStationsIndexFromArrayJson, type StationMeta } from "@/lib/local/stationsIndex";
 
 /* ───────────────── Plotly (client only) ───────────────── */
+// Chargement dynamique de react-plotly.js uniquement côté client (ssr: false)
+// pour éviter les accès à window/document côté serveur.
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ssr: false,
   loading: () => (
@@ -37,6 +62,13 @@ const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
 });
 
 /* ───────────────── Map — identique perf mais avec épisodes d’erreurs ───────────────── */
+/**
+ * Point sur la carte :
+ *   - station_id / name : identifiants station,
+ *   - lat / lon         : position géographique,
+ *   - color             : couleur en fonction de la gravité,
+ *   - max_run / n       : métriques sur les épisodes d’erreurs.
+ */
 type MapPoint = {
   station_id: string;
   name?: string;
@@ -47,12 +79,16 @@ type MapPoint = {
   n?: number | null;
 };
 
+// Carte Leaflet dynamique utilisée pour visualiser les épisodes d’erreurs par station.
 const SnapshotMap = dynamic(async () => {
   const RL = await import("react-leaflet");
   const { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } = RL as any;
   const React = await import("react");
   const { useEffect, useMemo, useState } = React;
 
+  /**
+   * Centre/zoom la vue pour englober l’ensemble des points valides.
+   */
   function FitBounds({ rows }: { rows: Array<{ lat: number; lon: number }> }) {
     const map = useMap();
     useEffect(() => {
@@ -80,12 +116,19 @@ const SnapshotMap = dynamic(async () => {
     return null;
   }
 
+  /**
+   * Carte interne :
+   *   - fond Carto "light_nolabels" avec fallback OSM,
+   *   - cercles colorés (rouge/vert) selon max_run,
+   *   - tooltip détaillé par station.
+   */
   function MapInner({ rows }: { rows: MapPoint[] }) {
     const valid = useMemo(
       () => rows.filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon))),
       [rows]
     );
 
+    // Centre initial = médiane des lat/lon ou fallback sur Paris.
     const latMed = valid.length
       ? valid.map((r) => Number(r.lat)).sort((a, b) => a - b)[Math.floor(valid.length / 2)]
       : 48.8566;
@@ -93,6 +136,7 @@ const SnapshotMap = dynamic(async () => {
       ? valid.map((r) => Number(r.lon)).sort((a, b) => a - b)[Math.floor(valid.length / 2)]
       : 2.3522;
 
+    // Sélection dynamique du fond de carte (Carto → fallback OSM si indisponible).
     const [tileUrl, setTileUrl] = useState(
       "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
     );
@@ -162,12 +206,28 @@ const SnapshotMap = dynamic(async () => {
 }, { ssr: false });
 
 /* ───────────────── Helpers ───────────────── */
+/**
+ * Helper pour Promise.allSettled :
+ *   - renvoie r.value si status === "fulfilled",
+ *   - sinon null.
+ */
 function ok<T>(r: PromiseSettledResult<T>): T | null {
   return r.status === "fulfilled" ? r.value : null;
 }
+
+/** Formatage numérique générique : x → "x.xx" ou "—". */
 const fmtNum = (x?: number | null, d = 2) => (Number.isFinite(Number(x)) ? Number(x).toFixed(d) : "—");
+
+/** Formatage entier français : x → "12 345" ou "—". */
 const fmtInt = (x?: number | null) => (Number.isFinite(Number(x)) ? Number(x).toLocaleString("fr-FR") : "—");
+
+/** Contrainte d’une valeur v dans [lo, hi]. */
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/**
+ * safeMinMax : calcule min / max sur un ensemble de tableaux numériques.
+ * Fallback (0,0) si aucun nombre valide.
+ */
 const safeMinMax = (arrs: number[][]) => {
   let min = Number.POSITIVE_INFINITY, max = Number.NEGATIVE_INFINITY;
   for (const a of arrs) for (const v of a) if (Number.isFinite(v)) { if (v < min) min = v; if (v > max) max = v; }
@@ -176,6 +236,10 @@ const safeMinMax = (arrs: number[][]) => {
   return { min, max };
 };
 
+/**
+ * getLatLng : récupère un couple [lat, lon] à partir d’un StationMeta
+ * en tolérant plusieurs schémas de champs (lat/lon, latitude/longitude, lng…).
+ */
 function getLatLng(meta?: StationMeta | null): [number, number] | null {
   if (!meta) return null;
   const lat = (meta as any).lat ?? (meta as any).latitude;
@@ -186,6 +250,12 @@ function getLatLng(meta?: StationMeta | null): [number, number] | null {
 }
 
 /* ───────────────── Horizon (SSR-safe) ───────────────── */
+/**
+ * Hook pour piloter l’horizon h depuis la query string (?h=…) :
+ *   - lit ?h=… au montage (client only),
+ *   - met à jour l’URL avec history.replaceState à chaque changement,
+ *   - renvoie un flag `mounted` indiquant que l’init client est fait.
+ */
 function useQueryParamH(defaultH = 60): [number, (h: number) => void, boolean] {
   const [h, setH] = useState<number>(defaultH);
   const [mounted, setMounted] = useState(false);
@@ -210,8 +280,25 @@ function useQueryParamH(defaultH = 60): [number, (h: number) => void, boolean] {
 }
 
 /* ───────── Normalizer FI (gère XGB natif / scikit / custom) ───────── */
+/**
+ * Ligne d’importance de variable normalisée :
+ *   - feature    : nom de la variable,
+ *   - importance : score brut,
+ *   - std        : incertitude éventuelle.
+ */
 type FIRow = { feature: string; importance: number; std: number | null };
 
+/**
+ * normalizeFeatureImportance :
+ *   - unifie plusieurs schémas possibles envoyés par le backend,
+ *   - renvoie une liste normalisée de lignes + métadonnées.
+ *
+ * Schémas gérés :
+ *   0) XGBoost natif : rows[].gain_share / rows[].gain
+ *   1) Schéma "officiel" : rows[].{feature, importance, std}
+ *   2) scikit permutation_importance : feature_names[] + importances_mean[]
+ *   3) Schéma plat : importances[].{feature, importance, std}
+ */
 function normalizeFeatureImportance(fi: any): { rows: FIRow[]; method: string | undefined; meta: string[] } {
   const method = typeof fi?.method === "string" ? fi.method : undefined;
   const meta: string[] = [];
@@ -258,6 +345,7 @@ function normalizeFeatureImportance(fi: any): { rows: FIRow[]; method: string | 
     }
   }
 
+  // Métadonnées additionnelles affichées dans la légende FI.
   if (Number.isFinite(Number(fi?.horizon_min))) meta.push(`h=${Number(fi.horizon_min)} min`);
   if (Number.isFinite(Number(fi?.n_rows)))      meta.push(`n_rows=${Number(fi.n_rows)}`);
   if (Number.isFinite(Number(fi?.n_features)))  meta.push(`n_features=${Number(fi.n_features)}`);
@@ -267,21 +355,24 @@ function normalizeFeatureImportance(fi: any): { rows: FIRow[]; method: string | 
 
 /* ───────────────── Page ───────────────── */
 export default function ModelExplainabilityPage() {
+  // Horizon courant (15 / 60 min) et flag de montage client.
   const [h, setH, mounted] = useQueryParamH(60);
 
+  // Documents d’explicabilité (par horizon).
   const [overview, setOverview] = useState<Overview | null>(null);
   const [residuals, setResiduals] = useState<ResidualsDoc | null>(null);
   const [calib, setCalib] = useState<CalibrationDoc | null>(null);
   const [unc, setUnc] = useState<UncertaintyDoc | null>(null);
   const [fiDoc, setFiDoc] = useState<FeatureImportanceDoc | any | null>(null);
 
-  // Index stations: id → meta
+  // Index stations: id → meta (nom, lat/lon, etc.).
   const [stationsIdx, setStationsIdx] = useState<Record<string, StationMeta>>({});
 
+  // État global de chargement / erreur.
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load stations index
+  // Chargement de l’index stations local (JSON en public/…).
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -294,7 +385,7 @@ export default function ModelExplainabilityPage() {
     return () => { alive = false; };
   }, []);
 
-  // Load explain docs for horizon h
+  // Chargement des docs d’explicabilité pour l’horizon h.
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -326,6 +417,7 @@ export default function ModelExplainabilityPage() {
     return () => { alive = false; };
   }, [h]);
 
+  // Timestamp de génération : on prend le premier disponible.
   const generatedAt =
     (fiDoc as any)?.generated_at ||
     overview?.generated_at ||
@@ -336,7 +428,7 @@ export default function ModelExplainabilityPage() {
 
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
-  // Dictionnaire id → nom
+  // Dictionnaire id → nom (tolère les ids sans zéros de tête).
   const nameIndex = useMemo(() => {
     const rec: Record<string, string> = {};
     for (const [id, meta] of Object.entries(stationsIdx)) {
@@ -350,6 +442,7 @@ export default function ModelExplainabilityPage() {
   }, [stationsIdx]);
 
   /* ───────── KPI BAR ───────── */
+  // Construction des KPI synthétiques de la page (perf, y_pred, incertitude, β, α…)
   const kpiItems: KpiItem[] = useMemo(() => {
     const yesNo = (v?: boolean | null) => (v ? "Oui" : "Non");
     return [
@@ -362,12 +455,15 @@ export default function ModelExplainabilityPage() {
     ];
   }, [overview, calib]);
 
+  // Sous-titre dynamique incluant l’horizon (h) une fois monté côté client.
   const subtitleText = useMemo(
     () => `Résidus, QQ, ACF, hétéroscédasticité, calibration, incertitude et importance des variables (h=${mounted ? h : 15} min)`,
     [h, mounted],
   );
 
   /* ───────── Data: résidus / calib / incertitude ───────── */
+
+  // Histogramme des résidus (bin_left / bin_right → centre du bin).
   const histData: Partial<Plotly.PlotData>[] = useMemo(() => {
     const bins = residuals?.hist ?? [];
     if (!bins.length) return [];
@@ -376,6 +472,7 @@ export default function ModelExplainabilityPage() {
     return [{ x, y, type: "bar" as const, name: "Résidus", hovertemplate: "x=%{x:.2f}<br>n=%{y}<extra></extra>" }];
   }, [residuals]);
 
+  // QQ-plot : quantiles théoriques vs quantiles empiriques.
   const qqData = useMemo<Partial<ScatterData>[]>(() => {
     const th = residuals?.qq?.th ?? [];
     const emp = residuals?.qq?.emp ?? [];
@@ -387,6 +484,7 @@ export default function ModelExplainabilityPage() {
     ];
   }, [residuals]);
 
+  // ACF des résidus.
   const acfData: Partial<Plotly.PlotData>[] = useMemo(() => {
     const a = residuals?.acf ?? [];
     if (!a.length) return [];
@@ -394,6 +492,7 @@ export default function ModelExplainabilityPage() {
     return [{ x, y: a, type: "bar" as const, name: "ACF", hovertemplate: "lag=%{x}<br>ρ=%{y:.2f}<extra></extra>" }];
   }, [residuals]);
 
+  // Hétéroscédasticité : MAE par quantile de y_true.
   const heteroData: Partial<Plotly.PlotData>[] = useMemo(() => {
     const rows = residuals?.hetero ?? [];
     if (!rows.length) return [];
@@ -406,6 +505,7 @@ export default function ModelExplainabilityPage() {
     }];
   }, [residuals]);
 
+  // Calibration : E[y_true] vs E[y_pred] par bin.
   const calibBinning = useMemo<Partial<ScatterData>[]>(() => {
     const rows = calib?.binned ?? [];
     if (!rows.length) return [];
@@ -418,6 +518,7 @@ export default function ModelExplainabilityPage() {
     ];
   }, [calib]);
 
+  // β (pente) par heure locale.
   const betaByHour = useMemo<Partial<ScatterData>[]>(() => {
     const rows = calib?.by_hour ?? [];
     if (!rows.length) return [];
@@ -431,6 +532,7 @@ export default function ModelExplainabilityPage() {
     }];
   }, [calib]);
 
+  // Erreur relative (type MAPE) par niveau de y_true.
   const relErrBars: Partial<Plotly.PlotData>[] = useMemo(() => {
     const rows = calib?.rel_error_levels ?? [];
     if (!rows.length) return [];
@@ -444,11 +546,14 @@ export default function ModelExplainabilityPage() {
   }, [calib]);
 
   /* ───────── Importance des variables (part + cumul) ───────── */
+
+  // Normalisation de la FI brute en tableau de FIRow.
   const { rows: fiRowsRaw, method: fiMethod, meta: fiMeta } = useMemo(
     () => normalizeFeatureImportance(fiDoc),
     [fiDoc]
   );
 
+  // Calcul de la part (%) et du cumul (%) d’importance pour chaque variable.
   const fiAll = useMemo(() => {
     const rows = (fiRowsRaw ?? []).filter((r) => Number.isFinite(Number(r.importance)));
     if (!rows.length) return { rows: [] as Array<FIRow & { share: number; cum: number }>, total: 0 };
@@ -463,17 +568,19 @@ export default function ModelExplainabilityPage() {
     return { rows: withPct, total };
   }, [fiRowsRaw]);
 
+  // Intitulé de l’axe X en fonction de la méthode FI.
   const xTitleFI = useMemo(() => {
     if (fiMethod?.includes("get_score")) return "Part d’importance (gain_share, %)";
     return "Part d’importance (%)";
   }, [fiMethod]);
 
-  // Hauteur dynamique (toutes variables visibles) + relayout pour éviter coupe
+  // Hauteur dynamique du graphique d’importance (toutes variables visibles).
   const fiHeight = useMemo(() => {
     const n = fiAll.rows.length;
     return Math.max(380, Math.min(2000, 24 * n + 160));
   }, [fiAll.rows.length]);
 
+  // Barres horizontales + texte part/cumul.
   const fiBarData: Partial<Plotly.PlotData>[] = useMemo(() => {
     if (!fiAll.rows.length) return [];
     const rows = fiAll.rows;
@@ -503,7 +610,7 @@ export default function ModelExplainabilityPage() {
     ];
   }, [fiAll]);
 
-  // Relayout auto sur resize (astuce CSS var)
+  // Relayout auto sur resize (via variable CSS observée côté Plotly).
   useEffect(() => {
     if (typeof window === "undefined") return;
     const onResize = () => {
@@ -514,11 +621,13 @@ export default function ModelExplainabilityPage() {
   }, []);
 
   /* ───────── Données carte (épisodes d’erreurs) ───────── */
+  // Agrégation des épisodes par station + filtrage n ≥ 30 + coloration rouge/vert.
   const mapRows = useMemo<MapPoint[]>(() => {
     const rows: MapPoint[] = [];
     const src = residuals?.episodes ?? [];
     if (!src.length) return rows;
 
+    // Agrégation par station : max_run (épisode le plus long) + total n.
     const aggregated = new Map<string, { station_id: string; max_run: number; n: number }>();
     for (const r of src) {
       const id = String(r.station_id);
@@ -572,7 +681,7 @@ export default function ModelExplainabilityPage() {
         <LoadingBar status={barStatus} />
         {error && <div className="alert error" style={{ marginTop: 8 }}>{error}</div>}
 
-        {/* Toolbar */}
+        {/* Toolbar : choix d’horizon 15 / 60 min (propagé dans l’URL). */}
         <section className="mt-3">
           <div className="card" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
             <HorizonToggle
@@ -587,7 +696,7 @@ export default function ModelExplainabilityPage() {
           </div>
         </section>
 
-        {/* KPIs */}
+        {/* KPIs synthétiques (overview + calibration). */}
         <section className="mt-4">
           <h2>Résumé — KPIs</h2>
           <KpiBar items={kpiItems} dense />
@@ -602,7 +711,7 @@ export default function ModelExplainabilityPage() {
           })()}
         </section>
 
-        {/* Résidus */}
+        {/* Résidus : histogramme + QQ-plot. */}
         <section className="mt-6">
           <h2>Résidus</h2>
           <div className="grid-2">
@@ -650,7 +759,7 @@ export default function ModelExplainabilityPage() {
           </div>
         </section>
 
-        {/* ACF / Hétéroscédasticité */}
+        {/* Structure des erreurs : ACF / hétéroscédasticité. */}
         <section className="mt-6">
           <h2>Structure des erreurs</h2>
           <div className="grid-2">
@@ -697,7 +806,7 @@ export default function ModelExplainabilityPage() {
           </div>
         </section>
 
-        {/* Calibration */}
+        {/* Calibration : binned + β par heure + erreur relative. */}
         <section className="mt-6">
           <h2>Calibration</h2>
 
@@ -761,7 +870,7 @@ export default function ModelExplainabilityPage() {
           </div>
         </section>
 
-        {/* Importance des variables — part & cumul */}
+        {/* Importance des variables — part & cumul. */}
         <section className="mt-6">
           <h2>Importance des variables — part & cumul</h2>
           <div className="plot-card" style={{ overflow: "visible" }}>
@@ -803,7 +912,7 @@ export default function ModelExplainabilityPage() {
           {!!(fiDoc as any)?.notes?.length && <div className="figure-note small">{(fiDoc as any).notes.join(" · ")}</div>}
         </section>
 
-        {/* Carte — intégration identique à Performance, basée sur épisodes d’erreurs */}
+        {/* Carte — intégration identique à Performance, basée sur épisodes d’erreurs. */}
         <section className="mt-6">
           <h2>Carte — épisodes d’erreurs par station</h2>
           <div className="map-block">
@@ -812,7 +921,7 @@ export default function ModelExplainabilityPage() {
           <div className="small mt-2">Couleur ~ longueur maximale d’un épisode |résidu| ≥ 4 (rouge = long, vert = court). Filtre n ≥ 30.</div>
         </section>
 
-        {/* Tableaux */}
+        {/* Tableaux : épisodes d’erreurs. */}
         <section className="mt-6">
           <h2>Épisodes d’erreurs (|résidu| ≥ 4)</h2>
           <div className="card">
@@ -869,6 +978,7 @@ export default function ModelExplainabilityPage() {
           </div>
         </section>
 
+        {/* Stations — biais moyen. */}
         <section className="mt-6" style={{ marginBottom: 40 }}>
           <h2>Stations — biais moyen (référence)</h2>
           <div className="card">

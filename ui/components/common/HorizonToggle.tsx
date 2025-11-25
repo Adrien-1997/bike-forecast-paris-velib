@@ -1,4 +1,5 @@
 // components/common/HorizonToggle.tsx
+//
 // =============================================================================
 // Sélecteur d’horizon (15 min / 60 min par défaut).
 //

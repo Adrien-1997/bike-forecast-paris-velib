@@ -1,4 +1,23 @@
 // ui/pages/monitoring/overview.tsx
+//
+// -----------------------------------------------------------------------------
+// Page "Réseau — Aperçu"
+// ➜ Vue synthétique de l’état du réseau Vélib’ :
+//    - KPIs instantanés (snapshot),
+//    - Carte des stations,
+//    - Distribution des états au snapshot,
+//    - Courbe J−1 (UTC) vs médiane de référence,
+//    - Comparaison J / J−7 / J−14 / J−21,
+//    - Top stations en pénurie / saturation.
+//
+// Cette page consomme exclusivement les services définis dans
+// "@/lib/services/monitoring/network_overview" et s’appuie sur :
+//   - Plotly (via react-plotly.js) pour les graphiques,
+//   - react-leaflet pour la carte,
+//   - le composant MonitoringNav pour l’en-tête & la navigation monitoring,
+//   - KpiBar pour l’affichage compact des KPIs.
+// -----------------------------------------------------------------------------
+
 import Head from "next/head";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
@@ -28,6 +47,7 @@ import {
 } from "@/lib/services/monitoring/network_overview";
 
 /* ───────────────────────── Plotly (client only) ───────────────────────── */
+// Chargement dynamique de react-plotly.js pour éviter les erreurs SSR côté Next.
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ssr: false,
   loading: () => (
@@ -38,18 +58,25 @@ const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
 });
 
 /* ───────────────────────── Utils ───────────────────────── */
+// Helper pour extraire la valeur d’un PromiseSettledResult
+// (null en cas de rejet, utilisé avec Promise.allSettled).
 function ok<T>(r: PromiseSettledResult<T>): T | null {
   return r.status === "fulfilled" ? r.value : null;
 }
 
 /* ───────────────────────── Mini Map (snapshot) ───────────────────────── */
+// Chaque ligne de snapshot pour la carte correspond à une station au temps t0.
 type MapRow = OverviewSnapshotMap["rows"][number];
 
+// Carte instantanée du réseau (snapshot), construite avec react-leaflet.
+// ➜ Points colorés selon l’état (pénurie, saturation, OK)
+// ➜ Zoom automatique sur l’emprise des stations valides.
 const SnapshotMap = dynamic(async () => {
   const RL = await import("react-leaflet");
   const { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } = RL as any;
   const { useEffect, useMemo, useState } = await import("react");
 
+  // Ajuste la vue de la carte sur l’ensemble des points valides.
   function FitBounds({ rows }: { rows: MapRow[] }) {
     const map = useMap();
     useEffect(() => {
@@ -75,11 +102,14 @@ const SnapshotMap = dynamic(async () => {
     return null;
   }
 
+  // Composant interne : instancie la carte et les marqueurs.
   function MapInner({ rows }: { rows: MapRow[] }) {
+    // Filtre les stations avec coordonnées valides.
     const valid = useMemo(
       () => rows.filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon))),
       [rows]
     );
+    // Centre initial approximatif = médiane des lat/lon sinon fallback Paris.
     const latMed = valid.length
       ? valid.map((r) => Number(r.lat)).sort((a, b) => a - b)[Math.floor(valid.length / 2)]
       : 48.8566;
@@ -87,6 +117,7 @@ const SnapshotMap = dynamic(async () => {
       ? valid.map((r) => Number(r.lon)).sort((a, b) => a - b)[Math.floor(valid.length / 2)]
       : 2.3522;
 
+    // Tile Carto Light (sans labels) avec fallback OSM en cas d’échec.
     const [tileUrl, setTileUrl] = useState(
       "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
     );
@@ -109,11 +140,14 @@ const SnapshotMap = dynamic(async () => {
             attribution='&copy; OpenStreetMap, &copy; <a href="https://carto.com/">CARTO</a>'
             detectRetina
           />
+          {/* Zoom dynamique sur les stations valides */}
           <FitBounds rows={valid} />
           {valid.map((r) => {
             const pen = r.is_penury === 1;
             const sat = r.is_saturation === 1;
+            // Palette cohérente avec le reste du monitoring (rouge/bleu/vert).
             const col = pen ? "#ef4444" : sat ? "#3b82f6" : "#10b981";
+            // Taille des bulles ~ √(vélos), avec boost en cas de saturation.
             const rad = Math.max(3, Math.min(9, Math.sqrt(Math.max(0, Number(r.bikes ?? 0))) + (sat ? 2 : 0)));
             return (
               <CircleMarker
@@ -129,7 +163,7 @@ const SnapshotMap = dynamic(async () => {
                     <div>places: {Number.isFinite(Number(r.docks_avail)) ? Number(r.docks_avail) : "?"}</div>
                     {pen && <div style={{ color: "#ef4444" }}>pénurie</div>}
                     {sat && <div style={{ color: "#3b82f6" }}>saturation</div>}
-                    {/* Lien désactivé (alignement avec la règle "non cliquable") */}
+                    {/* Lien volontairement désactivé : pas de navigation depuis la carte. */}
                     <div className="small" style={{ opacity: 0.7 }}>Voir dynamique (lien désactivé)</div>
                   </div>
                 </Tooltip>
@@ -138,7 +172,7 @@ const SnapshotMap = dynamic(async () => {
           })}
         </MapContainer>
 
-        {/* Légende snapshot (bulle) */}
+        {/* Légende snapshot (bulle flottante, stylée via monitoring.css) */}
         <div
           className="cluster-legend"
           style={{ right: 8, bottom: 8 }}
@@ -166,6 +200,7 @@ const SnapshotMap = dynamic(async () => {
 
 /* ───────────────────────── Page ───────────────────────── */
 export default function OverviewPage() {
+  // Données principales de la page (toutes issues des services network_overview).
   const [kpis, setKpis] = useState<OverviewKpis | null>(null);
   const [dist, setDist] = useState<OverviewSnapshotDistribution | null>(null);
   const [today, setToday] = useState<OverviewTodayCurve | null>(null);
@@ -175,9 +210,12 @@ export default function OverviewPage() {
   const [tension, setTension] = useState<OverviewStationsTension | null>(null);
   const [stationsIdx, setStationsIdx] = useState<Record<string, StationMeta>>({});
 
+  // États transverses de la page (chargement / erreur).
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Chargement initial : toutes les APIs overview sont appelées en parallèle
+  // via Promise.allSettled, ce qui évite de planter en cas d’erreur partielle.
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -205,6 +243,7 @@ export default function OverviewPage() {
         const [kpisRes, distRes, todayRes, refMedianRes, lagsRes, snapMapRes, tensionRes] =
           await Promise.allSettled(calls);
 
+        // Chaque bloc de données est récupéré via ok(...) (null si échec).
         setKpis(ok(kpisRes));
         setDist(ok(distRes));
         setToday(ok(todayRes));
@@ -213,6 +252,7 @@ export default function OverviewPage() {
         setSnapMap(ok(snapMapRes));
         setTension(ok(tensionRes));
 
+        // Construction d’un message d’erreur agrégé si une ou plusieurs requêtes échouent.
         const allResults = [kpisRes, distRes, todayRes, refMedianRes, lagsRes, snapMapRes, tensionRes];
         const failures = allResults.filter((r): r is PromiseRejectedResult => r.status === "rejected");
         if (failures.length > 0) {
@@ -224,6 +264,7 @@ export default function OverviewPage() {
           setError(null);
         }
 
+        // Index des stations (id → métadonnées) pour enrichir les tableaux.
         fetchStationsIndex()
           .then((idx) => alive && setStationsIdx(idx))
           .catch(() => alive && setStationsIdx({}));
@@ -236,6 +277,7 @@ export default function OverviewPage() {
     return () => { alive = false; };
   }, []);
 
+  // Timestamp de génération utilisé dans le header MonitoringNav.
   const generatedAt =
     kpis?.generated_at ?? today?.generated_at ?? refMedian?.generated_at ?? snapMap?.generated_at;
 
@@ -248,6 +290,7 @@ export default function OverviewPage() {
         <meta name="description" content="KPIs réseau, snapshot, courbes et carte." />
       </Head>
 
+      {/* Contenu principal : marges gérées via .page et header global */}
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
           title="Réseau — Aperçu"
@@ -259,12 +302,14 @@ export default function OverviewPage() {
           ]}
         />
 
+        {/* Barre de chargement / état global des appels */}
         <LoadingBar status={barStatus} />
         {error && <div className="alert error" style={{ marginTop: 8 }}>{error}</div>}
 
         {/* KPIs Snapshot — via KpiBar */}
         <section className="mt-4">
           <h2>Résumé — instantané</h2>
+          {/* KpiBar gère lui-même formatage et densité, on lui passe les valeurs brutes + fmt*. */}
           <KpiBar
             items={[
               { label: "Stations actives", value: fmtInt(kpis?.stations_active) },
@@ -284,6 +329,7 @@ export default function OverviewPage() {
         {/* === Carte snapshot === */}
         <section className="mt-6">
           <h2>Carte des stations — instantané</h2>
+          {/* La hauteur est pilotée par map-block + h-520 pour s’aligner avec le design global monitoring. */}
           <div className="map-block" style={{ height: 520 }}>
             <SnapshotMap rows={snapMap?.rows ?? []} />
           </div>
@@ -299,6 +345,7 @@ export default function OverviewPage() {
             <>
               <div className="card plot-card">
                 <h3>Distribution des états du snapshot — proportion des stations (%)</h3>
+                {/* Histogramme des états (pénurie, saturation, etc.) en % de stations. */}
                 <Plot
                   data={
                     ([{
@@ -347,6 +394,7 @@ export default function OverviewPage() {
         <section className="mt-6">
           <h2>Hier (UTC) vs Référence</h2>
           {(() => {
+            // Courbe J−1 (UTC) — % de stations avec ≥1 vélo.
             const curveToday =
               today?.points?.length
                 ? ({
@@ -360,6 +408,7 @@ export default function OverviewPage() {
                   } as Partial<Plotly.PlotData>)
                 : null;
 
+            // Courbe de référence (médiane) sur la fenêtre définie côté backend.
             const curveRef =
               refMedian?.median?.length
                 ? ({
@@ -411,6 +460,7 @@ export default function OverviewPage() {
           <h2>Aujourd’hui vs J-7 / J-14 / J-21</h2>
           {lags ? (
             <div className="grid-4">
+              {/* Chaque CardSmall affiche une famille de KPIs (≥1 vélo / ≥1 place / pénurie / saturation). */}
               <CardSmall
                 title="≥1 vélo (temps %)"
                 values={[
@@ -460,6 +510,7 @@ export default function OverviewPage() {
           {(() => {
             const rows = tension?.rows ?? [];
 
+            // Top stations par taux de pénurie (pénury_rate).
             const topPenRows = rows
               .filter((r) => Number.isFinite(Number(r.penury_rate)))
               .sort((a, b) => Number(b.penury_rate) - Number(a.penury_rate))
@@ -471,6 +522,7 @@ export default function OverviewPage() {
                 return { station_id: id, name, pct };
               });
 
+            // Top stations par taux de saturation (saturation_rate).
             const topSatRows = rows
               .filter((r) => Number.isFinite(Number(r.saturation_rate)))
               .sort((a, b) => Number(b.saturation_rate) - Number(a.saturation_rate))
@@ -484,7 +536,7 @@ export default function OverviewPage() {
 
             return (
               <div className="grid-2">
-                {/* Top pénurie — compact */}
+                {/* Top pénurie — compact, 1 seule colonne fluide avec micro-barre */}
                 <div className="card">
                   <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>Top pénurie</h3>
                   {topPenRows.length ? (
@@ -528,6 +580,7 @@ export default function OverviewPage() {
                                 <div style={{ fontWeight: 700 }}>{fmtPct(r.pct, 1)}</div>
                               </div>
 
+                              {/* Barre horizontale proportionnelle au % de temps en pénurie */}
                               <div
                                 className="bar"
                                 style={{
@@ -555,7 +608,7 @@ export default function OverviewPage() {
                   )}
                 </div>
 
-                {/* Top saturation — compact */}
+                {/* Top saturation — compact, même pattern que pénurie mais en bleu */}
                 <div className="card">
                   <h3 style={{ margin: "6px 0 10px 0", fontSize: 16 }}>Top saturation</h3>
                   {topSatRows.length ? (
@@ -599,6 +652,7 @@ export default function OverviewPage() {
                                 <div style={{ fontWeight: 700 }}>{fmtPct(r.pct, 1)}</div>
                               </div>
 
+                              {/* Barre horizontale proportionnelle au % de temps en saturation */}
                               <div
                                 className="bar"
                                 style={{
@@ -641,6 +695,8 @@ export default function OverviewPage() {
 }
 
 /* ───────────────────────── UI atoms (branchés sur monitoring.css) ───────────────────────── */
+// Petits composants utilitaires pour factoriser la structure des tableaux.
+// Ils utilisent les classes génériques .table-row / .table-cell / .table-head.
 function Row({ children }: { children: ReactNode }) {
   const items = Array.isArray(children) ? children : [children];
   // aligne à droite la dernière colonne (%)
@@ -658,10 +714,12 @@ function Row({ children }: { children: ReactNode }) {
   );
 }
 
+// En-tête de colonne sticky, cohérent avec l’ensemble des pages monitoring.
 function HeaderCell({ children }: { children: ReactNode }) {
   return <div className="table-head table-head--sticky">{children}</div>;
 }
 
+// Carte compacte de comparaison J / J-7 / J-14 / J-21 (temps en %).
 function CardSmall({
   title,
   values,

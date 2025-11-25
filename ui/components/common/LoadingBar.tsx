@@ -1,5 +1,5 @@
 // ui/components/monitoring/LoadingBar.tsx
-
+//
 // =============================================================================
 // Barre de chargement globale pour les pages Monitoring.
 //

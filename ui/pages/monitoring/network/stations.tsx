@@ -1,4 +1,33 @@
 // ui/pages/monitoring/network/stations.tsx
+//
+// -----------------------------------------------------------------------------
+// Monitoring — Réseau / Stations
+//
+// Page de monitoring dédiée au "profil" des stations :
+//   - vue d’ensemble du clustering des stations (K-means sur profils d’occupation),
+//   - carte Leaflet avec couleurs = cluster et taille ≈ capacité,
+//   - distributions de couverture, volatilité, pénurie et saturation sur 7 jours.
+//
+// Données consommées (services /monitoring/network_stations) :
+//   - getStationsKpis()       → métriques globales de clustering (silhouette, k effectif, etc.)
+//   - getStationsCentroids()  → profils 24 h moyens par cluster (centroïdes)
+//   - getStationsStats7()     → indicateurs par station sur les 7 derniers jours
+//   - fetchStationsIndex()    → (fallback) méta station (nom, lat/lon, capacité) si absent de stats7
+//
+// Design / UX :
+//   - même header MonitoringNav + KpiBar + LoadingBar que les autres pages Monitoring,
+//   - carte Leaflet avec légende "Clusters" (bubble en bas à droite),
+//   - histogrammes et boxplots Plotly pour les distributions,
+//   - aucun lien cliquable vers une page de station (règle : stations non cliquables).
+//
+// Important :
+//   - Cette page est purement "read-only" : aucun état serveur modifié,
+//   - tous les filtres (cluster, recherche, options carte) sont gérés en mémoire côté client,
+//   - le code JSX / logique ne doit pas être modifié par d’autres fichiers ; seule la doc
+//     (commentaires) peut être enrichie si besoin.
+//
+// -----------------------------------------------------------------------------
+
 import Head from "next/head";
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
@@ -20,6 +49,10 @@ import {
 } from "@/lib/services/monitoring/network_stations";
 
 /* ───────────────── Plotly (client only) ───────────────── */
+/**
+ * Plotly React est chargé dynamiquement côté client uniquement (ssr: false),
+ * ce qui évite d’embarquer la librairie dans le bundle serveur Next.js.
+ */
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ssr: false,
   loading: () => (
@@ -30,13 +63,27 @@ const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
 });
 
 /* ───────────────── Helpers ───────────────── */
+/**
+ * Raccourci pour récupérer la valeur d’un PromiseSettledResult<T>.
+ * Retourne `null` si la promesse est rejetée.
+ */
 function ok<T>(r: PromiseSettledResult<T>): T | null {
   return r.status === "fulfilled" ? r.value : null;
 }
+
+/**
+ * Formate un nombre avec 3 décimales ou renvoie "—" si non numérique.
+ * Utilisé pour les métriques de clustering (silhouette, Davies–Bouldin).
+ */
 function fmt3(x?: number | null) {
   const v = Number(x);
   return Number.isFinite(v) ? v.toFixed(3) : "—";
 }
+
+/**
+ * Parse "souple" d’un ratio (0–1 ou "42%" ou "0,42") → nombre en [0,1] (NaN si invalide).
+ * Permet de robustifier le traitement des colonnes venant des exports parquet/JSON.
+ */
 function parseRatioLoose(v: unknown): number {
   if (v == null) return NaN;
   if (typeof v === "number") return v;
@@ -46,13 +93,25 @@ function parseRatioLoose(v: unknown): number {
   const n = Number(s);
   return Number.isFinite(n) ? (isPercent ? n / 100 : n) : NaN;
 }
+
+/**
+ * Parse "souple" d’un nombre flottant (gère espaces, virgules) → number (NaN si invalide).
+ */
 function parseNumberLoose(v: unknown): number {
   if (v == null) return NaN;
   if (typeof v === "number") return v;
   const n = Number(String(v).trim().replace(/\s/g, "").replace(",", "."));
   return Number.isFinite(n) ? n : NaN;
 }
+
 const isFiniteNum = (x: number) => Number.isFinite(x);
+
+/**
+ * Helper pour construire un histogramme Plotly à partir d’un tableau de valeurs.
+ * - `x`: valeurs numériques
+ * - `name`: libellé de la série
+ * - `nbins`: nombre de bins (24 par défaut)
+ */
 function hist(
   x: number[],
   name: string,
@@ -60,6 +119,10 @@ function hist(
 ): Partial<Plotly.PlotData> & { nbinsx?: number } {
   return { x, type: "histogram" as const, name, nbinsx: nbins, opacity: 0.9, hovertemplate: "%{x:.1f}<extra></extra>" };
 }
+
+/**
+ * Helper pour construire un boxplot Plotly vertical sur l’axe Y.
+ */
 function boxY(
   y: number[],
   name: string
@@ -70,6 +133,14 @@ function boxY(
 }
 
 /* ───────────────── Mini MapView (Leaflet) ───────────────── */
+/**
+ * Ligne de données pour la carte des stations :
+ *   - station_id : identifiant unique de la station
+ *   - name       : nom éventuel (si non fourni par stats7, backfill via stationsIndex)
+ *   - lat / lon  : géolocalisation
+ *   - capacity_est : capacité estimée (slots vélos)
+ *   - cluster    : cluster numérique (ou null)
+ */
 type ClusterRow = {
   station_id: string;
   name?: string;
@@ -79,22 +150,41 @@ type ClusterRow = {
   cluster?: number | null;
 };
 
+/**
+ * Carte Leaflet affichant toutes les stations filtrées :
+ *   - couleur = cluster,
+ *   - taille ≈ capacité estimée (optionnelle),
+ *   - légende en bas à droite "Clusters".
+ *
+ * La carte prend :
+ *   - rows          : lignes de stations (ClusterRow[])
+ *   - sizeByCapacity: booléen pour activer/désactiver la taille ≈ capacité
+ *   - autoFit       : booléen pour activer/désactiver le fitBounds automatique
+ */
 const MapView = dynamic(async () => {
   const RL = await import("react-leaflet");
   const { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } = RL as any;
   const { useEffect, useMemo, useState } = await import("react");
 
+  // Palette de base pour les clusters (réutilisable côté légende)
   const palette = [
     "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
     "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
   ];
 
+  /**
+   * Retourne une couleur stable pour un numéro de cluster donné.
+   * -1 est traité comme "bruit" (gris).
+   */
   function colorOfCluster(c: number | null | undefined, uniq: number[]) {
     if (c === -1) return "#9e9e9e";
     const idx = uniq.indexOf(Number(c));
     return idx >= 0 ? palette[idx % palette.length] : "#4c78a8";
   }
 
+  /**
+   * Adapte le viewport de la carte aux points visibles (fitBounds).
+   */
   function FitBounds({ rows }: { rows: ClusterRow[] }) {
     const map = useMap();
     useEffect(() => {
@@ -124,11 +214,13 @@ const MapView = dynamic(async () => {
     sizeByCapacity: boolean;
     autoFit: boolean;
   }) {
+    // Filtre les stations pour lesquelles lat/lon sont valides
     const valid = useMemo(
       () => rows.filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon))),
       [rows]
     );
 
+    // Centre initial (médiane des lat/lon) si pas encore fitBounds
     const latMed = valid.length
       ? valid.map((r) => r.lat).sort((a, b) => a - b)[Math.floor(valid.length / 2)]
       : 48.8566;
@@ -136,8 +228,10 @@ const MapView = dynamic(async () => {
       ? valid.map((r) => r.lon).sort((a, b) => a - b)[Math.floor(valid.length / 2)]
       : 2.3522;
 
+    // Liste unique des clusters présents (pour légende + palette)
     const uniq = Array.from(new Set(valid.map((r) => r.cluster).filter((v) => v != null))) as number[];
 
+    // Basemap Carto Light (fallback OSM si indisponible)
     const [tileUrl, setTileUrl] = useState(
       "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
     );
@@ -213,6 +307,25 @@ const MapView = dynamic(async () => {
 }, { ssr: false });
 
 /* ───────────────── Page ───────────────── */
+/**
+ * Page de monitoring "Réseau — Stations".
+ *
+ * Cycle de vie :
+ *   1) Au montage, on appelle en parallèle :
+ *        - getStationsKpis()
+ *        - getStationsCentroids()
+ *        - getStationsStats7()
+ *      via Promise.allSettled pour tolérer les erreurs partielles.
+ *   2) On construit `clusterRows` à partir de stats7, avec fallback éventuel
+ *      sur fetchStationsIndex() pour compléter lat/lon/capacité manquants.
+ *   3) Les filtres (cluster, recherche, taille, auto-fit) sont purement client.
+ *
+ * Rendu :
+ *   - KpiBar (résumé clustering),
+ *   - carte Leaflet (clusters + filters),
+ *   - profils 24 h (centroids),
+ *   - distributions (coverage, volatilité, pénurie, saturation).
+ */
 export default function NetworkStationsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -225,7 +338,7 @@ export default function NetworkStationsPage() {
   const [sizeByCapacity, setSizeByCapacity] = useState<boolean>(true);
   const [autoFit, setAutoFit] = useState<boolean>(true);
 
-  // ✅ LoadingBar status (aligned with overview.tsx / dynamics.tsx)
+  // ✅ LoadingBar status (aligné avec overview.tsx / dynamics.tsx)
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
   /* // CSV export (désactivé pour le moment)
@@ -258,7 +371,7 @@ export default function NetworkStationsPage() {
       try {
         setLoading(true);
 
-        // Fetch all in parallel
+        // Fetch des 3 documents principaux en parallèle (KPIs, centroids, stats7)
         const [rKpis, rCent, rStats] = await Promise.allSettled([
           getStationsKpis(),
           getStationsCentroids(),
@@ -273,7 +386,7 @@ export default function NetworkStationsPage() {
         setCentroids(c);
         setStats7Doc(s7);
 
-        // Error on partial failure
+        // Gestion d’erreur : agrège les messages si des appels ont échoué
         const failures = [rKpis, rCent, rStats].filter(
           (r): r is PromiseRejectedResult => r.status === "rejected"
         );
@@ -285,7 +398,7 @@ export default function NetworkStationsPage() {
             : null
         );
 
-        // Build clusterRows from stats7
+        // Construction des lignes pour la carte à partir de stats7 (7 derniers jours)
         if (s7 && Array.isArray(s7.rows)) {
           let rows = s7.rows.map((x: any) => ({
             station_id: String(x.station_id),
@@ -296,7 +409,8 @@ export default function NetworkStationsPage() {
             cluster: x.cluster != null ? Number(x.cluster) : null,
           })) as ClusterRow[];
 
-          // Backfill if missing
+          // Fallback : si aucune station n’a de coordonnées valides, on tente de backfiller
+          // via fetchStationsIndex() (meta statique).
           let haveCoords = rows.some((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon));
           if (!haveCoords) {
             const idx = await fetchStationsIndex().catch(() => ({} as Record<string, StationMeta>));
@@ -331,8 +445,13 @@ export default function NetworkStationsPage() {
     return () => { alive = false; };
   }, []);
 
+  // Timestamp de génération le plus récent parmi les différentes sources
   const generatedAt = kpis?.generated_at ?? centroids?.generated_at ?? stats7Doc?.generated_at;
 
+  /**
+   * Applique les filtres "cluster" + "recherche" sur les lignes de stations.
+   * Les filtres n’affectent que l’affichage de la carte.
+   */
   const filteredRows = useMemo(() => {
     let arr = clusterRows;
     if (clusterFilter != null) arr = arr.filter((r) => r.cluster === clusterFilter);
@@ -347,9 +466,14 @@ export default function NetworkStationsPage() {
     return arr;
   }, [clusterRows, clusterFilter, query]);
 
+  // Labels X pour les centroïdes (24 points HH:00 par défaut)
   const xLabels =
     (centroids?.x_labels as string[] | undefined) ??
     Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, "0")}:00`);
+
+  /**
+   * Séries Plotly pour les profils 24 h par cluster (centroids).
+   */
   const centroidTraces: Partial<Plotly.PlotData>[] = useMemo(() => {
     if (!centroids?.centroids) return [];
     return centroids.centroids
@@ -365,6 +489,7 @@ export default function NetworkStationsPage() {
       }));
   }, [centroids, xLabels]);
 
+  // Raccourcis pour les distributions 7j
   const rows = stats7Doc?.rows ?? [];
   const coverageAll = rows
     .map((r) => parseRatioLoose(r["coverage_pct"]))
@@ -381,7 +506,7 @@ export default function NetworkStationsPage() {
         <meta name="description" content="Clusters, carte et distributions par station." />
       </Head>
 
-      {/* Main content (header/footer injected by _app.tsx) */}
+      {/* Main content (header/footer injectés par _app.tsx) */}
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
         <MonitoringNav
           title="Réseau — Stations"

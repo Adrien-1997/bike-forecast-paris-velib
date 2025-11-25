@@ -1,4 +1,24 @@
 // ui/pages/monitoring/index.tsx
+//
+// -----------------------------------------------------------------------------
+// Page "hub" du Monitoring : vue d’ensemble / porte d’entrée
+//
+// Rôle :
+//   - Afficher un résumé synthétique de l’état du système (réseau + données + modèle),
+//   - Centraliser quelques KPIs globaux (stations actives, fraîcheur, couverture, versions),
+//   - Donner un statut visuel par sous-système (API, batch forecast, météo),
+//   - Proposer des raccourcis vers les sections clés : réseau, données, modèle,
+//   - Reposer sur le document /monitoring/intro fourni par le backend.
+//
+// Particularités :
+//   - La logique de récupération des données est minimale : 1 seule requête
+//     vers `getMonitoringIntro()`.
+//   - Tous les helpers de formatage sont locaux à la page pour garder
+//     l’affichage robuste aux null/NaN.
+//   - La LED de statut (ok/warn/down) est mappée sur des classes CSS
+//     `dot`, `dot--ok`, `dot--warn`, `dot--down` définies dans monitoring.css.
+// -----------------------------------------------------------------------------
+
 import Head from "next/head";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -8,9 +28,20 @@ import KpiBar from "@/components/monitoring/KpiBar";
 import { getMonitoringIntro, type IntroDoc } from "@/lib/services/monitoring/intro";
 
 /* ─────────────────────── Helpers format ─────────────────────── */
+/**
+ * Formate un pourcentage sur d décimales.
+ * - Retourne "—" si la valeur n’est pas numérique.
+ * - Ne fait pas de conversion 0→0 %, on suppose que x est déjà en %.
+ */
 const fmtPct = (x: unknown, d = 1) =>
   x == null || Number.isNaN(Number(x)) ? "—" : `${Number(x).toFixed(d)}%`;
 
+/**
+ * Formate une durée en minutes sous forme lisible :
+ *   < 60  → "X.X min"
+ *   < 24h → "Y.Y h"
+ *   sinon → "Z.Z j"
+ */
 const fmtMin = (x: unknown, d = 1): string => {
   if (x == null || Number.isNaN(Number(x))) return "—";
   const m = Number(x);
@@ -21,20 +52,50 @@ const fmtMin = (x: unknown, d = 1): string => {
   return `${j.toFixed(1)} j`;
 };
 
+/**
+ * Formate un entier avec locale fr-FR.
+ * - Retourne "—" si la valeur n’est pas numérique.
+ */
 const fmtInt = (x: unknown) =>
   x == null || Number.isNaN(Number(x)) ? "—" : `${Math.round(Number(x)).toLocaleString("fr-FR")}`;
 
+/**
+ * Formate un timestamp ISO en datetime local (fr-FR).
+ * - Retourne null si absent.
+ */
 const fmtDateTime = (iso?: string | null) => (iso ? new Date(iso).toLocaleString("fr-FR") : null);
 
+/**
+ * Mappe un statut logique ("ok" | "warn" | "down") vers une classe CSS
+ * utilisée pour la pastille colorée (LED).
+ */
 const ledClass = (s: "ok" | "warn" | "down") =>
   s === "ok" ? "dot dot--ok" : s === "warn" ? "dot dot--warn" : "dot dot--down";
 
 /* ───────────────────────── Component ───────────────────────── */
+/**
+ * Page d’introduction du Monitoring.
+ *
+ * Contenu :
+ *   - Hero avec titre + texte explicatif,
+ *   - KpiBar de synthèse (stations, fraîcheur, versions, couverture),
+ *   - 3 cartes de navigation rapide (Réseau / Modèle / Données),
+ *   - Bloc "Statut du système" avec LEDs,
+ *   - Bloc "Activité récente" basé sur quelques KPIs,
+ *   - Bloc "Conseils" avec liens rapides.
+ *
+ * Source des données :
+ *   - `getMonitoringIntro()` (document IntroDoc).
+ */
 export default function MonitoringIntroPage() {
+  // État de chargement + erreur globale
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Document de monitoring (IntroDoc) retourné par l’API
   const [doc, setDoc] = useState<IntroDoc | null>(null);
 
+  // Chargement initial : 1 requête vers /monitoring/intro
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -54,8 +115,10 @@ export default function MonitoringIntroPage() {
     };
   }, []);
 
+  // Statut de la barre de chargement (haut de page)
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
+  // KPIs de la hero bar (KpiBar)
   const kpiItems = useMemo(() => {
     const k = doc?.kpis;
     return [
@@ -66,6 +129,7 @@ export default function MonitoringIntroPage() {
     ];
   }, [doc]);
 
+  // Datetime de génération (formaté fr-FR)
   const generatedAt = fmtDateTime(doc?.generated_at) ?? null;
 
   return (
@@ -78,10 +142,12 @@ export default function MonitoringIntroPage() {
         />
       </Head>
 
+      {/* Layout principal (padding top calé sur la hauteur du header app) */}
       <main className="page" style={{ paddingTop: "calc(var(--header-h, 70px) + 12px)" }}>
+        {/* Barre de navigation Monitoring (sans breadcrumbs) */}
         <MonitoringNav title="Monitoring" generatedAt={generatedAt ?? undefined} />
 
-        {/* Loading + erreur */}
+        {/* Loading + erreur globale */}
         <div className="loadingbar-wrap mb-3">
           <LoadingBar status={barStatus} />
         </div>
@@ -101,7 +167,7 @@ export default function MonitoringIntroPage() {
           </div>
         </section>
 
-        {/* Sections rapides */}
+        {/* Sections rapides (cartes de navigation vers les grandes familles) */}
         <section className="grid-3 mt-6">
           <Link href="/monitoring/network/stations" className="card link-card">
             <div className="card__title">Réseau — Stations</div>
@@ -120,11 +186,12 @@ export default function MonitoringIntroPage() {
           </Link>
         </section>
 
-        {/* Statut système */}
+        {/* Statut système (LED + texte) */}
         <section className="mt-6 grid-2">
           <div className="panel">
             <h3>Statut du système</h3>
             <ul className="status-list">
+              {/* Statut API /stations */}
               <li>
                 <span className={ledClass(doc?.statuses?.api_stations?.led ?? "down")} />
                 <b> API /stations — </b>
@@ -135,6 +202,8 @@ export default function MonitoringIntroPage() {
                   {" · "}stations actives {fmtInt(doc?.statuses?.api_stations?.stations_active)}
                 </span>
               </li>
+
+              {/* Statut batch de prévisions */}
               <li>
                 <span className={ledClass(doc?.statuses?.batch_forecast?.led ?? "down")} />
                 <b> Batch de prévisions — </b>
@@ -145,6 +214,8 @@ export default function MonitoringIntroPage() {
                   {" · "}données âgées de {fmtMin(doc?.statuses?.batch_forecast?.age_min, 1)}
                 </span>
               </li>
+
+              {/* Statut fournisseur météo */}
               <li>
                 <span className={ledClass(doc?.statuses?.weather_provider?.led ?? "down")} />
                 <b> Fournisseur météo — </b>
@@ -166,6 +237,7 @@ export default function MonitoringIntroPage() {
             </div>
           </div>
 
+          {/* Activité récente simplifiée (quelques KPIs clés) */}
           <div className="panel">
             <h3>Activité récente</h3>
             <ul className="activity">
@@ -196,7 +268,7 @@ export default function MonitoringIntroPage() {
           </div>
         </section>
 
-        {/* Conseils */}
+        {/* Conseils d’utilisation / raccourcis pratiques */}
         <section className="panel mt-6">
           <h3>Conseils</h3>
           <ul className="tips">

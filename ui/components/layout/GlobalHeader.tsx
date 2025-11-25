@@ -1,5 +1,5 @@
 // ui/components/layout/GlobalHeader.tsx
-
+//
 // =============================================================================
 // Header global du site (marque "vélo/paris" + navigation principale).
 //

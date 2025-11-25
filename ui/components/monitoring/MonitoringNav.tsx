@@ -1,5 +1,5 @@
 // ui/components/monitoring/MonitoringNav.tsx
-
+//
 // =============================================================================
 // Barre de navigation principale pour les pages de monitoring.
 //

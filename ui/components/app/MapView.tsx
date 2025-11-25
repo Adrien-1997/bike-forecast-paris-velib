@@ -1,5 +1,5 @@
 // components/app/MapView.tsx
-
+//
 // =============================================================================
 // Carte principale de l’application (Vue "App").
 // Affiche :

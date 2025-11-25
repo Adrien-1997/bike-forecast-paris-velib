@@ -77,3 +77,5 @@ bucket-lifecycle.json
 
 # Local Netlify folder
 .netlify
+
+infra/

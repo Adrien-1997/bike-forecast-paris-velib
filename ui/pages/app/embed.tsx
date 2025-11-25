@@ -1,4 +1,21 @@
 // ui/pages/app/embed.tsx
+//
+// =============================================================================
+// Page "embed" de l'application Vélo Paris
+// -----------------------------------------------------------------------------
+// Cette page fournit une version intégrable de l’app Vélo Paris :
+//   - pas de header / footer (noChrome = true),
+//   - une carte Leaflet avec les stations Vélib’ et les prévisions de vélos,
+//   - un panneau latéral avec badges, KPI globaux et liste de stations proches.
+//
+// Principes :
+//   - La page consomme les mêmes services que l’app principale (météo, stations,
+//     prévisions) mais dans un layout simplifié pour l’intégration (iframe, etc.).
+//   - L’horizon de prévision (H) est commutable via un interrupteur 15 / 60 min.
+//   - La géolocalisation (si disponible) sert à centrer la carte et la liste
+//     des stations proches.
+// =============================================================================
+
 import Head from "next/head";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -18,17 +35,36 @@ import { getWeather } from "@/lib/services/weather";
 import type { Station, Forecast } from "@/lib/types/types";
 import type { Map as LeafletMap } from "leaflet";
 
-// Map (no SSR)
+// Map (no SSR) : la carte Leaflet ne doit être rendue que côté client
 const MapView = dynamic(() => import("@/components/app/MapView"), { ssr: false });
 
 /* ----------------- helpers ----------------- */
+
+/**
+ * Convertit une valeur quelconque en nombre, avec valeur de repli.
+ *
+ * @param x        Valeur à convertir.
+ * @param fallback Valeur par défaut si la conversion échoue.
+ */
 const toNumber = (x: unknown, fallback = 0) => {
   const n = Number(x);
   return Number.isFinite(n) ? n : fallback;
 };
 
+/**
+ * Extrait une prédiction de vélos à partir d’une ligne de forecast.
+ * Tolère plusieurs noms de champs possibles (bikes_pred_int / bikes_pred).
+ */
 const getPred = (f?: any) => toNumber(f?.bikes_pred_int ?? f?.bikes_pred ?? 0, 0);
 
+/**
+ * Normalise la façon de récupérer un identifiant de station (clé unique).
+ *
+ * Recherche dans l’ordre :
+ *   - station_id
+ *   - stationId
+ *   - id
+ */
 const keyFor = (obj: any): string | null => {
   if (!obj) return null;
   const id = obj.station_id ?? obj.stationId ?? obj.id ?? null;
@@ -36,6 +72,12 @@ const keyFor = (obj: any): string | null => {
   return null;
 };
 
+/**
+ * Formate un timestamp ISO en heure locale Paris (HH:mm).
+ *
+ * @param iso Timestamp ISO (avec ou sans "Z").
+ * @returns   Heure locale "HH:mm" ou "—" si invalide.
+ */
 const parisHHmmAt = (iso?: string | null): string => {
   if (!iso) return "—";
   const utcIso = iso.endsWith("Z") ? iso : `${iso}Z`;
@@ -48,6 +90,9 @@ const parisHHmmAt = (iso?: string | null): string => {
   }).format(d);
 };
 
+/**
+ * Calcule l’âge (en minutes) d’un timestamp ISO par rapport à "maintenant".
+ */
 const ageMinutes = (iso?: string | null): number | null => {
   if (!iso) return null;
   const utcIso = iso.endsWith("Z") ? iso : `${iso}Z`;
@@ -55,6 +100,13 @@ const ageMinutes = (iso?: string | null): number | null => {
   return Math.max(0, Math.round((Date.now() - t) / 60000));
 };
 
+/**
+ * Renvoie le timestamp le plus récent dans un tableau de lignes.
+ *
+ * @param rows Liste de lignes quelconques.
+ * @param keyA Clé principale contenant un timestamp.
+ * @param keyB Clé alternative éventuelle, utilisée si keyA est absente.
+ */
 const latestIso = (rows: any[], keyA: string, keyB?: string): string | null => {
   const vals = rows
     .map((r) => (r?.[keyA] ?? (keyB ? r?.[keyB] : null)) as string | null)
@@ -71,36 +123,44 @@ const latestIso = (rows: any[], keyA: string, keyB?: string): string | null => {
 /* ----------------- component ----------------- */
 
 function AppEmbedPage() {
+  // Données "brutes" de l’app
   const [stations, setStations] = useState<Station[]>([]);
   const [forecast, setForecast] = useState<Forecast[] | any[]>([]);
   const [badges, setBadges] = useState<any>(null);
 
-  const [center, setCenter] = useState<[number, number]>([48.8566, 2.3522]);
+  // Carte & géolocalisation
+  const [center, setCenter] = useState<[number, number]>([48.8566, 2.3522]); // Paris par défaut
   const [userPos, setUserPos] = useState<[number, number] | null>(null);
-  const userCenteredOnce = useRef(false);
+  const userCenteredOnce = useRef(false); // évite de recentrer plusieurs fois
   const mapRef = useRef<LeafletMap | null>(null);
 
   // ⬇️ Horizon contrôlé par l'interrupteur (par défaut sur 60 min)
   const [H, setH] = useState<number>(60);
 
+  // État de chargement / erreur pour la barre de statut
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
-  // Charge météo + stations une fois (elles ne dépendent pas de H)
+  // ----------------------------------------------------------------------------
+  // Boot initial : météo + stations (ne dépendent pas de H)
+  // ----------------------------------------------------------------------------
   useEffect(() => {
     let alive = true;
+
     const boot = async () => {
       try {
         setLoading(true);
         setError(null);
 
+        // On charge en parallèle la météo et les stations
         const [weather, st] = await Promise.all([getWeather(), getStations()]);
         if (!alive) return;
 
         setStations(st ?? []);
 
-        // badges météo init (les timestamps de forecast seront ajoutés après le fetch des prévisions)
+        // Badges météo initiaux
+        // (les timestamps de prévision seront ajoutés après le fetch des forecasts)
         const base = computeBadges(weather ?? null, null);
         setBadges({
           weather: base?.weather ?? null,
@@ -119,13 +179,18 @@ function AppEmbedPage() {
         if (alive) setLoading(false);
       }
     };
+
     boot();
     return () => {
       alive = false;
     };
   }, []);
 
-  // Fetch des prévisions — dépend de H et des stations disponibles
+  // ----------------------------------------------------------------------------
+  // Fetch des prévisions (forecast)
+  //   - dépend de H (horizon) et de la liste des stations connues
+  //   - rafraîchit toutes les 5 minutes
+  // ----------------------------------------------------------------------------
   useEffect(() => {
     let alive = true;
     let timer: number | null = null;
@@ -135,7 +200,7 @@ function AppEmbedPage() {
         setLoading(true);
         setError(null);
 
-        // Liste des IDs pour filtrer côté client
+        // Liste des IDs de stations à demander côté backend
         const keys = Array.from(
           new Set((stations ?? []).map((s) => keyFor(s as any)).filter(Boolean) as string[])
         );
@@ -144,7 +209,7 @@ function AppEmbedPage() {
         if (!alive) return;
         setForecast(fcRows);
 
-        // Met à jour les badges avec les horodatages forecast
+        // Mise à jour des badges avec les horodatages des prévisions
         const latestBin = latestIso(fcRows, "tbin_latest", "tbin_utc");
         const latestPredTs = latestIso(fcRows, "pred_ts_utc");
         const latestTarget = latestIso(fcRows, "target_ts_utc");
@@ -169,10 +234,10 @@ function AppEmbedPage() {
       }
     };
 
-    // Exécute tout de suite si on a déjà des stations
+    // Exécute le fetch immédiat si on a déjà des stations
     if (stations.length) run();
 
-    // Rafraîchit toutes les 5 minutes à horizon constant
+    // Rafraîchit les prévisions toutes les 5 minutes à horizon constant
     timer = window.setInterval(run, 5 * 60 * 1000);
 
     return () => {
@@ -181,7 +246,10 @@ function AppEmbedPage() {
     };
   }, [H, stations]);
 
-  // Geoloc
+  // ----------------------------------------------------------------------------
+  // Géolocalisation utilisateur (optionnelle)
+  //   - si disponible, on mémorise la position et on centre la carte une fois.
+  // ----------------------------------------------------------------------------
   useEffect(() => {
     if (typeof navigator !== "undefined" && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -200,6 +268,9 @@ function AppEmbedPage() {
     }
   }, []);
 
+  // ----------------------------------------------------------------------------
+  // Stations avec géocoordonnées valides
+  // ----------------------------------------------------------------------------
   const stationsWithGeo = useMemo(
     () =>
       stations.filter(
@@ -212,6 +283,7 @@ function AppEmbedPage() {
     [stations]
   );
 
+  // Index des prévisions par station_id
   const forecastByKey = useMemo(() => {
     const m = new Map<string, any>();
     (forecast as any[]).forEach((f) => {
@@ -221,6 +293,9 @@ function AppEmbedPage() {
     return m;
   }, [forecast]);
 
+  // ----------------------------------------------------------------------------
+  // KPI globaux : nombre de stations, vélos actuels, vélos prévus
+  // ----------------------------------------------------------------------------
   const kpis = useMemo(() => {
     if (!stations.length) return { total: 0, bikes: 0, predBikes: 0 };
     const bikes = stations.reduce(
@@ -235,11 +310,15 @@ function AppEmbedPage() {
     return { total: stations.length, bikes, predBikes };
   }, [stations, forecastByKey]);
 
+  // Heure de prévision commune, formatée en heure Paris
   const forecastHourParis = useMemo(() => {
     const latestTarget = latestIso(forecast as any[], "target_ts_utc");
     return parisHHmmAt(latestTarget);
   }, [forecast]);
 
+  // ----------------------------------------------------------------------------
+  // Haversine : calcul de distance entre deux points géographiques (mètres)
+  // ----------------------------------------------------------------------------
   const R = 6371000;
   const toRad = (deg: number) => (deg * Math.PI) / 180;
   const haversine = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -251,6 +330,12 @@ function AppEmbedPage() {
     return 2 * R * Math.asin(Math.sqrt(a));
   };
 
+  // ----------------------------------------------------------------------------
+  // Stations "proches" de l’utilisateur (ou du centre par défaut)
+  //   - nécessite stations géocodées + prévisions disponibles
+  //   - filtre sur prédiction ≥ 2 vélos
+  //   - tri par distance croissante
+  // ----------------------------------------------------------------------------
   const nearby = useMemo(() => {
     if (!stationsWithGeo.length || !Array.isArray(forecast)) return [];
     const user = userPos ?? center;
@@ -315,6 +400,7 @@ function AppEmbedPage() {
             </div>
           )}
 
+          {/* KPI globaux : nombre de stations / vélos actuels / vélos prévus */}
           <div className="kpi">
             <div className="card">
               <div className="small">Stations</div>
@@ -334,6 +420,7 @@ function AppEmbedPage() {
             Stations proches · prévision {forecastHourParis} ({H} min)
           </h3>
 
+          {/* Liste des stations proches avec au moins 2 vélos prévus */}
           <div className="list">
             {nearby.map((s: any) => (
               <div
@@ -363,7 +450,7 @@ function AppEmbedPage() {
   );
 }
 
-// 🚫 Désactive le header/footer pour cette page
+// 🚫 Désactive le header/footer pour cette page "embed"
 (AppEmbedPage as any).noChrome = true;
 
 export default AppEmbedPage;

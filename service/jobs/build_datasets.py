@@ -433,7 +433,7 @@ def _build_events(df_day: pd.DataFrame, penury: int, saturation: int) -> pd.Data
         "occ_ratio","is_penury","is_saturation",
         "h","min",
     ]
-    out = df[keep].sort_values(["tbin_utc","station_id"]).reset_index(drop_index=True)
+    out = df[keep].sort_values(["tbin_utc","station_id"]).reset_index(drop=True)
     out["station_id"] = out["station_id"].astype("string")
     out["tbin_utc"]   = pd.to_datetime(out["tbin_utc"], errors="coerce")
     return out
@@ -668,7 +668,7 @@ def _infer_y_pred(perf_base: pd.DataFrame, feats_all: pd.DataFrame, horizons_min
         # Re-mapper la prédiction *cible* sur la table perf (clé = station_id + tbin_target)
         sub_perf = perf_base.loc[perf_base["horizon_bins"] == hb].copy()
         sub_perf = sub_perf.merge(
-            pred_df.rename(columns={"_key_target":"tbin_target"})[["station_id","tbin_target","y_pred_int"]],
+            pred_df.rename(columns={"_key_target":"tbin_target"})[["station_id","tbin_target","y_pred_int"]], 
             on=["station_id","tbin_target"], how="left"
         )
 

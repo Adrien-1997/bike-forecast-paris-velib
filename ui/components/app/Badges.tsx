@@ -1,5 +1,5 @@
 // components/app/Badges.tsx
-
+//
 // =============================================================================
 // Barre de badges en haut de la page d’app : météo + fraîcheur des données.
 //

@@ -1,4 +1,22 @@
 // ui/pages/monitoring/model/performance.tsx
+//
+// =============================================================================
+// Page Monitoring — Modèle / Performance
+// -----------------------------------------------------------------------------
+// Cette page affiche la performance du modèle par rapport à la baseline
+// (persistance) selon plusieurs axes :
+//   - KPIs globaux (MAE, coverage, lift vs baseline),
+//   - lift quotidien,
+//   - séries MAE (par jour, par heure, par jour de semaine),
+//   - série courte (24 h) Observé / Modèle / Baseline,
+//   - stations top/bottom selon le lift,
+//   - carte des stations (lift par station).
+//
+// L’horizon de prévision (h en minutes) est piloté par HorizonToggle et
+// synchronisé avec le paramètre de query ?h=… (hook useQueryParamH).
+// Les données sont récupérées via le service monitoring/model_performance.
+// =============================================================================
+
 import Head from "next/head";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
@@ -30,10 +48,13 @@ import {
   type StationTimeseries, // ⬅️ NEW
 } from "@/lib/services/monitoring/model_performance";
 
-// ⬇️ Index stations (JSON local)
+// ⬇️ Index stations (JSON local: public/data/stations.index.json)
+//    Permet de récupérer nom/coords pour la carte et les tableaux.
 import { loadStationsIndexFromArrayJson, type StationMeta } from "@/lib/local/stationsIndex";
 
 /* ───────────────────────── Plotly (client only) ───────────────────────── */
+// Chargement dynamique de react-plotly.js uniquement côté client (ssr: false)
+// pour éviter les accès à window/document lors du rendu serveur.
 const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
   ssr: false,
   loading: () => (
@@ -44,6 +65,15 @@ const Plot = dynamic(() => import("react-plotly.js").then((m) => m.default), {
 });
 
 /* ───────────────────────── Map (strictement comme overview) ───────────────────────── */
+/**
+ * Point sur la carte :
+ *   - station_id / name : identifiants de station,
+ *   - lat / lon         : position géographique,
+ *   - color             : couleur (top/bottom lift),
+ *   - mae_model/base    : métriques locales,
+ *   - lift_pct          : lift en % vs baseline,
+ *   - n                 : nombre d’observations.
+ */
 type MapPoint = {
   station_id: string;
   name?: string;
@@ -56,12 +86,17 @@ type MapPoint = {
   n?: number | null;
 };
 
+// Carte Leaflet — même pattern que la carte overview.
 const SnapshotMap = dynamic(async () => {
   const RL = await import("react-leaflet");
   const { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } = RL as any;
   const React = await import("react");
   const { useEffect, useMemo, useState } = React;
 
+  /**
+   * FitBounds : ajuste automatiquement le viewport pour englober
+   * l’ensemble des points valides (lat/lon).
+   */
   function FitBounds({ rows }: { rows: Array<{ lat: number; lon: number }> }) {
     const map = useMap();
     useEffect(() => {
@@ -82,7 +117,7 @@ const SnapshotMap = dynamic(async () => {
         map.fitBounds(
           [
             [minLat, minLon],
-            [maxLat, maxLon],
+            [maxLat, maxLat],
           ],
           { padding: [20, 20] }
         );
@@ -91,12 +126,17 @@ const SnapshotMap = dynamic(async () => {
     return null;
   }
 
+  /**
+   * MapInner : composant carte avec fond Carto + fallback OpenStreetMap,
+   * points colorés (top/bottom lift) et tooltip détaillé.
+   */
   function MapInner({ rows }: { rows: MapPoint[] }) {
     const valid = useMemo(
       () => rows.filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon))),
       [rows]
     );
 
+    // Centre initial = médiane des lat/lon ou fallback sur Paris.
     const latMed = valid.length
       ? valid.map((r) => Number(r.lat)).sort((a, b) => a - b)[Math.floor(valid.length / 2)]
       : 48.8566;
@@ -104,7 +144,7 @@ const SnapshotMap = dynamic(async () => {
       ? valid.map((r) => Number(r.lon)).sort((a, b) => a - b)[Math.floor(valid.length / 2)]
       : 2.3522;
 
-    // fond Carto Light no-labels avec fallback OSM
+    // Fond Carto Light no-labels avec fallback OSM si indisponible.
     const [tileUrl, setTileUrl] = useState(
       "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
     );
@@ -171,7 +211,7 @@ const SnapshotMap = dynamic(async () => {
           ))}
         </MapContainer>
 
-        {/* Légende harmonisée CSS */}
+        {/* Légende harmonisée CSS (identique overview) */}
         <div className="cluster-legend">
           <div className="cluster-legend__title">Lift par station</div>
           <div className="cluster-legend__row">
@@ -191,23 +231,42 @@ const SnapshotMap = dynamic(async () => {
 }, { ssr: false });
 
 /* ───────────────────────── Helpers ───────────────────────── */
+/**
+ * Helper pour Promise.allSettled :
+ *   - renvoie r.value si status === "fulfilled",
+ *   - sinon null (pour simplifier la gestion des erreurs partielles).
+ */
 function ok<T>(r: PromiseSettledResult<T>): T | null {
   return r.status === "fulfilled" ? r.value : null;
 }
+
+/** Format pour pourcentage (v → "v%" ou "—"). */
 function fmtPct(x?: number | string | null, digits = 1) {
   const v = Number(x);
   return Number.isFinite(v) ? `${v.toFixed(digits)}%` : "—";
 }
+
+/** Format numérique général (nombre de décimales configurable). */
 function fmtNum(x?: number | string | null, digits = 2) {
   const v = Number(x);
   return Number.isFinite(v) ? v.toFixed(digits) : "—";
 }
+
+/** Format entier avec séparateur français, sinon "—". */
 function fmtInt(x?: number | string | null) {
   const v = Number(x);
   return Number.isFinite(v) ? v.toLocaleString("fr-FR") : "—";
 }
+
+/** toStr tolérant pour affichage dans les métadonnées. */
 const toStr = (x: any) => (x == null ? "—" : String(x));
 
+/**
+ * Hook pour gérer l’horizon h via la query string (?h=…).
+ *   - Lecture initiale au montage client,
+ *   - mise à jour de l’URL avec replaceState,
+ *   - renvoie [h, setH].
+ */
 function useQueryParamH(defaultH = 60): [number, (h: number) => void] {
   const [h, setH] = useState(defaultH);
   useEffect(() => {
@@ -228,6 +287,10 @@ function useQueryParamH(defaultH = 60): [number, (h: number) => void] {
   return [h, setter];
 }
 
+/**
+ * getLatLng : récupère un couple [lat, lon] à partir de StationMeta en
+ * supportant plusieurs conventions de champs (lat/lon, latitude/longitude, …).
+ */
 function getLatLng(meta?: StationMeta | null): [number, number] | null {
   if (!meta) return null;
   const lat =
@@ -242,8 +305,10 @@ function getLatLng(meta?: StationMeta | null): [number, number] | null {
 
 /* ───────────────────────── Page ───────────────────────── */
 export default function ModelPerformancePage() {
+  // Horizon courant (15 / 60 min).
   const [h, setH] = useQueryParamH(60);
 
+  // Documents de performance (manifest + découpes).
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [kpis, setKpis] = useState<KPIs | null>(null);
   const [daily, setDaily] = useState<DailyMetrics | null>(null);
@@ -253,13 +318,14 @@ export default function ModelPerformancePage() {
   const [lift, setLift] = useState<LiftCurve | null>(null);
   const [st24h, setSt24h] = useState<StationTimeseries | null>(null);
 
-  // Index stations: id → meta
+  // Index stations: id → StationMeta (nom, coords, …).
   const [stationsIdx, setStationsIdx] = useState<Record<string, StationMeta>>({});
 
+  // État global de chargement / erreur.
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Charge manifest + index stations au montage
+  // Charge manifest + index stations au montage.
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -272,6 +338,7 @@ export default function ModelPerformancePage() {
         setManifest(m);
         setStationsIdx(idx as Record<string, StationMeta>);
 
+        // Harmonisation de l’horizon avec ceux exposés par le manifest.
         const hs = Array.isArray(m.horizons) && m.horizons.length ? m.horizons : [15, 60];
         if (!hs.includes(h)) setH(hs[0]);
         setError(null);
@@ -285,7 +352,7 @@ export default function ModelPerformancePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Données pour l’horizon courant (inclut la série 24 h via route API unique)
+  // Charge les données pour l’horizon courant (inclut série 24 h).
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -298,7 +365,7 @@ export default function ModelPerformancePage() {
           getPerformanceByDow(h),
           getPerformanceByStation(h),
           getPerformanceLiftCurve(h),
-          getPerformanceStationTimeseries(h), // ⬅️ unique call
+          getPerformanceStationTimeseries(h), // ⬅️ unique call pour la série courte
         ]);
         if (!alive) return;
 
@@ -323,10 +390,12 @@ export default function ModelPerformancePage() {
     };
   }, [h]);
 
+  // Timestamp de génération à afficher dans la barre de nav.
   const generatedAt = kpis?.generated_at ?? manifest?.generated_at ?? null;
   const barStatus: LoadingBarStatus = loading ? "loading" : error ? "error" : "success";
 
   /* ───────── KPI BAR ───────── */
+  // Construction des KPI synthétiques à partir des KPIs back-end.
   const kpiItems: KpiItem[] = useMemo((): KpiItem[] => {
     const liftPct =
       Number.isFinite(Number(kpis?.lift_vs_baseline)) ? Number(kpis!.lift_vs_baseline) * 100 : null;
@@ -341,6 +410,7 @@ export default function ModelPerformancePage() {
     ];
   }, [kpis]);
 
+  // Ligne de métadonnées sous les KPI (schéma, fenêtre, intervalle, génération).
   const metaParts: string[] = [];
   const schemaV = kpis?.schema_version ?? manifest?.schema_version;
   if (schemaV != null) metaParts.push(`Schéma v${schemaV}`);
@@ -351,7 +421,8 @@ export default function ModelPerformancePage() {
   const metaLine = metaParts.join(" · ");
 
   /* ───────── Courbes (line plots) ───────── */
-  // 1) Lift quotidien (line)
+
+  // 1) Lift quotidien (line).
   const liftCurve: Partial<Plotly.PlotData> | null = useMemo(() => {
     const pts = lift?.points ?? [];
     if (!pts.length) return null;
@@ -369,7 +440,7 @@ export default function ModelPerformancePage() {
     };
   }, [lift, h]);
 
-  // 2) MAE par jour → line plot
+  // 2) MAE par jour (Modèle vs Baseline).
   const dailyLines: Partial<Plotly.PlotData>[] = useMemo(() => {
     const rows = daily?.rows ?? [];
     if (!rows.length) return [];
@@ -382,7 +453,7 @@ export default function ModelPerformancePage() {
     ];
   }, [daily]);
 
-  // 3) Par heure → line plot
+  // 3) MAE par heure locale.
   const byHourLines: Partial<Plotly.PlotData>[] = useMemo(() => {
     const rows = byHour?.rows ?? [];
     if (!rows.length) return [];
@@ -395,7 +466,7 @@ export default function ModelPerformancePage() {
     ];
   }, [byHour]);
 
-  // 4) Par jour de semaine → line plot
+  // 4) MAE par jour de semaine (labels FR).
   const byDowLines: Partial<Plotly.PlotData>[] = useMemo(() => {
     const rows = byDow?.rows ?? [];
     if (!rows.length) return [];
@@ -409,17 +480,17 @@ export default function ModelPerformancePage() {
     ];
   }, [byDow]);
 
-  // 5) Série 24 h — Observé / Modèle / Baseline (depuis StationTimeseries)
+  // 5) Série 24 h — Observé / Modèle / Baseline (via StationTimeseries).
   const series24h: Partial<Plotly.PlotData>[] = useMemo(() => {
     if (!st24h || !st24h.ts?.length) return [];
-    // Convertir les timestamps UTC → labels HH:MM locaux (n’affecte pas l’axe)
+    // Timestamps → labels HH:MM (pour l’axe X, lecture locale).
     const t = st24h.ts.map((s) => {
       const d = new Date(s);
       return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
     });
     const yt = (st24h.y_true ?? []).map((x) => (Number.isFinite(Number(x)) ? Number(x) : null));
     const yp = (st24h.y_pred ?? []).map((x) => (Number.isFinite(Number(x)) ? Number(x) : null));
-    const ybArr = (st24h as any).y_base ?? []; // champ défini comme y_base côté API
+    const ybArr = (st24h as any).y_base ?? []; // champ envoyé par l’API
     const yb = (ybArr as Array<number | null>).map((x) =>
       Number.isFinite(Number(x)) ? Number(x) : null
     );
@@ -431,6 +502,7 @@ export default function ModelPerformancePage() {
   }, [st24h]);
 
   // ── Stations Top/Bottom lift ─────────────────────────
+  // Pré-calcul des 20 meilleures / 20 pires stations selon le lift (filtre n ≥ 30).
   const stationsTopBottom = useMemo(() => {
     const rows = byStation?.rows ?? [];
     const wLift = (x: StationRow) =>
@@ -442,7 +514,7 @@ export default function ModelPerformancePage() {
     return { tops, bots };
   }, [byStation]);
 
-  // Dictionnaire id → nom
+  // Dictionnaire id → nom lisible (tolère ids sans zéros de tête).
   const nameIndex = useMemo(() => {
     const rec: Record<string, string> = {};
     for (const [id, meta] of Object.entries(stationsIdx)) {
@@ -455,7 +527,7 @@ export default function ModelPerformancePage() {
     return rec;
   }, [stationsIdx]);
 
-  // Données carte (couleurs identiques à overview)
+  // Données carte (top stations → vert, bottom → rouge).
   const mapRows = useMemo<MapPoint[]>(() => {
     const rows: MapPoint[] = [];
     const pushRow = (r: StationRow, color: string) => {
@@ -499,8 +571,10 @@ export default function ModelPerformancePage() {
         />
 
         <LoadingBar status={barStatus} />
+        {/* On affiche uniquement l’erreur globale sous la barre de chargement. */}
+        {error && <div className="alert error" style={{ marginTop: 8 }}>{error}</div>}
 
-        {/* Toolbar */}
+        {/* Toolbar — choix de l’horizon (15/60) synchronisé avec l’URL. */}
         <section className="mt-3">
           <div className="card" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
             <HorizonToggle
@@ -515,14 +589,14 @@ export default function ModelPerformancePage() {
           </div>
         </section>
 
-        {/* KPIs */}
+        {/* KPIs principaux (MAE, coverage, lift, n). */}
         <section className="mt-4">
           <h2>Résumé — KPIs (h={h} min)</h2>
           <KpiBar items={kpiItems} dense />
           {metaLine && <div className="kpi-bar-meta">{metaLine}</div>}
         </section>
 
-        {/* Lift */}
+        {/* Lift quotidien – mesure la performance relative vs baseline dans le temps. */}
         <section className="mt-6">
           <h2>Lift quotidien</h2>
           <div className="plot-card">
@@ -545,7 +619,7 @@ export default function ModelPerformancePage() {
           </div>
         </section>
 
-        {/* MAE par jour — LINES */}
+        {/* Série MAE (Modèle vs Baseline) par jour. */}
         <section className="mt-6">
           <h2>Séries temporelles — MAE (Modèle vs Baseline)</h2>
           <div className="plot-card">
@@ -568,7 +642,7 @@ export default function ModelPerformancePage() {
           </div>
         </section>
 
-        {/* Découpes — LINES */}
+        {/* MAE par heure / par jour de semaine. */}
         <section className="mt-6">
           <h2>Découpes — heure & jour de semaine</h2>
           <div className="grid-2">
@@ -614,7 +688,7 @@ export default function ModelPerformancePage() {
           </div>
         </section>
 
-        {/* Série 24 h — Observé / Modèle / Baseline */}
+        {/* Série courte 24 h — Observé / Modèle / Baseline (vue illustrative). */}
         <section className="mt-6">
           <h2>Série 24 h — Observé / Modèle / Baseline</h2>
           <div className="plot-card">
@@ -642,7 +716,7 @@ export default function ModelPerformancePage() {
           )}
         </section>
 
-        {/* Stations — listes */}
+        {/* Stations top/bottom lift (listes). */}
         <section className="mt-6">
           <h2>Stations — meilleurs / moins bons lifts</h2>
           <div className="grid-2">
@@ -668,7 +742,7 @@ export default function ModelPerformancePage() {
           </div>
         </section>
 
-        {/* Carte — intégration identique overview (map-block/map-wrap du CSS fourni) */}
+        {/* Carte Top/Worst stations (lift) — identique style overview. */}
         <section className="mt-6" style={{ marginBottom: 40 }}>
           <h2>Carte — Top vs Worst stations (lift)</h2>
           <div className="map-block">
@@ -685,6 +759,12 @@ export default function ModelPerformancePage() {
 }
 
 /* ───────────────────────── UI widget ───────────────────────── */
+/**
+ * StationList :
+ *   - affiche une liste de stations avec MAE baseline, MAE modèle et lift,
+ *   - barre horizontale normalisée sur max(|lift|) pour comparaison visuelle,
+ *   - tolère l’absence de nom dans l’index stations.
+ */
 function StationList({
   rows,
   kind,
@@ -724,6 +804,7 @@ function StationList({
           const lift = Number.isFinite(Number(r.lift_vs_baseline)) ? Number(r.lift_vs_baseline) : null;
           const liftPct = lift != null ? lift * 100 : null;
 
+          // Largeur de la barre normalisée sur max(|lift|) pour garder une comparaison visuelle cohérente.
           const widthPct =
             lift != null ? Math.max(0, Math.min(100, (abs(lift) / maxAbsLift) * 100)) : 0;
 
@@ -735,7 +816,7 @@ function StationList({
 
           return (
             <div key={r.station_id} className="table-row">
-              {/* Col 1: Station */}
+              {/* Col 1: Station (nom + id + barre normalisée) */}
               <div className="table-cell">
                 <div style={{ minWidth: 0 }}>
                   <div
@@ -754,7 +835,7 @@ function StationList({
                   </div>
                 </div>
 
-                {/* Barre normalisée sur max(|lift|) */}
+                {/* Barre normalisée sur max(|lift|) pour visualiser l’ampleur du gain/perte. */}
                 <div className="bar" style={{ height: 5, marginTop: 5, width: "min(75%, 320px)" }}>
                   <div
                     className={`bar__fill ${better ? "" : "bar__fill--danger"}`}
@@ -764,7 +845,7 @@ function StationList({
                 </div>
               </div>
 
-              {/* Col 2-3-4 */}
+              {/* Col 2-3-4 : MAE base, MAE modèle, Lift (%) */}
               <div className="table-cell table-cell--right" style={{ paddingRight: 2 }}>
                 <div style={{ fontWeight: 700 }}>{fmtNum(maeB, 2)}</div>
               </div>
