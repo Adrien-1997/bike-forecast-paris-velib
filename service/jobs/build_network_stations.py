@@ -1,75 +1,76 @@
 # service/jobs/build_network_stations.py
 
 """
-Vélib’ Forecast — Network Stations clustering & profiles (LATEST ONLY).
+Vélib’ Forecast — Clustering & profils des stations (LATEST ONLY).
 
-Role
+Rôle
 ----
-This job analyses per-station behaviour over a recent time window and produces
-JSON artifacts for the **Monitoring / Network / Stations** page.
+Ce job analyse le comportement des stations sur une fenêtre temporelle récente
+et produit les artefacts JSON pour la page :
 
-Input (GCS)
------------
-- Event exports, one file per day:
+    Monitoring / Network / Stations
+
+Entrée (GCS)
+------------
+- Exports d’évènements, un fichier par jour :
     {GCS_EXPORTS_PREFIX}/events_YYYY-MM-DD.parquet
 
-The job reads a strict UTC window of `WINDOW_DAYS` days and aggregates, per
-station:
+Le job lit une fenêtre UTC stricte de `WINDOW_DAYS` jours et agrège, par station :
 
-    - capacity_est        : estimated capacity (median capacity if available)
-    - volatility          : std-dev of occupancy ratio over the window
-    - penury_rate         : mean(is_penury)
-    - saturation_rate     : mean(is_saturation)
-    - coverage_pct        : fraction of expected time bins seen
-    - profile[24]         : average occupancy ratio per hour (0–23)
+    - capacity_est        : capacité estimée (médiane de capacity si dispo)
+    - volatility          : écart-type du taux d’occupation sur la fenêtre
+    - penury_rate         : moyenne de is_penury
+    - saturation_rate     : moyenne de is_saturation
+    - coverage_pct        : fraction de time bins "attendus" effectivement vus
+    - profile[24]         : taux d’occupation moyen par heure (0–23)
 
-Then it runs a KMeans clustering on the 24-dimensional profiles and a PCA
-projection for visualization.
+Puis il exécute un clustering KMeans sur ces profils 24D et une PCA pour la
+visualisation.
 
-Outputs (LATEST only)
+Sorties (LATEST only)
 ---------------------
-All outputs are written under:
+Toutes les sorties sont écrites sous :
 
     {GCS_MONITORING_PREFIX}/monitoring/network/stations/latest/
 
-Files:
+Fichiers :
 - kpis.json
-    * high-level KPIs: n_stations, k_effective, silhouette, davies_bouldin…
+    * KPIs haut niveau : n_stations, k_effective, silhouette, davies_bouldin…
 - centroids.json
-    * per-cluster average 24-hour profile (or global profile if clustering fails)
+    * profil moyen (24h) par cluster (ou profil global si clustering KO)
 - pca_scatter.json
-    * PCA scores: one point per station (PC1, PC2, cluster)
+    * scores PCA : un point par station (PC1, PC2, cluster)
 - pca_circle.json
-    * PCA components: loadings for each of the 24 hourly features
+    * composantes PCA : loadings pour chacune des 24 features horaires
 - stats7.json
-    * compact station table (preview) with volatility/coverage/cluster
+    * table compacte de stations (preview) avec volatilité / couverture / cluster
 
-A manifest is also produced:
+Un manifest est également produit :
 
 - manifest.json
     * schema_version, generated_at, window_days, sources, artifacts…
 
-Environment
------------
-Required:
-    GCS_EXPORTS_PREFIX   = gs://bucket/velib/exports
-    GCS_MONITORING_PREFIX= gs://bucket/velib   (or .../monitoring)
+Environnement
+-------------
+Obligatoire :
+    GCS_EXPORTS_PREFIX    = gs://bucket/velib/exports
+    GCS_MONITORING_PREFIX = gs://bucket/velib   (ou .../monitoring)
 
-Optional:
-    MON_LAST_DAYS   (int, default 14 via NETWORK_WINDOW_DAYS)
-    NETWORK_WINDOW_DAYS (legacy fallback for window size)
-    STATIONS_MAX    (int, default 3000, cap on number of stations kept)
-    MIN_BINS_KEEP   (int, default 50, minimum valid time bins per station)
-    NETWORK_K       (int, optional, force K for KMeans)
-    NETWORK_K_MIN   (int, default 2)
-    NETWORK_K_MAX   (int, default 8)
+Optionnel :
+    MON_LAST_DAYS      (int, défaut 14 via NETWORK_WINDOW_DAYS)
+    NETWORK_WINDOW_DAYS (fallback legacy pour la taille de fenêtre)
+    STATIONS_MAX       (int, défaut 3000, cap sur le nb de stations)
+    MIN_BINS_KEEP      (int, défaut 50, nb min de time bins valides par station)
+    NETWORK_K          (int, optionnel, force K pour KMeans)
+    NETWORK_K_MIN      (int, défaut 2)
+    NETWORK_K_MAX      (int, défaut 8)
 
 Notes
 -----
-- JSON is sanitized (NaN / ±Inf → null) via `_json_safe`.
-- All outputs are LATEST ONLY (no dated folders).
-- Clustering and PCA are robust: if they fail, the job still produces sane
-  outputs with fallback profiles.
+- Le JSON est nettoyé (NaN / ±Inf → null) via `_json_safe`.
+- Toutes les sorties sont en mode LATEST ONLY (pas de dossiers datés).
+- Clustering et PCA sont robustes : en cas d’échec, le job produit quand même
+  des sorties "saines" avec des profils de repli.
 """
 
 from __future__ import annotations
@@ -98,47 +99,47 @@ try:
 except Exception:
     raise RuntimeError("scikit-learn requis (pip install scikit-learn)")
 
-SCHEMA_VERSION = "1.2"  # 1.1 -> 1.2: LATEST only, manifest, ENV unifiés, JSON safe
+SCHEMA_VERSION = "1.2"  # 1.1 -> 1.2 : LATEST only, manifest, ENV unifiés, JSON safe
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ENV helpers (unifiés)
+# Helpers ENV (unifiés)
 # ──────────────────────────────────────────────────────────────────────────────
 def _env(name: str, default=None):
     """
-    Read an environment variable with a default fallback.
+    Lit une variable d’environnement avec une valeur par défaut.
 
-    Parameters
+    Paramètres
     ----------
     name : str
-        Environment variable name.
+        Nom de la variable d’environnement.
     default : Any
-        Value to return if the variable is absent or empty.
+        Valeur de repli si la variable est absente ou vide.
 
-    Returns
-    -------
+    Retourne
+    --------
     Any
-        Raw string from environment or the default.
+        Valeur brute (str) lue dans l’ENV, ou la valeur par défaut.
     """
     v = os.environ.get(name)
     return v if (v is not None and v != "") else default
 
 def _env_int(name: str, default: int) -> int:
     """
-    Read an integer-valued environment variable.
+    Lit une variable d’environnement de type entier.
 
-    If parsing fails, the provided default is returned.
+    En cas d’échec de parsing, retourne la valeur par défaut.
 
-    Parameters
+    Paramètres
     ----------
     name : str
-        Environment variable name.
+        Nom de la variable d’environnement.
     default : int
-        Default integer value.
+        Valeur entière de repli.
 
-    Returns
-    -------
+    Retourne
+    --------
     int
-        Parsed integer or default.
+        Entier parsé ou valeur par défaut.
     """
     try:
         return int(_env(name, default))
@@ -146,26 +147,26 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 # ──────────────────────────────────────────────────────────────────────────────
-# GCS helpers
+# Helpers GCS
 # ──────────────────────────────────────────────────────────────────────────────
 def _split(gs: str) -> Tuple[str, str]:
     """
-    Split a GCS URI `gs://bucket/path` into (bucket, key).
+    Découpe une URI GCS `gs://bucket/path` en (bucket, key).
 
-    Parameters
+    Paramètres
     ----------
     gs : str
-        GCS URI.
+        URI GCS.
 
-    Returns
-    -------
+    Retourne
+    --------
     (str, str)
-        Bucket name and object key (without trailing slash).
+        Nom de bucket et clé d’objet (sans slash final).
 
-    Raises
-    ------
+    Lève
+    ----
     AssertionError
-        If the URI does not start with `gs://`.
+        Si l’URI ne commence pas par `gs://`.
     """
     assert gs.startswith("gs://"), f"bad GCS uri: {gs}"
     b, k = gs[5:].split("/", 1)
@@ -173,17 +174,17 @@ def _split(gs: str) -> Tuple[str, str]:
 
 def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
     """
-    Read a Parquet blob from GCS into a pandas DataFrame.
+    Lit un blob parquet GCS dans un DataFrame pandas.
 
-    Parameters
+    Paramètres
     ----------
     blob : google.cloud.storage.Blob
-        GCS blob pointing to a parquet file.
+        Blob GCS pointant vers un fichier parquet.
 
-    Returns
-    -------
+    Retourne
+    --------
     pandas.DataFrame
-        DataFrame loaded from the parquet content.
+        DataFrame chargé depuis le contenu parquet.
     """
     buf = BytesIO()
     blob.download_to_file(buf)
@@ -193,24 +194,24 @@ def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
 
 def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datetime) -> List["storage.Blob"]:
     """
-    List `events_YYYY-MM-DD.parquet` blobs in a given UTC date window.
+    Liste les blobs `events_YYYY-MM-DD.parquet` sur une fenêtre de dates UTC.
 
-    Filtering is done on the date embedded in the filename.
+    Le filtrage se fait sur la date encodée dans le nom de fichier.
 
-    Parameters
+    Paramètres
     ----------
     exports_prefix : str
-        Base GCS prefix for exports (GCS_EXPORTS_PREFIX).
+        Préfixe GCS de base pour les exports (GCS_EXPORTS_PREFIX).
     start_date : datetime
-        Start of the window (inclusive, UTC).
+        Début de fenêtre (inclus, UTC).
     end_date : datetime
-        End of the window (inclusive, UTC).
+        Fin de fenêtre (inclus, UTC).
 
-    Returns
-    -------
+    Retourne
+    --------
     list[google.cloud.storage.Blob]
-        Sorted list of blobs matching `events_YYYY-MM-DD.parquet`
-        within the requested date range.
+        Liste triée de blobs correspondant à `events_YYYY-MM-DD.parquet`
+        dans la fenêtre demandée.
     """
     bkt, key_prefix = _split(exports_prefix)
     client = storage.Client()
@@ -230,13 +231,13 @@ def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datet
 
 def _json_safe(o):
     """
-    Recursively sanitize an object for JSON serialization.
+    Nettoie récursivement un objet pour sérialisation JSON.
 
-    - dict/list: recurse
-    - float: NaN/Inf → None
-    - other: returned as-is
+    - dict/list : parcours récursif
+    - float     : NaN/Inf → None
+    - autre     : renvoyé tel quel
 
-    Used right before `json.dumps` to guarantee valid JSON.
+    Utilisé juste avant `json.dumps` pour garantir un JSON valide.
     """
     if isinstance(o, dict):
         return {k: _json_safe(v) for k, v in o.items()}
@@ -248,16 +249,16 @@ def _json_safe(o):
 
 def _upload_json_gs(obj: dict, gs_uri: str, log_prefix: str = "network.stations"):
     """
-    Upload a JSON document to GCS, with sanitization and minimal logging.
+    Envoie un document JSON vers GCS, avec nettoyage et log minimal.
 
-    Parameters
+    Paramètres
     ----------
     obj : dict
-        JSON-serializable payload (will be passed through `_json_safe`).
+        Payload JSON-sérialisable (passé à `_json_safe`).
     gs_uri : str
-        Target GCS URI.
-    log_prefix : str, default "network.stations"
-        Prefix for log messages.
+        URI GCS cible.
+    log_prefix : str, défaut "network.stations"
+        Préfixe pour les messages de log.
     """
     bkt, key = _split(gs_uri)
     data = json.dumps(_json_safe(obj), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -265,19 +266,19 @@ def _upload_json_gs(obj: dict, gs_uri: str, log_prefix: str = "network.stations"
     print(f"[{log_prefix}] wrote → {gs_uri} ({len(data):,} bytes)")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Core helpers
+# Helpers cœur (features station / profils)
 # ──────────────────────────────────────────────────────────────────────────────
 def _safe_occ_ratio(df: pd.DataFrame) -> pd.Series:
     """
-    Compute a robust occupancy ratio for each row: bikes / capacity.
+    Calcule un taux d’occupation robuste par ligne : bikes / capacity.
 
-    Priority:
-      - if `occ_ratio` column is present and non-empty → use it;
-      - otherwise, compute bikes / capacity:
-            occ = bikes / capacity if capacity > 0
-            else NaN
+    Priorité :
+      - si la colonne `occ_ratio` existe et contient des valeurs non vides → on l’utilise ;
+      - sinon, on calcule bikes / capacity :
+            occ = bikes / capacity si capacity > 0
+            sinon NaN
 
-    Values are clipped to [0, 1] and invalid values are set to NaN.
+    Les valeurs sont bornées à [0, 1] et les valeurs invalides sont mises à NaN.
     """
     if "occ_ratio" in df.columns and not pd.isna(df["occ_ratio"]).all():
         s = pd.to_numeric(df["occ_ratio"], errors="coerce")
@@ -290,38 +291,38 @@ def _safe_occ_ratio(df: pd.DataFrame) -> pd.Series:
 
 def _coverage_pct(n_bins: int, n_days: float) -> float:
     """
-    Estimate per-station temporal coverage as a percentage.
+    Estime la couverture temporelle par station (en pourcentage).
 
-    Parameters
+    Paramètres
     ----------
     n_bins : int
-        Number of valid time bins (rows with valid occupancy) for the station.
+        Nombre de time bins valides (lignes avec taux d’occupation valide).
     n_days : float
-        Number of days spanned by the window.
+        Nombre de jours couverts par la fenêtre.
 
-    Returns
-    -------
+    Retourne
+    --------
     float
-        Coverage in [0, 100]. Expected bins = 288 per day (5-minute bins).
+        Couverture dans [0, 100]. On suppose 288 bins par jour (pas de 5 minutes).
     """
     expected = max(1.0, 288.0 * max(0.0, n_days))
     return float(100.0 * min(1.0, n_bins / expected))
 
 def _profile24(df: pd.DataFrame, occ: pd.Series) -> List[Optional[float]]:
     """
-    Compute a 24-value profile of mean occupancy per local hour (0–23).
+    Construit un profil 24 valeurs : taux d’occupation moyen par heure (0–23).
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Station subset with at least `tbin_utc`.
+        Sous-ensemble de station contenant au moins `tbin_utc`.
     occ : pandas.Series
-        Occupancy ratio series aligned with df.
+        Série de taux d’occupation alignée sur df.
 
-    Returns
-    -------
+    Retourne
+    --------
     list[float | None]
-        24 values (one per hour); None for hours with no valid data.
+        24 valeurs (une par heure) ; None pour les heures sans données valides.
     """
     d = df.copy()
     d["occ_ratio"] = pd.to_numeric(occ, errors="coerce")
@@ -335,18 +336,18 @@ def _profile24(df: pd.DataFrame, occ: pd.Series) -> List[Optional[float]]:
 
 def _days_span(df: pd.DataFrame) -> float:
     """
-    Compute how many days are covered by the dataframe (inclusive).
+    Calcule le nombre de jours couverts par le DataFrame (bornes incluses).
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Dataframe with `tbin_utc`.
+        DataFrame contenant `tbin_utc`.
 
-    Returns
-    -------
+    Retourne
+    --------
     float
-        Number of days between min and max (inclusive). 0.0 if timestamps
-        are all invalid.
+        Nombre de jours entre min et max (inclus). 0.0 si tous les timestamps
+        sont invalides.
     """
     ts = pd.to_datetime(df["tbin_utc"], errors="coerce")
     if ts.isna().all():
@@ -357,33 +358,33 @@ def _days_span(df: pd.DataFrame) -> float:
 
 def _qhour_labels() -> List[str]:
     """
-    Build x-axis labels for 24 hourly features: "00:00", ..., "23:00".
+    Construit les labels d’axe pour les 24 features horaires : "00:00", ..., "23:00".
     """
     return [f"{h:02d}:00" for h in range(24)]
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PCA (optionnelle)
+# PCA (optionnelle, via SVD numpy)
 # ──────────────────────────────────────────────────────────────────────────────
 def _pca_first2(profiles: List[List[float]]) -> Tuple[np.ndarray, np.ndarray, Tuple[float, float]]:
     """
-    Compute a simple PCA on 24-dimensional profiles and return first 2 PCs.
+    Calcule une PCA simple sur des profils 24D et renvoie les 2 premières composantes.
 
-    Parameters
+    Paramètres
     ----------
     profiles : list[list[float]]
-        Matrix of shape (N, 24) with occupancy profiles (NaN allowed).
+        Matrice (N, 24) de profils d’occupation (NaN autorisés).
 
-    Returns
-    -------
+    Retourne
+    --------
     (scores, components, var_ratio)
-        scores     : ndarray (N, 2), station coordinates in PC1/PC2 space
-        components : ndarray (2, 24), PCA loadings for each hour
-        var_ratio  : (float, float), explained variance ratio for PC1/PC2
+        scores     : ndarray (N, 2), coordonnées des stations dans l’espace PC1/PC2
+        components : ndarray (2, 24), loadings PCA par heure
+        var_ratio  : (float, float), variance expliquée par PC1/PC2
 
     Notes
     -----
-    - NaN values are centred then replaced by 0.0 before SVD.
-    - PCA is done manually via SVD (no sklearn dependency).
+    - Les NaN sont centrés puis remplacés par 0.0 avant SVD.
+    - PCA effectuée manuellement via SVD (sans dépendance sklearn).
     """
     X = np.asarray(profiles, dtype=np.float64)  # (N,24)
     mu = np.nanmean(X, axis=0, keepdims=True)
@@ -399,21 +400,21 @@ def _pca_first2(profiles: List[List[float]]) -> Tuple[np.ndarray, np.ndarray, Tu
     return scores, comps, vr
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Clustering helpers
+# Helpers clustering
 # ──────────────────────────────────────────────────────────────────────────────
 def _impute_col_mean(X: np.ndarray) -> np.ndarray:
     """
-    Replace NaN by column means in a 2D matrix.
+    Remplace les NaN par la moyenne de colonne dans une matrice 2D.
 
-    Parameters
+    Paramètres
     ----------
     X : numpy.ndarray
-        Input array with potential NaN values.
+        Matrice d’entrée avec éventuellement des NaN.
 
-    Returns
-    -------
+    Retourne
+    --------
     numpy.ndarray
-        New array with NaN imputed by column means.
+        Nouvelle matrice où les NaN ont été imputés par les moyennes de colonnes.
     """
     X = X.copy()
     col_means = np.nanmean(X, axis=0)
@@ -429,39 +430,39 @@ def _run_kmeans_auto(
     random_state: int = 42
 ) -> Tuple[np.ndarray, int, Optional[float], Optional[float], np.ndarray]:
     """
-    Fit KMeans on profiles and (optionally) search an optimal number of clusters.
+    Fit KMeans sur les profils et, si besoin, cherche le nombre de clusters optimal.
 
-    Parameters
+    Paramètres
     ----------
     X : numpy.ndarray
-        Data matrix (N, D) with NaN possibly present.
-    k_forced : int | None, default None
-        If provided and >= 1, use this value directly for KMeans.
-    k_min : int, default 2
-        Minimum number of clusters when searching.
-    k_max : int, default 8
-        Maximum number of clusters when searching.
-    random_state : int, default 42
-        Random seed for KMeans.
+        Matrice (N, D) avec éventuellement des NaN.
+    k_forced : int | None, défaut None
+        Si fourni (>= 1), utilise directement cette valeur de K.
+    k_min : int, défaut 2
+        Nombre minimal de clusters à tester.
+    k_max : int, défaut 8
+        Nombre maximal de clusters à tester.
+    random_state : int, défaut 42
+        Graine aléatoire pour KMeans.
 
-    Returns
-    -------
+    Retourne
+    --------
     labels : numpy.ndarray
-        Cluster label for each sample.
+        Label de cluster pour chaque échantillon.
     k_effective : int
-        Chosen number of clusters.
+        Nombre de clusters finalement retenu.
     silhouette : float | None
-        Best silhouette score (higher is better). None if not computed.
+        Meilleur score de silhouette (plus c’est haut, mieux c’est). None si non calculé.
     davies_bouldin : float | None
-        Davies–Bouldin index (lower is better). None if not computed.
+        Indice de Davies–Bouldin (plus c’est bas, mieux c’est). None si non calculé.
     centroids : numpy.ndarray
-        Final cluster centers.
+        Centres de clusters finaux.
 
     Notes
     -----
-    - When `k_forced` is None, the function tests K in [k_min, k_max]
-      and selects the K with highest silhouette score.
-    - If everything fails, it falls back to a single-cluster solution.
+    - Quand `k_forced` est None, la fonction teste K dans [k_min, k_max]
+      et sélectionne le K avec la meilleure silhouette.
+    - En cas d’échec complet, fallback sur une solution à un seul cluster.
     """
     """
     Retourne: labels, k_effective, silhouette, davies_bouldin, centroids
@@ -508,41 +509,41 @@ def _run_kmeans_auto(
 # ──────────────────────────────────────────────────────────────────────────────
 def main() -> int:
     """
-    CLI entrypoint for the Network Stations clustering job (LATEST ONLY).
+    Point d’entrée CLI pour le job Network Stations (clustering, LATEST ONLY).
 
     Pipeline
     --------
-    1. Read configuration from env:
+    1. Lire la configuration depuis l’ENV :
          - GCS_EXPORTS_PREFIX, GCS_MONITORING_PREFIX
          - WINDOW_DAYS (MON_LAST_DAYS / NETWORK_WINDOW_DAYS)
          - STATIONS_MAX, MIN_BINS_KEEP
          - NETWORK_K / NETWORK_K_MIN / NETWORK_K_MAX
-    2. Define strict UTC window:
-         start = 00:00 of (now - (WINDOW_DAYS - 1))
+    2. Définir la fenêtre UTC stricte :
+         start = 00:00 de (now - (WINDOW_DAYS - 1))
          end   = now (UTC)
-    3. List and read all `events_YYYY-MM-DD.parquet` in this window.
-       If none are found or no readable frames, exit early (manifest only).
-    4. Normalize schema & dtypes:
-         - ensure all core columns exist (filled with NA if missing)
-         - parse timestamps & numerics
-         - filter on [start, now]
-    5. Group by station and compute:
-         - coverage, volatility, penury/saturation rates, 24-hour profile
-         - keep stations with at least MIN_BINS_KEEP valid bins
-         - cap at STATIONS_MAX stations for clustering/UI
-    6. Build the profiles matrix (N, 24) and run:
-         - KMeans (auto or forced K)
-         - PCA (2D) for visualization
-    7. Build JSON artifacts:
+    3. Lister et lire tous les `events_YYYY-MM-DD.parquet` de cette fenêtre.
+       Si aucun fichier ou aucun DataFrame lisible, sortie anticipée (manifest seul).
+    4. Normaliser schéma & types :
+         - garantir la présence des colonnes clés (remplies à NA si absentes)
+         - parser timestamps & numériques
+         - filtrer sur [start, now]
+    5. Grouper par station et calculer :
+         - coverage, volatilité, taux de pénurie/saturation, profil 24h
+         - ne garder que les stations avec au moins MIN_BINS_KEEP bins valides
+         - limiter à STATIONS_MAX stations pour le clustering / l’UI
+    6. Construire la matrice de profils (N, 24) et lancer :
+         - KMeans (K auto ou forcé)
+         - PCA (2D) pour la visualisation
+    7. Construire les artefacts JSON :
          - kpis, centroids, pca_scatter, pca_circle, stats7
-    8. Upload all artifacts to:
+    8. Uploader tous les artefacts vers :
          {GCS_MONITORING_PREFIX}/monitoring/network/stations/latest/
-       plus a manifest.json.
+       ainsi qu’un manifest.json.
 
-    Returns
-    -------
+    Retourne
+    --------
     int
-        Exit code (0 on success).
+        Code de sortie (0 en cas de succès).
     """
     EXPORTS_PREFIX = _env("GCS_EXPORTS_PREFIX")     # gs://bucket/velib/exports
     MON_PREFIX     = _env("GCS_MONITORING_PREFIX")  # gs://bucket/velib (ou .../monitoring)
@@ -551,7 +552,7 @@ def main() -> int:
     if not (MON_PREFIX and str(MON_PREFIX).startswith("gs://")):
         raise RuntimeError("GCS_MONITORING_PREFIX manquant ou invalide")
 
-    # Unification ENV (fallbacks sur anciens noms)
+    # Unification ENV (fallback sur anciens noms)
     WINDOW_DAYS   = _env_int("MON_LAST_DAYS", _env_int("NETWORK_WINDOW_DAYS", 14))
     STATIONS_MAX  = _env_int("STATIONS_MAX", 3000)
     MIN_BINS_KEEP = _env_int("MIN_BINS_KEEP", 50)
@@ -604,7 +605,7 @@ def main() -> int:
         print("[network.stations] events empty — nothing to do")
         return 0
 
-    # colonnes minimales et types (robuste)
+    # Colonnes minimales et typage (robuste)
     need = {"tbin_utc","station_id","bikes","capacity","lat","lon","name","is_penury","is_saturation","occ_ratio"}
     for c in need:
         if c not in ev.columns:
@@ -667,6 +668,7 @@ def main() -> int:
             "cluster": None,  # rempli après clustering
         })
 
+    # Tri : d’abord stations les mieux couvertes (bins_seen), puis station_id
     recs.sort(key=lambda r: (-int(r.get("bins_seen") or 0), r.get("station_id") or ""))
     if len(recs) > STATIONS_MAX:
         recs = recs[:STATIONS_MAX]
@@ -761,7 +763,7 @@ def main() -> int:
         "centroids": centroids_payload
     }
 
-    # KPIs
+    # KPIs globales pour la page
     kpis = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": generated_at,

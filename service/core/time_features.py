@@ -1,60 +1,62 @@
 # service/core/time_features.py
 # =============================================================================
-# Build the training frame from 5-min Parquet snapshots (already weather-joined):
-# - strict schema
-# - per-bin dedupe
-# - target y_nb at +horizon_bins (5 min per bin)
-# - bike lags, rolling stats, simple weather lags
-# - calendar + sinusoidal features (UTC + Paris)
+# Construction de la frame d'entraînement à partir de snapshots Parquet 5 minutes
+# (météo déjà jointe) :
+# - schéma strict
+# - déduplication par bin
+# - cible y_nb à +horizon_bins (5 minutes par bin)
+# - lags sur les vélos, stats glissantes, lags météo simples
+# - features calendaires + sinusoïdales (UTC + Paris)
 #
-# Aligned with the notebook (velib-lgbm.ipynb):
-#   - lag_bins: (1, 2, 3, 6, 12, 24, 36, 48)
-#   - rolling windows: (3, 6, 12, 24, 36, 48) on bikes with shift(1)
-#   - weather lags: 1 for (temp_C, precip_mm, wind_mps)
+# Aligné avec le notebook (velib-lgbm.ipynb) :
+#   - lag_bins : (1, 2, 3, 6, 12, 24, 36, 48)
+#   - fenêtres rolling : (3, 6, 12, 24, 36, 48) sur bikes avec shift(1)
+#   - lags météo : 1 pour (temp_C, precip_mm, wind_mps)
 #   - occ_ratio = bikes / capacity (>0)
 # =============================================================================
 
 """
-Time-based feature engineering for Vélib' 5-minute snapshots.
+Feature engineering temporel pour les snapshots Vélib' en pas de 5 minutes.
 
-This module builds the **purely temporal** (non-spatial) training frame used
-for forecasting models. It assumes that:
+Ce module construit la frame d'entraînement **purement temporelle** (non spatiale)
+utilisée par les modèles de prévision. Il suppose que :
 
-- raw data come as 5-minute Parquet snapshots where weather is **already joined**
-  (columns temp_C, precip_mm, wind_mps),
-- the schema is (or will be coerced to) `BASE_COLUMNS`,
-- station_id is treated as a string at feature-building time.
+- les données brutes viennent de snapshots Parquet 5 minutes avec la météo
+  **déjà jointe** (colonnes temp_C, precip_mm, wind_mps),
+- le schéma est (ou sera forcé à) `BASE_COLUMNS`,
+- station_id est traité comme une chaîne au moment de la construction des features.
 
-High-level pipeline
--------------------
+Pipeline haut niveau
+--------------------
 1. I/O
-   - `_read_many_parquets` reads one/many parquet files, normalises columns,
-     and guarantees that all `BASE_COLUMNS` exist.
-   - `_coerce_types` enforces a stable dtype regime (timestamps, numeric, strings).
-   - `_dedupe_per_bin` keeps the **latest** record per `(station_id, tbin_utc)`.
+   - `_read_many_parquets` lit un ou plusieurs fichiers Parquet, normalise les
+     colonnes et garantit la présence de toutes les `BASE_COLUMNS`.
+   - `_coerce_types` impose un régime de types stable (timestamps, numériques, chaînes).
+   - `_dedupe_per_bin` conserve le **dernier** enregistrement par `(station_id, tbin_utc)`.
 
 2. Feature engineering
-   - `_add_target_and_lags` adds:
-       * target y_nb at +horizon_bins (5 minutes x horizon_bins),
-       * bike lags for several horizons,
-       * rolling mean/std with shift(1) to avoid leakage,
-       * simple weather lags (L=1),
-       * occupancy ratio,
-       * calendar + sinusoidal features via `add_time_features`,
-       * ordinal encoding of status → status_code.
-   - `build_training_frame` orchestrates everything and returns:
+   - `_add_target_and_lags` ajoute :
+       * la cible y_nb à +horizon_bins (5 minutes x horizon_bins),
+       * des lags sur le nombre de vélos,
+       * des moyennes/écarts-types glissants avec shift(1) pour éviter les fuites,
+       * des lags météo simples (L=1),
+       * le taux d’occupation,
+       * des features calendaires + sinusoïdales via `add_time_features`,
+       * un encodage ordinal du status → status_code.
+   - `build_training_frame` orchestre l’ensemble et retourne :
        (full_df, X, y, feat_cols).
 
-Public API
-----------
+API publique
+------------
 - `build_training_frame(src, start_date=None, end_date=None, horizon_bins=3)`
     → (full_df, X, y, feat_cols)
 
-The contract with the training code is:
-- X is a float32 DataFrame containing **only** columns listed in `feat_cols`,
-- y is the float32 Series `y_nb`,
-- full_df is the enriched DataFrame (including target, features, and raw cols),
-- per-bin deduplication and date filtering have already been applied.
+Contrat avec le code d'entraînement :
+- X est un DataFrame float32 contenant **uniquement** les colonnes listées
+  dans `feat_cols`,
+- y est la Series float32 `y_nb`,
+- full_df est le DataFrame enrichi (cible, features et colonnes brutes),
+- la déduplication par bin et le filtrage par dates ont déjà été appliqués.
 """
 
 from __future__ import annotations
@@ -62,13 +64,13 @@ import os, glob
 from typing import Iterable, Tuple, List, Optional
 import pandas as pd
 
-# Prefer relative import; fallback to service.train.* for older layouts
+# Import relatif préféré ; fallback vers service.train.* pour anciens layouts
 try:
     from .cal_features import add_time_features
 except Exception:
     from service.train.cal_features import add_time_features  # type: ignore
 
-# Columns expected from the ingestion + weather join pipeline.
+# Colonnes attendues après ingestion + jointure météo.
 BASE_COLUMNS = [
     "ts_utc", "tbin_utc", "station_id", "bikes", "capacity", "mechanical", "ebike",
     "status", "lat", "lon", "name", "temp_C", "precip_mm", "wind_mps"
@@ -78,27 +80,27 @@ BASE_COLUMNS = [
 
 def _read_many_parquets(path_or_glob: str) -> pd.DataFrame:
     """
-    Read one or multiple Parquet files and normalise to `BASE_COLUMNS`.
+    Lire un ou plusieurs fichiers Parquet et normaliser sur `BASE_COLUMNS`.
 
-    Parameters
+    Paramètres
     ----------
     path_or_glob : str
-        - Path to a single `.parquet` file,
-        - Path to a directory containing `.parquet` files,
-        - Glob pattern like `"path/to/*.parquet"`.
+        - Chemin vers un fichier `.parquet`,
+        - Chemin vers un répertoire contenant des `.parquet`,
+        - Motif glob du type `"path/to/*.parquet"`.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        Concatenated DataFrame with at least `BASE_COLUMNS`:
-        any missing base column is created and filled with NA,
-        and the final column order is exactly `BASE_COLUMNS`.
+        DataFrame concaténé avec au minimum `BASE_COLUMNS` :
+        toute colonne de base manquante est créée remplie avec NA,
+        et l’ordre final des colonnes est exactement `BASE_COLUMNS`.
 
     Notes
     -----
-    - Any file that fails to load is skipped with a warning.
-    - If no file can be read, an empty DataFrame with `BASE_COLUMNS`
-      is returned.
+    - Tout fichier qui échoue au chargement est ignoré avec un warning.
+    - Si aucun fichier ne peut être lu, on retourne un DataFrame vide
+      avec `BASE_COLUMNS`.
     """
     paths: List[str] = []
     if os.path.isdir(path_or_glob):
@@ -123,7 +125,7 @@ def _read_many_parquets(path_or_glob: str) -> pd.DataFrame:
 
     out = pd.concat(dfs, ignore_index=True, sort=False)
 
-    # ensure schema presence
+    # assurer la présence du schéma
     for c in BASE_COLUMNS:
         if c not in out.columns:
             out[c] = pd.NA
@@ -133,36 +135,36 @@ def _read_many_parquets(path_or_glob: str) -> pd.DataFrame:
 
 def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Coerce base columns to stable types (aligned with the notebook).
+    Forcer les types des colonnes de base (aligné avec le notebook).
 
     Transformations
     ---------------
-    - `ts_utc`, `tbin_utc`:
-        * converted to timezone-aware UTC datetimes,
-        * then converted to **naive** UTC datetimes via `tz_convert(None)`.
-    - `station_id`:
-        * cast to pandas `string` dtype (more robust than object).
-    - `bikes`, `capacity`, `mechanical`, `ebike`:
-        * cast to numeric via `pd.to_numeric(errors="coerce")`.
-    - `lat`, `lon`, `temp_C`, `precip_mm`, `wind_mps`:
-        * same numeric coercion.
-    - `status`, `name`:
-        * cast to `string`.
+    - `ts_utc`, `tbin_utc` :
+        * convertis en datetimes UTC aware,
+        * puis convertis en datetimes UTC **naïfs** via `tz_convert(None)`.
+    - `station_id` :
+        * typé en `string` pandas (plus robuste que object).
+    - `bikes`, `capacity`, `mechanical`, `ebike` :
+        * cast en numérique via `pd.to_numeric(errors="coerce")`.
+    - `lat`, `lon`, `temp_C`, `precip_mm`, `wind_mps` :
+        * même coercition numérique.
+    - `status`, `name` :
+        * typés en `string`.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Raw input DataFrame.
+        DataFrame brut en entrée.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        Same DataFrame with normalised dtypes.
+        Même DataFrame avec des dtypes normalisés.
     """
     df["ts_utc"]   = pd.to_datetime(df["ts_utc"],   utc=True, errors="coerce").dt.tz_convert(None)
     df["tbin_utc"] = pd.to_datetime(df["tbin_utc"], utc=True, errors="coerce").dt.tz_convert(None)
 
-    # Keep station_id as string for training frame (as in the notebook)
+    # Conserver station_id en string pour la frame d'entraînement (comme dans le notebook)
     df["station_id"] = df["station_id"].astype("string")
 
     for c in ["bikes", "capacity", "mechanical", "ebike"]:
@@ -177,24 +179,24 @@ def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
 
 def _dedupe_per_bin(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Keep the **latest** record per (station_id, tbin_utc) using ts_utc.
+    Conserver le **dernier** enregistrement par (station_id, tbin_utc) via ts_utc.
 
-    Strategy
-    --------
-    - Sort by (station_id, tbin_utc, ts_utc) ascending.
-    - For each (station_id, tbin_utc) group, retain the `tail(1)` record
-      (i.e. the one with the most recent `ts_utc`).
-    - Reset the index for a clean downstream use.
+    Stratégie
+    ---------
+    - Tri sur (station_id, tbin_utc, ts_utc) ascendant.
+    - Pour chaque groupe (station_id, tbin_utc), on garde le `tail(1)`
+      (i.e. l’enregistrement avec le ts_utc le plus récent).
+    - Reset de l’index pour faciliter les traitements downstream.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Input frame where multiple snapshots may exist per bin.
+        Frame d’entrée où plusieurs snapshots peuvent exister par bin.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        Deduplicated frame with at most one row per (station_id, tbin_utc).
+        Frame dédupliquée, avec au plus une ligne par (station_id, tbin_utc).
     """
     df = df.sort_values(["station_id", "tbin_utc", "ts_utc"], ascending=[True, True, True])
     dedup = df.groupby(["station_id", "tbin_utc"], as_index=False).tail(1)
@@ -208,55 +210,56 @@ def _add_target_and_lags(
     lag_bins: Iterable[int] = (1, 2, 3, 6, 12, 24, 36, 48),
 ) -> Tuple[pd.DataFrame, List[str]]:
     """
-    Enrich the frame with the **target** and time-based features.
+    Enrichir la frame avec la **cible** et les features temporelles.
 
-    Adds
-    ----
+    Ajouts
+    ------
     - `y_nb` :
-        Target = bikes at +`horizon_bins` 5-minute bins
-        (i.e. horizon_bins * 5 minutes ahead).
+        Cible = bikes à +`horizon_bins` bins de 5 minutes
+        (soit horizon_bins * 5 minutes dans le futur).
     - `lag_bikes_L` :
-        For each L in `lag_bins`, bikes lagged by L bins.
+        Pour chaque L dans `lag_bins`, bikes décalé de L bins.
     - `roll_mean_W`, `roll_std_W` :
-        For each rolling window W in (3, 6, 12, 24, 36, 48) bins:
-        rolling mean / std of bikes, where we first apply `shift(1)` to
-        avoid any leakage on the current target time.
+        Pour chaque fenêtre W dans (3, 6, 12, 24, 36, 48) bins :
+        moyenne / écart-type glissants de bikes, après un `shift(1)` pour
+        éviter toute fuite d’information sur la cible.
     - `occ_ratio` :
-        bikes / capacity, only for `capacity > 0` (otherwise NaN).
-    - simple weather lags (L=1 bin):
+        bikes / capacity, uniquement pour `capacity > 0` (sinon NaN).
+    - lags météo simples (L=1 bin) :
         `temp_C_lag1`, `precip_mm_lag1`, `wind_mps_lag1`.
-    - calendar features:
+    - features calendaires :
         via `add_time_features(df, ts_col="tbin_utc", add_paris_derived=True)`.
     - `status_code` :
-        ordinal encoding of the categorical `status` (sorted unique values).
+        encodage ordinal de la variable catégorielle `status`
+        (valeurs uniques triées).
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Clean and deduplicated frame (types already coerced).
-    horizon_bins : int, default 3
-        Forecast horizon in 5-minute bins (3 → 15 minutes, 12 → 1 hour, etc.).
+        Frame propre et dédupliquée (types déjà forcés).
+    horizon_bins : int, par défaut 3
+        Horizon de prévision en bins de 5 minutes (3 → 15 minutes, 12 → 1 heure, etc.).
     lag_bins : Iterable[int]
-        Collection of lag sizes (in bins) to use for bike counts.
+        Collection de tailles de lags (en bins) à utiliser pour les vélos.
 
-    Returns
-    -------
+    Retour
+    ------
     (df, feat_cols)
         df : pandas.DataFrame
-            Same DataFrame, enriched with the target and all features.
+            Même DataFrame, enrichi de la cible et de toutes les features.
         feat_cols : list[str]
-            Ordered list of feature column names (excluding the target).
+            Liste ordonnée des noms de colonnes de features (hors cible).
     """
     df = df.sort_values(["station_id", "tbin_utc"])
 
-    # Target
+    # Cible
     df["y_nb"] = df.groupby("station_id", group_keys=False)["bikes"].shift(-horizon_bins)
 
-    # Bike lags
+    # Lags sur bikes
     for L in lag_bins:
         df[f"lag_bikes_{L}"] = df.groupby("station_id", group_keys=False)["bikes"].shift(L)
 
-    # Rolling windows with shift(1) to avoid leakage
+    # Fenêtres rolling avec shift(1) pour éviter les fuites
     rolling_windows = (3, 6, 12, 24, 36, 48)
     for W in rolling_windows:
         df[f"roll_mean_{W}"] = (
@@ -268,21 +271,21 @@ def _add_target_and_lags(
               .apply(lambda s: s.shift(1).rolling(W, min_periods=max(1, W//2)).std())
         )
 
-    # Occupancy ratio
+    # Taux d'occupation
     df["occ_ratio"] = df["bikes"] / df["capacity"].where(df["capacity"] > 0)
 
-    # Weather lags (L=1)
+    # Lags météo (L=1)
     for c in ("temp_C", "precip_mm", "wind_mps"):
         df[f"{c}_lag1"] = df.groupby("station_id", group_keys=False)[c].shift(1)
 
-    # Calendar/time features
+    # Features calendaires / temporelles
     add_time_features(df, ts_col="tbin_utc", add_paris_derived=True)
 
-    # Categorical status → ordinal code (stable)
+    # Categorical status → code ordinal (stable)
     status_map = {s: i for i, s in enumerate(sorted(df["status"].dropna().unique()))}
     df["status_code"] = df["status"].map(status_map).astype("Int64")
 
-    # Final feature columns (exactly what the notebook expects)
+    # Colonnes de features finales (exactement ce qu’attend le notebook)
     feat_cols = [
         "capacity", "mechanical", "ebike",
         "lat", "lon",
@@ -299,7 +302,7 @@ def _add_target_and_lags(
     ]
     return df, feat_cols
 
-# ───────────────────────── Public API ─────────────────────────
+# ───────────────────────── API publique ─────────────────────────
 
 def build_training_frame(
     src: str,
@@ -308,60 +311,60 @@ def build_training_frame(
     horizon_bins: int = 3,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, List[str]]:
     """
-    Build the full **time-feature** training frame from 5-minute Parquet snapshots.
+    Construire la frame d'entraînement **temporelle** à partir de snapshots Parquet 5 minutes.
 
-    Steps
-    -----
-    1. Load raw data
-       - `_read_many_parquets(src)` collects all snapshots and normalises them
-         to `BASE_COLUMNS`.
-    2. Clean / normalise
-       - `_coerce_types` ensures stable dtypes.
-       - `_dedupe_per_bin` keeps the last record per `(station_id, tbin_utc)`.
-    3. Date filtering (optional, UTC)
-       - If `start_date` is provided, keep rows where `tbin_utc >= start_date`.
-       - If `end_date` is provided, keep rows where
-         `tbin_utc <= end_date + 1 day - 5 minutes`.
+    Étapes
+    ------
+    1. Chargement des données brutes
+       - `_read_many_parquets(src)` collecte tous les snapshots et les normalise
+         sur `BASE_COLUMNS`.
+    2. Nettoyage / normalisation
+       - `_coerce_types` assure des dtypes stables.
+       - `_dedupe_per_bin` garde le dernier enregistrement par `(station_id, tbin_utc)`.
+    3. Filtrage par dates (optionnel, UTC)
+       - Si `start_date` est fourni, on garde les lignes où `tbin_utc >= start_date`.
+       - Si `end_date` est fourni, on garde les lignes où
+         `tbin_utc <= end_date + 1 jour - 5 minutes`.
     4. Feature engineering
-       - `_add_target_and_lags` adds the target y_nb and all temporal features.
-    5. Build model frame
-       - `df_model` = subset of df with:
+       - `_add_target_and_lags` ajoute la cible y_nb et toutes les features temporelles.
+    5. Construction de la frame modèle
+       - `df_model` = sous-ensemble de df avec :
            ["station_id", "tbin_utc", "bikes", "y_nb"] + feat_cols,
-         after dropping rows where `y_nb` is NA.
+         après suppression des lignes où `y_nb` est NA.
        - X = df_model[feat_cols].astype("float32").
        - y = df_model["y_nb"].astype("float32").
 
-    Parameters
+    Paramètres
     ----------
     src : str
-        File path, directory or glob pattern pointing to 5-minute Parquet snapshots.
-    start_date : str | None, default None
-        Lower bound (inclusive) on `tbin_utc`, as "YYYY-MM-DD".
-    end_date : str | None, default None
-        Upper bound (inclusive) on `tbin_utc`, as "YYYY-MM-DD".
-        Internally converted to `end_date + 1 day - 5 minutes`.
-    horizon_bins : int, default 3
-        Forecast horizon in 5-minute bins (passed down to `_add_target_and_lags`).
+        Chemin fichier, répertoire ou motif glob pointant vers les snapshots Parquet 5 minutes.
+    start_date : str | None, défaut None
+        Borne inférieure (incluse) sur `tbin_utc`, au format "YYYY-MM-DD".
+    end_date : str | None, défaut None
+        Borne supérieure (incluse) sur `tbin_utc`, au format "YYYY-MM-DD".
+        Convertie en interne en `end_date + 1 jour - 5 minutes`.
+    horizon_bins : int, défaut 3
+        Horizon de prévision en bins de 5 minutes (passé à `_add_target_and_lags`).
 
-    Returns
-    -------
+    Retour
+    ------
     (full_df, X, y, feat_cols)
         full_df : pandas.DataFrame
-            Enriched frame (raw columns + y_nb + all features).
+            Frame enrichie (colonnes brutes + y_nb + toutes les features).
         X : pandas.DataFrame
-            Feature matrix ready for model training (float32).
+            Matrice de features prête pour l'entraînement (float32).
         y : pandas.Series
-            Target series y_nb (float32).
+            Série cible y_nb (float32).
         feat_cols : list[str]
-            Ordered list of feature column names matching X's columns.
+            Liste ordonnée des colonnes de features correspondant aux colonnes de X.
 
     Notes
     -----
-    - If no data can be read, returns:
+    - Si aucune donnée ne peut être lue, retourne :
         (empty_df, empty_df, empty_series, []).
-    - This function does **not** perform any train/validation split; it is
-      intentionally generic so that different training strategies can be
-      layered on top.
+    - Cette fonction ne réalise **aucun** split train/validation ; elle est
+      volontairement générique pour laisser différentes stratégies
+      d'entraînement se brancher au-dessus.
     """
     df = _read_many_parquets(src)
     if df.empty:
@@ -377,7 +380,7 @@ def build_training_frame(
 
     df, feat_cols = _add_target_and_lags(df, horizon_bins=horizon_bins)
 
-    # Drop NA on target
+    # Suppression des NA sur la cible
     used_cols = ["station_id", "tbin_utc", "bikes", "y_nb"] + feat_cols
     df_model = df[used_cols].dropna(subset=["y_nb"])
 

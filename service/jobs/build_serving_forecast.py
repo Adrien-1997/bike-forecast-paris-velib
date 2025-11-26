@@ -1,50 +1,51 @@
-#  build_serving_forecast.py
+# service/jobs/build_serving_forecast.py
 
 """
-Vélib’ Forecast — Serving Forecast job (short-horizon, 4h rolling window).
+Vélib’ Forecast — Job de Serving Forecast (horizons courts, fenêtre glissante de 4 h).
 
-Role
+Rôle
 ----
-This job builds a 4-hour (5-minute bins) feature snapshot and, optionally,
-produces short-horizon forecasts (e.g. 15 min, 60 min) using pre-trained
-models stored on GCS.
+Ce job construit un snapshot de features sur 4 heures (bins de 5 minutes) et,
+optionnellement, produit des prévisions à court horizon (ex. 15 min, 60 min)
+en utilisant des modèles pré-entraînés stockés sur GCS.
 
-Inputs
-------
-GCS (raw ingestion parquet, 5-minute bins)
+Entrées
+-------
+GCS (ingestion brute parquet, pas de 5 minutes)
     GCS_RAW_PREFIX/date=YYYY-MM-DD/hour=HH/*.parquet
 
-The raw schema is aligned with the ingestion job and must contain at least the
-columns defined in `service.core.time_features.BASE_COLUMNS`.
+Le schéma brut est aligné avec le job d’ingestion et doit contenir au minimum
+les colonnes définies dans `service.core.time_features.BASE_COLUMNS`.
 
-Models (per horizon, on GCS)
+Modèles (par horizon, sur GCS)
     GCS_MODEL_URI_T15   = .../models/h15/latest.joblib
     GCS_MODEL_URI_T60   = .../models/h60/latest.joblib
-    (future horizons can be added similarly)
+    (des horizons futurs peuvent être ajoutés de la même façon)
 
-Feature window
---------------
-- Time resolution: 5 minutes (BIN_MINUTES = 5)
-- Window size:     WINDOW_HOURS (default 4 hours)
-- Internally:      WINDOW_BINS = max(window in bins, LAG_MAX_BINS+1)
-                   where LAG_MAX_BINS = 48 (max lag used in features)
+Fenêtre de features
+-------------------
+- Résolution temporelle : 5 minutes (BIN_MINUTES = 5)
+- Taille de fenêtre     : WINDOW_HOURS (par défaut 4 heures)
+- Interne               : WINDOW_BINS = max(fenêtre en bins, LAG_MAX_BINS+1)
+                          où LAG_MAX_BINS = 48 (plus grand lag utilisé
+                          dans les features)
 
-At runtime:
-    now_utc                : wall-clock or fixed via NOW_UTC_ISO
-    end_tbin_aware (UTC)   : now_utc floored to nearest 5-min
+À l’exécution :
+    now_utc                : horloge système ou valeur fixée via NOW_UTC_ISO
+    end_tbin_aware (UTC)   : now_utc arrondi par défaut au multiple de 5 minutes
     start_tbin_aware (UTC) : end_tbin_aware - (WINDOW_BINS-1)*5min
 
-Forecasts
----------
-For each configured horizon (e.g. 15, 60 minutes):
-- Build features per station at `tbin_latest` (last bin in window).
-- Call `predict_from_features_df` (training core) to obtain predictions.
-- Realign station_id / metadata and enforce a clean JSON shape.
-- Upload:
+Prévisions
+----------
+Pour chaque horizon configuré (ex. 15, 60 minutes) :
+- Construire les features par station à `tbin_latest` (dernier bin de la fenêtre).
+- Appeler `predict_from_features_df` (core d’entraînement) pour obtenir les prédictions.
+- Ré-aligner station_id / métadonnées et garantir une structure JSON propre.
+- Uploader :
 
     {SERVING_FORECAST_PREFIX}/h{H}/latest.json
 
-Example:
+Exemple :
     gs://.../serving/forecast/h15/latest.json
 
     {
@@ -53,25 +54,26 @@ Example:
       "data": [ {...}, {...} ]
     }
 
-Environment
------------
-Required:
+Environnement
+-------------
+Requis :
     GCS_RAW_PREFIX
     SERVING_FORECAST_PREFIX
-    FORECAST_HORIZONS        e.g. "15,60"
-    GCS_MODEL_URI_T15        (for 15-min horizon)
-    GCS_MODEL_URI_T60        (for 60-min horizon)
+    FORECAST_HORIZONS        ex. "15,60"
+    GCS_MODEL_URI_T15        (pour l’horizon 15 min)
+    GCS_MODEL_URI_T60        (pour l’horizon 60 min)
 
-Optional:
-    WINDOW_HOURS             (default 4)
-    WITH_FORECAST            (default "1"; "0"/"false" disables inference)
-    NOW_UTC_ISO              (fixed clock in ISO for tests)
+Optionnels :
+    WINDOW_HOURS             (par défaut 4)
+    WITH_FORECAST            (par défaut "1" ; "0"/"false" désactive l’inférence)
+    NOW_UTC_ISO              (horloge fixe en ISO pour les tests)
 
 Notes
 -----
-- This job is stateless: no local cache or persistent state is kept.
-- All timestamps are treated in UTC, converted to naive pandas datetime for
-  feature building, and pushed back to ISO strings at JSON export time.
+- Ce job est stateless : pas de cache local ni d’état persistant.
+- Tous les timestamps sont manipulés en UTC, convertis en datetime naïfs
+  côté pandas pour le feature building, puis reconvertis en chaînes ISO
+  au moment de l’export JSON.
 """
 
 from __future__ import annotations
@@ -86,24 +88,24 @@ import pandas as pd
 from google.cloud import storage
 
 # ─────────────────────────────────────────────
-#  Repo root auto-resolution (service/ or train/)
+#  Résolution automatique de la racine du dépôt (service/ ou train/)
 # ─────────────────────────────────────────────
 def _ensure_repo_root():
     """
-    Ensure that the repo root (containing `service/` or `train/`) is on sys.path.
+    S’assurer que la racine du dépôt (contenant `service/` ou `train/`) est sur sys.path.
 
-    This makes the module robust to different execution layouts:
-    - local `python -m service.jobs.build_serving_forecast`
-    - Docker / Cloud Run job with `WORKDIR /app`
-    - CI / build environments where the working directory is not the repo root.
+    Cela rend le module robuste à différents contextes d’exécution :
+    - exécution locale : `python -m service.jobs.build_serving_forecast`
+    - job Docker / Cloud Run avec `WORKDIR /app`
+    - environnements CI / build où le répertoire de travail n’est pas la racine du repo.
 
-    Strategy
-    --------
-    1. If `service` or `train` is already importable → do nothing.
-    2. Otherwise, walk upwards from the current file and:
-         - if a directory containing `service/` or `train/` is found,
-           prepend it to `sys.path`.
-    3. As a last resort, if `/app` exists, prepend `/app` to `sys.path`.
+    Stratégie
+    ---------
+    1. Si `service` ou `train` est déjà importable → ne rien faire.
+    2. Sinon, remonter depuis le fichier courant et :
+         - si un répertoire contenant `service/` ou `train/` est trouvé,
+           le préfixer à `sys.path`.
+    3. En dernier recours, si `/app` existe, préfixer `/app` à `sys.path`.
     """
     if _iu.find_spec("service") is not None or _iu.find_spec("train") is not None:
         return
@@ -121,14 +123,14 @@ def _ensure_repo_root():
 _ensure_repo_root()
 
 # ─────────────────────────────────────────────
-#  Imports training/forecast (multi-layout safe)
+#  Imports training/forecast (compatibles multi-layout)
 # ─────────────────────────────────────────────
 try:
     from service.core.cal_features import add_time_features
     from service.core.time_features import BASE_COLUMNS as TRAIN_BASE_COLUMNS
     from service.core.forecast import predict_from_features_df
 except ModuleNotFoundError:
-    # Fallback import attempts kept for historical layouts or packaging issues.
+    # Imports de secours conservés pour d’anciens layouts ou problèmes de packaging.
     try:
         from service.core.cal_features import add_time_features
         from service.core.time_features import BASE_COLUMNS as TRAIN_BASE_COLUMNS
@@ -139,35 +141,35 @@ except ModuleNotFoundError:
         from service.core.forecast import predict_from_features_df
 
 # ─────────────────────────────────────────────
-#  ENV config
+#  Configuration ENV
 # ─────────────────────────────────────────────
-# Raw data (bronze, 5-minute ingestion)
+# Données brutes (bronze, ingestion toutes les 5 minutes)
 RAW_PREFIX = os.environ["GCS_RAW_PREFIX"]
 
-# Time resolution & feature window
+# Résolution temporelle & fenêtre de features
 BIN_MINUTES = 5
 WINDOW_HOURS = int(os.environ.get("WINDOW_HOURS", "4"))
-LAG_MAX_BINS = 48  # max lag used in features
-# Ensure we always have enough history to compute all lags:
+LAG_MAX_BINS = 48  # plus grand lag utilisé dans les features
+# Garantir qu’on a toujours assez d’historique pour tous les lags :
 WINDOW_BINS = max(WINDOW_HOURS * 60 // BIN_MINUTES, LAG_MAX_BINS + 1)
 
-# Forecasting toggle & outputs
+# Bascule de forecasting & sorties
 WITH_FORECAST = str(os.environ.get("WITH_FORECAST", "1")).lower() in ("1", "true", "yes")
 SERVING_FORECAST_PREFIX = os.environ.get("SERVING_FORECAST_PREFIX")
 FORECAST_HORIZONS = os.environ.get("FORECAST_HORIZONS", "15,60")
 
-# Per-horizon model URIs (pre-trained models on GCS)
+# URIs des modèles par horizon (modèles pré-entraînés sur GCS)
 GCS_MODEL_URI_T15 = os.environ.get("GCS_MODEL_URI_T15")
 GCS_MODEL_URI_T60 = os.environ.get("GCS_MODEL_URI_T60")
 
 # ─────────────────────────────────────────────
-#  Time utils
+#  Utilitaires temporels
 # ─────────────────────────────────────────────
 def _floor_5min(dt: datetime) -> datetime:
     """
-    Floor a timezone-aware datetime to the previous 5-minute boundary.
+    Arrondir une datetime aware à la borne inférieure de 5 minutes.
 
-    Example
+    Exemple
     -------
     12:07:23 → 12:05:00
     12:10:00 → 12:10:00
@@ -177,11 +179,11 @@ def _floor_5min(dt: datetime) -> datetime:
 
 def _iter_hours(start: datetime, end: datetime):
     """
-    Iterate over whole hours between two datetimes (inclusive).
+    Itérer sur les heures pleines entre deux datetimes (inclus).
 
-    Each yielded datetime is truncated to the hour (minute/second/microsecond=0).
+    Chaque datetime émise est tronquée à l’heure (minutes/secondes/microsecondes = 0).
 
-    Used to build the hourly partition path:
+    Utilisé pour construire le chemin de partition horaire :
       bronze/date=YYYY-MM-DD/hour=HH/
     """
     cur = start.replace(minute=0, second=0, microsecond=0)
@@ -191,16 +193,16 @@ def _iter_hours(start: datetime, end: datetime):
         cur += timedelta(hours=1)
 
 # ─────────────────────────────────────────────
-#  GCS utils
+#  Utilitaires GCS
 # ─────────────────────────────────────────────
 def _parse_gs(uri: str) -> Tuple[str, str]:
     """
-    Split a GCS URI of the form `gs://bucket/path` into (bucket, key).
+    Découper une URI GCS de la forme `gs://bucket/path` en (bucket, key).
 
-    Raises
-    ------
+    Lève
+    ----
     AssertionError
-        If the URI does not start with `gs://`.
+        Si l’URI ne commence pas par `gs://`.
     """
     assert uri.startswith("gs://"), f"bad GCS uri: {uri}"
     bkt, key = uri[5:].split("/", 1)
@@ -208,39 +210,40 @@ def _parse_gs(uri: str) -> Tuple[str, str]:
 
 def _upload_bytes(cli: storage.Client, data: bytes, dest_uri: str, content_type: str = "application/json") -> None:
     """
-    Upload a bytes payload to the given GCS URI using the provided client.
+    Uploader un payload de bytes vers une URI GCS à l’aide du client fourni.
 
-    Parameters
+    Paramètres
     ----------
     cli : google.cloud.storage.Client
-        GCS client instance.
+        Instance de client GCS.
     data : bytes
-        Raw bytes to upload.
+        Données brutes à uploader.
     dest_uri : str
-        Destination GCS URI (gs://bucket/path).
+        URI GCS de destination (gs://bucket/path).
     content_type : str
-        MIME type (default "application/json").
+        Type MIME (par défaut "application/json").
     """
     bkt, key = _parse_gs(dest_uri)
     cli.bucket(bkt).blob(key).upload_from_string(data, content_type=content_type)
 
 def _list_raw_files_for_window(cli: storage.Client, start: datetime, end: datetime) -> List[str]:
     """
-    List all raw parquet files in the ingestion (bronze) bucket for a time window.
+    Lister tous les fichiers parquet bruts dans le bucket d’ingestion (bronze)
+    pour une fenêtre temporelle donnée.
 
-    The ingestion layout is:
+    Le layout d’ingestion est :
 
         {RAW_PREFIX}/date=YYYY-MM-DD/hour=HH/...
 
-    For each hour between `start` and `end` (inclusive), this function:
-      - derives the corresponding date/hour partition prefix,
-      - lists blobs under that prefix,
-      - keeps only `.parquet` files.
+    Pour chaque heure entre `start` et `end` (inclus), cette fonction :
+      - dérive le préfixe de partition date/heure correspondant,
+      - liste les blobs sous ce préfixe,
+      - ne garde que les fichiers se terminant par `.parquet`.
 
-    Returns
-    -------
+    Retour
+    ------
     list[str]
-        Sorted list of `gs://bucket/path` URIs.
+        Liste triée d’URIs `gs://bucket/path`.
     """
     bkt, pfx_root = _parse_gs(RAW_PREFIX)
     out: List[str] = []
@@ -254,21 +257,21 @@ def _list_raw_files_for_window(cli: storage.Client, start: datetime, end: dateti
 
 def _download_gs_files(cli: storage.Client, uris: List[str], dest_dir: Path) -> List[Path]:
     """
-    Download a list of GCS URIs locally to a working directory.
+    Télécharger une liste d’URIs GCS localement dans un répertoire de travail.
 
-    Parameters
+    Paramètres
     ----------
     cli : google.cloud.storage.Client
-        GCS client instance.
+        Instance de client GCS.
     uris : list[str]
-        GCS URIs to download.
+        URIs GCS à télécharger.
     dest_dir : pathlib.Path
-        Local directory where files will be written.
+        Répertoire local où les fichiers seront écrits.
 
-    Returns
-    -------
+    Retour
+    ------
     list[pathlib.Path]
-        List of local paths corresponding to the downloaded files.
+        Liste des chemins locaux correspondant aux fichiers téléchargés.
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
     paths: List[Path] = []
@@ -280,44 +283,45 @@ def _download_gs_files(cli: storage.Client, uris: List[str], dest_dir: Path) -> 
     return paths
 
 # ─────────────────────────────────────────────
-#  IO / normalization
+#  IO / normalisation
 # ─────────────────────────────────────────────
-BASE_COLS = list(TRAIN_BASE_COLUMNS)  # aligned with training
+BASE_COLS = list(TRAIN_BASE_COLUMNS)  # aligné avec l’entraînement
 
 def _to_naive_utc(series: pd.Series) -> pd.Series:
     """
-    Convert a timestamp-like Series to naive UTC datetimes.
+    Convertir une série de timestamps en datetimes UTC naïves.
 
-    Steps
-    -----
-    1. Parse as UTC-aware datetime (errors coerced to NaT).
-    2. Convert to UTC timezone.
-    3. Drop tzinfo to obtain naive datetime64[ns].
+    Étapes
+    ------
+    1. Parser en datetime aware UTC (erreurs → NaT).
+    2. Convertir explicitement en timezone UTC.
+    3. Retirer l’info de timezone pour obtenir un datetime64[ns] naïf.
     """
     dt = pd.to_datetime(series, utc=True, errors="coerce")
     return dt.dt.tz_convert("UTC").dt.tz_localize(None)
 
 def _read_concat_parquets(files: List[Path]) -> pd.DataFrame:
     """
-    Read multiple parquet files and return a single, normalized DataFrame.
+    Lire plusieurs fichiers parquet et retourner un DataFrame unique normalisé.
 
-    Responsibilities
-    ----------------
-    - Read all files (skip corrupted ones with a warning).
-    - Normalize timestamps (`ts_utc`, `tbin_utc`) to naive UTC.
-    - Coerce core numeric columns (bikes/capacity/mechanical/ebike, weather).
-    - Normalize text columns (`status`, `name`) to pandas string dtype.
-    - Build a robust `station_id` column from:
-        station_id or stationcode (if station_id missing/empty).
-    - De-duplicate rows per (station_id, tbin_utc) with ts_utc as tie-breaker
-      (last sample wins).
-    - Ensure all training base columns (`BASE_COLS`) exist in the final
-      dataframe, filled with NA when missing.
+    Responsabilités
+    ---------------
+    - Lire tous les fichiers (en ignorant ceux corrompus avec un warning).
+    - Normaliser les timestamps (`ts_utc`, `tbin_utc`) en UTC naïf.
+    - Forcer le typage des colonnes numériques principales
+      (bikes/capacity/mechanical/ebike, météo).
+    - Normaliser les colonnes texte (`status`, `name`) en dtype string pandas.
+    - Construire une colonne `station_id` robuste à partir de :
+        station_id ou stationcode (si station_id manquant/vide).
+    - Dédupliquer les lignes par (station_id, tbin_utc) en utilisant ts_utc
+      comme tie-breaker (dernier échantillon conservé).
+    - Garantir que toutes les colonnes de base d’entraînement (`BASE_COLS`)
+      existent dans le DataFrame final, remplies par NA si manquantes.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        DataFrame restricted to `BASE_COLS` columns.
+        DataFrame restreint aux colonnes `BASE_COLS`.
     """
     dfs = []
     for p in files:
@@ -331,13 +335,13 @@ def _read_concat_parquets(files: List[Path]) -> pd.DataFrame:
 
     df = pd.concat(dfs, ignore_index=True)
 
-    # time typing/normalization
+    # normalisation des colonnes temporelles
     if "ts_utc" in df.columns:
         df["ts_utc"] = _to_naive_utc(df["ts_utc"])
     if "tbin_utc" in df.columns:
         df["tbin_utc"] = _to_naive_utc(df["tbin_utc"])
 
-    # numerics (do NOT touch station_id)
+    # numériques (ne pas toucher à station_id)
     for c in ["bikes", "capacity", "mechanical", "ebike"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -345,13 +349,13 @@ def _read_concat_parquets(files: List[Path]) -> pd.DataFrame:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # text
+    # texte
     if "status" in df.columns:
         df["status"] = df["status"].astype("string")
     if "name" in df.columns:
         df["name"] = df["name"].astype("string")
 
-    # robust station_id
+    # station_id robuste
     if "station_id" not in df.columns:
         if "stationcode" in df.columns:
             df["station_id"] = df["stationcode"].astype("string")
@@ -363,12 +367,12 @@ def _read_concat_parquets(files: List[Path]) -> pd.DataFrame:
         m_empty = df["station_id"].isna() | (df["station_id"].str.strip() == "")
         df.loc[m_empty, "station_id"] = sc
 
-    # de-dup
+    # déduplication
     if set(["station_id", "tbin_utc", "ts_utc"]).issubset(df.columns):
         df = df.sort_values(["station_id", "tbin_utc", "ts_utc"])
         df = df.groupby(["station_id", "tbin_utc"], as_index=False, dropna=True).tail(1).reset_index(drop=True)
 
-    # ensure expected columns
+    # colonnes attendues
     for c in BASE_COLS:
         if c not in df.columns:
             df[c] = pd.NA
@@ -376,38 +380,43 @@ def _read_concat_parquets(files: List[Path]) -> pd.DataFrame:
     return df[BASE_COLS]
 
 # ─────────────────────────────────────────────
-#  Feature building helpers (per-station)
+#  Helpers de construction de features (par station)
 # ─────────────────────────────────────────────
 def _build_one_station_full(st_df: pd.DataFrame) -> pd.Series:
     """
-    Build a compact, training-like feature vector for a single station.
+    Construire un vecteur de features compact, au format entraînement,
+    pour une station donnée.
 
-    Assumes `st_df` contains the full historical window (≥ 48 bins) for a
-    single station, sorted by `tbin_utc`.
+    Hypothèses
+    ----------
+    - `st_df` contient la fenêtre historique complète (≥ 48 bins) pour
+      une seule station.
+    - `st_df` est trié par `tbin_utc`.
 
-    The resulting series includes:
-      - identification / current bin:
+    La série retournée contient :
+      - identification / bin courant :
           station_id, tbin_latest, capacity_bin, occ_ratio_bin
-      - bike composition:
+      - composition des vélos :
           mechanical, ebike
-      - static / geo:
+      - statique / géo :
           lat, lon
-      - weather:
-          temp_C, precip_mm, wind_mps, and their lag-1 values
-      - historical signals:
+      - météo :
+          temp_C, precip_mm, wind_mps, et leurs valeurs à lag 1
+      - signaux historiques :
           lag_bikes_{1,2,3,6,12,24,48}
           roll_mean_{3,6,12}, roll_std_{3,6,12}
-          trend_nb_12b, trend_occ_12b (slope per 5-min over last 12 bins)
-      - calendar features (UTC and Paris):
+          trend_nb_12b, trend_occ_12b (pente par pas de 5 min
+          sur les 12 derniers bins)
+      - features calendaires (UTC et Paris) :
           hour, minute, dow, month, is_weekend,
           hod_sin/hod_cos, dow_sin/dow_cos,
           paris_hour, paris_dow, paris_is_we
 
     Notes
     -----
-    - All trends use a leak-safe window: they are computed on data strictly
-      before the latest bin.
-    - Weather lag-1 features are based on the series shifted by one bin.
+    - Toutes les tendances utilisent une fenêtre sans fuite :
+      calculées sur des données strictement antérieures au dernier bin.
+    - Les features météo en lag 1 sont basées sur la série décalée d’un bin.
     """
     st_df = st_df.sort_values("tbin_utc").copy()
 
@@ -421,44 +430,48 @@ def _build_one_station_full(st_df: pd.DataFrame) -> pd.Series:
     # lags
     def lag_last(s: pd.Series, n: int):
         """
-        Return the value at position -1 of `s` shifted by n steps, if available.
-        Otherwise returns NaN.
+        Retourner la valeur en position -1 de `s` décalé de n pas,
+        si disponible. Sinon retourne NaN.
         """
         return s.shift(n).iloc[-1] if len(s) >= (n + 1) else np.nan
     lag_set = (1, 2, 3, 6, 12, 24, 48)
     lag_vals = {f"lag_bikes_{L}": lag_last(bikes, L) for L in lag_set}
 
-    # rollings (avoid leak → shift by 1)
+    # moyennes mobiles (sans fuite → décalage de 1)
     roll_vals: Dict[str, float] = {}
     for W in (3, 6, 12):
         s_shift = bikes.shift(1)
         roll_vals[f"roll_mean_{W}"] = s_shift.rolling(W, min_periods=max(1, W // 2)).mean().iloc[-1]
         roll_vals[f"roll_std_{W}"]  = s_shift.rolling(W, min_periods=max(1, W // 2)).std().iloc[-1]
 
-    # trends (12 bins)
+    # tendances (12 bins)
     def _slope_per_5m(ts: pd.Series, y: pd.Series) -> float:
         """
-        Compute the linear slope of y as a function of time expressed in 5-min bins.
+        Calculer la pente linéaire de y en fonction du temps exprimé
+        en pas de 5 minutes.
 
-        Parameters
+        Paramètres
         ----------
         ts : pandas.Series
-            Time series (datetime-like).
+            Série temporelle (type datetime).
         y : pandas.Series
-            Numeric series.
+            Série numérique.
 
-        Returns
-        -------
+        Retour
+        ------
         float
-            Slope per 5-minute step. NaN if not enough points or variance.
+            Pente par pas de 5 minutes. NaN si pas assez de points
+            ou variance nulle.
         """
         t = pd.to_datetime(ts, errors="coerce")
         m = t.notna() & y.notna()
-        if m.sum() < 2: return np.nan
+        if m.sum() < 2:
+            return np.nan
         x = t[m].astype("datetime64[s]").astype("int64").astype(np.float64) / (BIN_MINUTES * 60.0)
         yy = y[m].astype(float).to_numpy()
         vx = np.var(x)
-        if vx == 0: return np.nan
+        if vx == 0:
+            return np.nan
         return float(np.cov(x, yy, ddof=0)[0, 1] / vx)
 
     win_nb  = st_df.tail(13).iloc[:-1]
@@ -467,10 +480,14 @@ def _build_one_station_full(st_df: pd.DataFrame) -> pd.Series:
     trend_occ_12b = _slope_per_5m(
         win_occ["tbin_utc"],
         (win_occ["bikes"] / win_occ["capacity"].where(win_occ["capacity"] > 0))
-    ) if {"bikes","capacity"}.issubset(win_occ.columns) else np.nan
+    ) if {"bikes", "capacity"}.issubset(win_occ.columns) else np.nan
 
-    # ratios & weather (lag 1)
-    occ_ratio_bin = (cur.get("bikes", np.nan) / cur.get("capacity", np.nan)) if pd.notna(cur.get("capacity", np.nan)) and cur.get("capacity", 0) > 0 else np.nan
+    # ratios & météo (lag 1)
+    occ_ratio_bin = (
+        cur.get("bikes", np.nan) / cur.get("capacity", np.nan)
+        if pd.notna(cur.get("capacity", np.nan)) and cur.get("capacity", 0) > 0
+        else np.nan
+    )
     temp_C    = pd.to_numeric(st_df["temp_C"], errors="coerce")
     precip_mm = pd.to_numeric(st_df["precip_mm"], errors="coerce")
     wind_mps  = pd.to_numeric(st_df["wind_mps"], errors="coerce")
@@ -478,7 +495,7 @@ def _build_one_station_full(st_df: pd.DataFrame) -> pd.Series:
     precip_mm_lag1 = lag_last(precip_mm, 1)
     wind_mps_lag1  = lag_last(wind_mps, 1)
 
-    # calendar features (UTC + Paris)
+    # features calendaires (UTC + Paris)
     cal = pd.DataFrame({"tbin_utc": [tbin_latest]})
     cal = add_time_features(cal, ts_col="tbin_utc", add_paris_derived=True).iloc[0].to_dict()
 
@@ -502,8 +519,8 @@ def _build_one_station_full(st_df: pd.DataFrame) -> pd.Series:
         "wind_mps_lag1":   wind_mps_lag1,
         "trend_nb_12b":    trend_nb_12b,
         "trend_occ_12b":   trend_occ_12b,
-        "status":          status,     # encoded to status_code later
-        # calendar
+        "status":          status,     # encodé en status_code plus loin
+        # calendaires
         "hour":        cal.get("hour"),
         "minute":      cal.get("minute"),
         "dow":         cal.get("dow"),
@@ -523,40 +540,43 @@ def _build_one_station_full(st_df: pd.DataFrame) -> pd.Series:
 
 def _build_features(df: pd.DataFrame, start_tbin: datetime, end_tbin: datetime) -> pd.DataFrame:
     """
-    Build one feature row per station for the feature window [start_tbin, end_tbin].
+    Construire une ligne de features par station pour la fenêtre [start_tbin, end_tbin].
 
-    Steps
-    -----
-    1. Filter the raw dataframe on the time window and keep only needed columns.
-    2. Group by `station_id` and call `_build_one_station_full` on each group.
-    3. Enforce robust station_id (string) and datetime typing.
-    4. Encode `status_code` as an integer (categorical encoding of `status`).
+    Étapes
+    ------
+    1. Filtrer le DataFrame brut sur la fenêtre temporelle et ne garder
+       que les colonnes nécessaires.
+    2. Grouper par `station_id` et appeler `_build_one_station_full` sur
+       chaque groupe.
+    3. Fixer un typage robuste pour station_id (string) et les datetimes.
+    4. Encoder `status_code` en entier (encodage catégoriel de `status`).
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Raw, normalized ingestion dataframe (bronze).
+        DataFrame brut normalisé (bronze).
     start_tbin : datetime
-        Lower bound (naive UTC) of the historical window.
+        Borne inférieure (UTC naïf) de la fenêtre historique.
     end_tbin : datetime
-        Upper bound (naive UTC) of the historical window.
+        Borne supérieure (UTC naïf) de la fenêtre historique.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        Feature dataframe with one row per station.
+        DataFrame de features avec une ligne par station.
     """
-    # select historical window to compute features
+    # sélection de la fenêtre historique pour calculer les features
     m = (df["tbin_utc"] >= start_tbin) & (df["tbin_utc"] <= end_tbin)
     cols_needed = [
-        "tbin_utc","station_id","bikes","capacity","mechanical","ebike","status",
-        "lat","lon","temp_C","precip_mm","wind_mps"
+        "tbin_utc", "station_id", "bikes", "capacity", "mechanical", "ebike", "status",
+        "lat", "lon", "temp_C", "precip_mm", "wind_mps"
     ]
-    dfw = df.loc[m, cols_needed].dropna(subset=["station_id","tbin_utc"]).copy()
+    dfw = df.loc[m, cols_needed].dropna(subset=["station_id", "tbin_utc"]).copy()
     if dfw.empty:
         return pd.DataFrame()
 
-    # Important: set station_id from groupby key (not from column values possibly altered)
+    # Important : définir station_id à partir de la clé du groupby
+    # (et non des valeurs de colonne éventuellement modifiées)
     def _build_with_key(g: pd.DataFrame) -> pd.Series:
         out = _build_one_station_full(g)
         out["station_id"] = str(g.name) if g.name is not None else pd.NA
@@ -569,18 +589,18 @@ def _build_features(df: pd.DataFrame, start_tbin: datetime, end_tbin: datetime) 
                .reset_index(drop=True)
         )
     except TypeError:
-        # Backward-compatible path for older pandas versions.
+        # Chemin de compatibilité pour les versions de pandas plus anciennes.
         feats = (
             dfw.groupby("station_id", dropna=True, group_keys=False)
                .apply(_build_with_key)
                .reset_index(drop=True)
         )
 
-    # final typing
+    # typage final
     feats["station_id"]  = feats["station_id"].astype("string")
     feats["tbin_latest"] = pd.to_datetime(feats["tbin_latest"], errors="coerce")
 
-    # encode status_code
+    # encodage de status_code
     if "status" in feats.columns:
         cats = sorted([s for s in feats["status"].dropna().unique()])
         status_map = {s: i for i, s in enumerate(cats)}
@@ -595,21 +615,21 @@ def _build_features(df: pd.DataFrame, start_tbin: datetime, end_tbin: datetime) 
     return feats
 
 # ─────────────────────────────────────────────
-#  JSON sanitization
+#  Sanitation JSON
 # ─────────────────────────────────────────────
 def _to_jsonable(v):
     """
-    Convert a scalar value to a JSON-friendly representation.
+    Convertir une valeur scalaire en représentation compatible JSON.
 
-    Rules
-    -----
+    Règles
+    ------
     - None → None
     - NaN / NA → None
     - numpy integer → int
     - numpy float   → float
     - pandas.Timestamp / datetime →
-         ISO8601 string in UTC (Z suffix)
-    - everything else → left as-is
+         chaîne ISO8601 en UTC (suffixe Z)
+    - sinon → valeur inchangée
     """
     if v is None:
         return None
@@ -633,19 +653,19 @@ def _to_jsonable(v):
 
 def _records_jsonable(df: pd.DataFrame) -> list[dict]:
     """
-    Convert a dataframe to a list of JSON-safe records.
+    Convertir un DataFrame en liste d’enregistrements JSON-compatibles.
 
-    - Datetime columns are converted to ISO strings in UTC with "Z" suffix.
-    - All scalar values are passed through `_to_jsonable`.
+    - Les colonnes datetime sont converties en chaînes ISO en UTC avec suffixe "Z".
+    - Toutes les valeurs scalaires passent par `_to_jsonable`.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
 
-    Returns
-    -------
+    Retour
+    ------
     list[dict]
-        List of JSON-serializable dictionaries.
+        Liste de dictionnaires sérialisables en JSON.
     """
     if df.empty:
         return []
@@ -661,37 +681,38 @@ def _records_jsonable(df: pd.DataFrame) -> list[dict]:
 # ─────────────────────────────────────────────
 def main() -> int:
     """
-    CLI entrypoint for the Serving Forecast job.
+    Point d’entrée CLI pour le job de Serving Forecast.
 
     Pipeline
     --------
-    1. Resolve `now_utc`:
-         - if NOW_UTC_ISO present → parse as fixed UTC datetime,
-         - else use current UTC time.
-    2. Compute feature window:
-         - end_tbin_aware = floor_5min(now_utc)
+    1. Résoudre `now_utc` :
+         - si NOW_UTC_ISO est présent → parser en datetime UTC fixe,
+         - sinon utiliser l’heure UTC courante.
+    2. Calculer la fenêtre de features :
+         - end_tbin_aware = _floor_5min(now_utc)
          - start_tbin_aware = end_tbin_aware - (WINDOW_BINS - 1)*5min
-    3. List all raw parquet files under GCS_RAW_PREFIX for the window.
-         - If none found → exit(0).
-    4. Download these parquets to /tmp, read & normalize them.
-    5. Build one feature row per station using `_build_features`.
-         - If no features → exit(0).
-    6. If WITH_FORECAST is disabled → stop after feature computation.
-    7. For each horizon in FORECAST_HORIZONS:
-         - resolve the corresponding model URI (GCS_MODEL_URI_T{H}),
-         - call `predict_from_features_df` (training core),
-         - align station_id and metadata, add horizon/model metadata,
-         - coerce bikes_pred_int from bikes_pred if needed,
-         - convert to JSON-safe records.
-    8. Upload per-horizon JSON bundles to:
+    3. Lister tous les fichiers parquet bruts sous GCS_RAW_PREFIX pour la fenêtre.
+         - S’il n’y en a aucun → exit(0).
+    4. Télécharger ces parquets dans /tmp, les lire et les normaliser.
+    5. Construire une ligne de features par station avec `_build_features`.
+         - S’il n’y a pas de features → exit(0).
+    6. Si WITH_FORECAST est désactivé → s’arrêter après le calcul des features.
+    7. Pour chaque horizon dans FORECAST_HORIZONS :
+         - résoudre l’URI du modèle correspondant (GCS_MODEL_URI_T{H}),
+         - appeler `predict_from_features_df` (core d’entraînement),
+         - réaligner station_id et métadonnées, ajouter les métadonnées
+           d’horizon et de modèle,
+         - dériver bikes_pred_int à partir de bikes_pred si nécessaire,
+         - convertir en enregistrements JSON-compatibles.
+    8. Uploader les bundles JSON par horizon vers :
          SERVING_FORECAST_PREFIX/h{H}/latest.json
 
-    Returns
-    -------
+    Retour
+    ------
     int
-        0 on success (even if some horizons are skipped or empty).
+        0 en cas de succès (même si certains horizons sont vides ou ignorés).
     """
-    # 0) now / feature window
+    # 0) now / fenêtre de features
     if "NOW_UTC_ISO" in os.environ:
         now_utc = datetime.fromisoformat(os.environ["NOW_UTC_ISO"].replace("Z", "+00:00")).astimezone(timezone.utc)
     else:
@@ -707,7 +728,7 @@ def main() -> int:
 
     cli = storage.Client()
 
-    # 1) list + 2) download
+    # 1) listage + 2) téléchargement
     gcs_files = _list_raw_files_for_window(cli, start_tbin_aware, end_tbin_aware)
     print(f"[features_4h] gcs files found = {len(gcs_files)}", flush=True)
     if not gcs_files:
@@ -718,7 +739,7 @@ def main() -> int:
     local_files = _download_gs_files(cli, gcs_files, work)
     print(f"[features_4h] local files = {len(local_files)}", flush=True)
 
-    # 3) read + features
+    # 3) lecture + features
     df = _read_concat_parquets(local_files)
     feats = _build_features(df, start_naive, end_naive)
     print(f"[features_4h] features rows={len(feats):,}", flush=True)
@@ -726,7 +747,7 @@ def main() -> int:
         print("[features_4h] no features → no forecast", flush=True)
         return 0
 
-    # 4) inference → per-horizon JSONs
+    # 4) inférence → JSONs par horizon
     if not WITH_FORECAST:
         print("[forecast] WITH_FORECAST disabled — nothing to do", flush=True)
         return 0
@@ -735,18 +756,20 @@ def main() -> int:
 
     def _model_uri_for(hmin: int) -> str | None:
         """
-        Return the configured model URI for a given horizon in minutes.
+        Retourner l’URI de modèle configurée pour un horizon donné (en minutes).
 
-        Currently supported:
+        Actuellement pris en charge :
           - 15 → GCS_MODEL_URI_T15
           - 60 → GCS_MODEL_URI_T60
 
-        Future horizons can be added by extending this mapping.
+        De futurs horizons peuvent être ajoutés en étendant ce mapping.
         """
-        if hmin == 15 and GCS_MODEL_URI_T15: return GCS_MODEL_URI_T15
-        if hmin == 60 and GCS_MODEL_URI_T60: return GCS_MODEL_URI_T60
-        # future horizons can be added here (e.g., 120 → GCS_MODEL_URI_T120)
-        return None  # horizon not configured → skip
+        if hmin == 15 and GCS_MODEL_URI_T15:
+            return GCS_MODEL_URI_T15
+        if hmin == 60 and GCS_MODEL_URI_T60:
+            return GCS_MODEL_URI_T60
+        # futurs horizons à ajouter ici (ex. 120 → GCS_MODEL_URI_T120)
+        return None  # horizon non configuré → ignoré
 
     horizons_min = [int(x.strip()) for x in FORECAST_HORIZONS.split(",") if x.strip()]
     consolidated: Dict[str, list] = {}
@@ -759,7 +782,7 @@ def main() -> int:
             consolidated[str(hmin)] = []
             continue
 
-        # Core inference: calls into training pipeline utilities.
+        # Inférence principale : appel aux utilitaires du pipeline d’entraînement.
         preds = predict_from_features_df(
             feats_df=feats,
             model_uri=uri,
@@ -772,20 +795,20 @@ def main() -> int:
             consolidated[str(hmin)] = []
             continue
 
-        # positional realignment (safety)
+        # réalignement positionnel (sécurité)
         preds = preds.reset_index(drop=True).copy()
         feats_idx = feats.reset_index(drop=True).copy()
 
-        # ensure station_id comes from feats (string)
+        # s’assurer que station_id vient des features (string)
         preds["station_id"] = feats_idx["station_id"].astype("string")
 
-        # include useful fields for UI
+        # champs utiles pour l’UI
         if "tbin_latest" not in preds.columns:
             preds["tbin_latest"] = feats_idx["tbin_latest"].values
         if "capacity_bin" not in preds.columns and "capacity_bin" in feats_idx.columns:
             preds["capacity_bin"] = feats_idx["capacity_bin"].values
 
-        # meta fields
+        # champs méta
         preds["horizon_min"] = hmin
         preds["pred_ts_utc"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         if "model_version" not in preds.columns:
@@ -794,7 +817,7 @@ def main() -> int:
             except Exception:
                 preds["model_version"] = f"model_h{hmin}"
 
-        # integer bike prediction if only float present
+        # prédiction entière de vélos si seule une version float est présente
         if "bikes_pred_int" not in preds.columns and "bikes_pred" in preds.columns:
             preds["bikes_pred_int"] = (
                 np.rint(pd.to_numeric(preds["bikes_pred"], errors="coerce"))
@@ -803,14 +826,16 @@ def main() -> int:
             )
 
         try:
-            print("[forecast][sample]",
-                  preds[["station_id","bikes_pred","bikes_pred_int"]].head(3).to_dict("records"))
+            print(
+                "[forecast][sample]",
+                preds[["station_id", "bikes_pred", "bikes_pred_int"]].head(3).to_dict("records"),
+            )
         except Exception:
             pass
 
         consolidated[str(hmin)] = _records_jsonable(preds)
 
-    # 5) upload per horizon: serving/h15/latest.json, serving/h60/latest.json
+    # 5) upload par horizon : serving/h15/latest.json, serving/h60/latest.json
     for hmin, recs in consolidated.items():
         sub_bundle = {
             "generated_at": generated_at,

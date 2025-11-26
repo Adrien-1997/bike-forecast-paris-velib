@@ -1,55 +1,58 @@
 # service/jobs/export_training_base.py
 
 """
-Base training export job for the Velib Forecast pipeline.
+Job d’export de base d’entraînement pour le pipeline Vélib’ Forecast.
 
-This job:
-- Scans a "daily" directory (local or GCS) containing daily Parquet files.
-- Concatenates all matching daily Parquet shards into a single training base.
-- Keeps only the required columns used for model training.
-- Normalizes timestamps to naive UTC (ts_utc, tbin_utc).
-- Writes the result either:
-  - as a local Parquet file, or
-  - directly to a GCS Parquet object (via a local temporary file).
-- Optionally publishes an additional *dated* training export under a GCS prefix.
+Rôle
+----
+Ce job :
+- parcourt un répertoire "daily" (local ou GCS) contenant des fichiers Parquet quotidiens ;
+- concatène tous les shards quotidiens correspondants en une base d’entraînement unique ;
+- ne conserve que les colonnes requises pour l’entraînement du modèle ;
+- normalise les timestamps en UTC naïf (ts_utc, tbin_utc) ;
+- écrit le résultat soit :
+  - en Parquet local, soit
+  - directement vers un objet Parquet sur GCS (via un fichier temporaire local) ;
+- publie optionnellement une *version datée* supplémentaire sous un préfixe GCS.
 
-Input daily files (flexible naming)
------------------------------------
-The job accepts both historical formats:
+Fichiers quotidiens en entrée (nommage flexible)
+------------------------------------------------
+Le job accepte les deux formats historiques :
 - velib_YYYYMMDD.parquet
 - compact_YYYY-MM-DD.parquet
 
-and can work on:
-- a local directory (recursively),
-- or a GCS prefix (gs://bucket/path).
+et peut travailler sur :
+- un répertoire local (récursivement),
+- ou un préfixe GCS (gs://bucket/path).
 
-Required columns in output
---------------------------
+Colonnes requises en sortie
+---------------------------
 ts_utc, tbin_utc, station_id,
 bikes, capacity, mechanical, ebike, status,
 lat, lon, name,
 temp_C, precip_mm, wind_mps
 
-Environment variables
----------------------
-DAILY_DIR : str, default "data_local/daily"
-    Root path for daily Parquets (local folder or GCS gs:// prefix).
+Variables d’environnement
+-------------------------
+DAILY_DIR : str, défaut "data_local/daily"
+    Chemin racine des Parquet quotidiens (dossier local ou préfixe GCS gs://).
 
-TRAIN_EXPORT : str, default "exports/velib.parquet"
-    Final training export path. Can be:
-      - local path (e.g. "exports/velib.parquet")
-      - GCS path (e.g. "gs://bucket/velib/training/latest.parquet")
+TRAIN_EXPORT : str, défaut "exports/velib.parquet"
+    Chemin de la base d’entraînement finale. Peut être :
+      - un chemin local (ex. "exports/velib.parquet")
+      - un chemin GCS (ex. "gs://bucket/velib/training/latest.parquet")
 
-TRAIN_EXPORT_GCS_PREFIX : str (optional)
-    When set to a GCS prefix (gs://...), publish an additional dated version:
+TRAIN_EXPORT_GCS_PREFIX : str (optionnel)
+    Lorsqu’il est défini et pointe vers un préfixe GCS (gs://...),
+    publie une version datée supplémentaire :
     "<prefix>/velib_training_YYYYMMDD.parquet".
 
-TMP_OUT : str, default "/tmp/velib_training.parquet"
-    Temporary local file used when uploading to GCS.
+TMP_OUT : str, défaut "/tmp/velib_training.parquet"
+    Fichier temporaire local utilisé lors de l’upload vers GCS.
 
-Execution
+Exécution
 ---------
-Typical usage:
+Usage typique :
 
     python -m service.jobs.export_training_base
 """
@@ -79,36 +82,36 @@ REQ_COLS = [
     "temp_C","precip_mm","wind_mps",
 ]
 
-# ───────────────────────────── helpers ─────────────────────────────
+# ───────────────────────────── Helpers ─────────────────────────────
 
 def _is_gcs(path: str) -> bool:
     """
-    Return True if the given path is a GCS URL (starts with 'gs://').
+    Indique si le chemin fourni est une URL GCS (commence par 'gs://').
 
-    Parameters
+    Paramètres
     ----------
     path : str
-        Path or URL to test.
+        Chemin ou URL à tester.
 
-    Returns
-    -------
+    Retour
+    ------
     bool
-        True if the path starts with 'gs://', False otherwise.
+        True si le chemin commence par 'gs://', False sinon.
     """
     return str(path).startswith("gs://")
 
 
 def _split_gcs(url: str) -> tuple[str, str]:
     """
-    Split a GCS URL of the form 'gs://bucket/path' into bucket and object key.
+    Découper une URL GCS de la forme 'gs://bucket/path' en (bucket, key).
 
-    Parameters
+    Paramètres
     ----------
     url : str
-        GCS URL starting with 'gs://'.
+        URL GCS commençant par 'gs://'.
 
-    Returns
-    -------
+    Retour
+    ------
     (str, str)
         Tuple (bucket_name, object_key).
     """
@@ -119,29 +122,30 @@ def _split_gcs(url: str) -> tuple[str, str]:
 
 def _list_daily_paths(root: str) -> list[str]:
     """
-    List all daily Parquet files under a local directory or a GCS prefix.
+    Lister tous les fichiers Parquet quotidiens sous un répertoire local
+    ou un préfixe GCS.
 
-    Accepted filename patterns:
+    Modèles de nom de fichier acceptés :
     - velib_YYYYMMDD.parquet
     - compact_YYYY-MM-DD.parquet
 
-    For local paths:
-        - Recursively walks the directory and collects all *.parquet
-          matching the patterns.
+    Cas chemin local :
+        - Parcours récursif du répertoire et collecte de tous les *.parquet
+          qui correspondent aux modèles ci-dessus.
 
-    For GCS prefixes:
-        - Lists all blobs under the bucket/prefix and keeps only those
-          whose names end with '.parquet' and match one of the patterns.
+    Cas préfixe GCS :
+        - Liste tous les blobs sous bucket/prefix et ne garde que ceux
+          dont le nom se termine par '.parquet' et matche l’un des modèles.
 
-    Parameters
+    Paramètres
     ----------
     root : str
-        Local root directory or GCS URL (gs://bucket/prefix).
+        Répertoire racine local ou URL GCS (gs://bucket/prefix).
 
-    Returns
-    -------
-    list of str
-        Sorted list of matching local or 'gs://'-style paths.
+    Retour
+    ------
+    list[str]
+        Liste triée des chemins locaux ou URLs 'gs://' correspondants.
     """
     import re
     pat1 = re.compile(r".*/velib_\d{8}\.parquet$")
@@ -158,7 +162,7 @@ def _list_daily_paths(root: str) -> list[str]:
                 out.append(f"gs://{bkt}/{b.name}")
     else:
         p = Path(root)
-        # Recursive search to tolerate nested layout
+        # Recherche récursive pour tolérer des layouts imbriqués
         for f in p.rglob("*.parquet"):
             s = str(f)
             if pat1.match(s) or pat2.match(s):
@@ -169,40 +173,41 @@ def _list_daily_paths(root: str) -> list[str]:
 
 def _read_parquets(paths: list[str]) -> pd.DataFrame:
     """
-    Read and concatenate a list of Parquet files into a single DataFrame.
+    Lire et concaténer une liste de fichiers Parquet dans un seul DataFrame.
 
-    Strategy
-    --------
-    - If pyarrow is available and all paths are local, attempt a single
-      `pq.read_table(paths)` for efficiency.
-    - Otherwise, fall back to reading each file individually (works for both
-      local files and gs:// URLs, provided google-cloud-storage is available).
+    Stratégie
+    ---------
+    - Si pyarrow est disponible et que tous les chemins sont locaux, tenter
+      un unique `pq.read_table(paths)` pour plus d’efficacité.
+    - Sinon, basculer sur une lecture fichier par fichier (fonctionne à la fois
+      pour les fichiers locaux et les URLs gs://, à condition que
+      google-cloud-storage soit disponible).
 
-    Parameters
+    Paramètres
     ----------
-    paths : list of str
-        List of local paths or GCS URLs.
+    paths : list[str]
+        Liste de chemins locaux ou URLs GCS.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        Concatenated DataFrame. If no file can be read, an empty DataFrame
-        with REQ_COLS as columns is returned.
+        DataFrame concaténé. Si aucun fichier ne peut être lu, renvoie un
+        DataFrame vide avec REQ_COLS comme colonnes.
     """
     if not paths:
         return pd.DataFrame(columns=REQ_COLS)
 
     if pq is not None:
-        # Fast path: all-local list, read in one call
+        # Chemin rapide : tous les chemins sont locaux, lecture en un appel
         try:
             if all(not _is_gcs(p) for p in paths):
                 tbl = pq.read_table(paths)
                 return tbl.to_pandas()
         except Exception:
-            # If anything goes wrong, we will fall back to per-file reading
+            # En cas de problème, on revient à la lecture fichier par fichier
             pass
 
-    # Fallback: read one by one (local or GCS)
+    # Fallback : lecture unitaire (local ou GCS)
     parts = []
     for pth in paths:
         try:
@@ -230,14 +235,14 @@ def _read_parquets(paths: list[str]) -> pd.DataFrame:
 
 def _write_local_parquet(df: pd.DataFrame, out_path: str):
     """
-    Write a DataFrame as a local Parquet file, creating parent dirs if needed.
+    Écrire un DataFrame en Parquet local, en créant les dossiers parents au besoin.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        DataFrame to serialize.
+        DataFrame à sérialiser.
     out_path : str
-        Local file path where the Parquet file will be written.
+        Chemin local où le fichier Parquet sera écrit.
     """
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_path, index=False)
@@ -246,19 +251,19 @@ def _write_local_parquet(df: pd.DataFrame, out_path: str):
 
 def _upload_file_to_gcs(local_path: str, gcs_url: str):
     """
-    Upload an existing local file to a GCS location.
+    Uploader un fichier local existant vers une localisation GCS.
 
-    Parameters
+    Paramètres
     ----------
     local_path : str
-        Path to the file on the local filesystem.
+        Chemin du fichier sur le système local.
     gcs_url : str
-        GCS URL destination (gs://bucket/path/to/file.parquet).
+        URL GCS de destination (gs://bucket/path/to/file.parquet).
 
-    Raises
-    ------
+    Lève
+    ----
     RuntimeError
-        If google-cloud-storage is not installed.
+        Si google-cloud-storage n’est pas installé.
     """
     if storage is None:
         raise RuntimeError("google-cloud-storage required to write to GCS")
@@ -269,47 +274,47 @@ def _upload_file_to_gcs(local_path: str, gcs_url: str):
     )
     print(f"[export_training_base] uploaded → {gcs_url}")
 
-# ───────────────────────────── main ─────────────────────────────
+# ───────────────────────────── Main ─────────────────────────────
 
 def main():
     """
-    CLI entrypoint for exporting the base training dataset.
+    Point d’entrée CLI pour l’export de la base d’entraînement.
 
-    Steps
-    -----
-    1. Discover daily Parquet files under DAILY_DIR (local or GCS).
-    2. Read and concatenate all matching Parquet shards.
-    3. Keep only REQ_COLS and coerce timestamps to naive UTC.
-    4. Depending on TRAIN_EXPORT:
-       - If local path → write directly to TRAIN_EXPORT
-         - optionally also upload a dated copy under TRAIN_EXPORT_GCS_PREFIX.
-       - If GCS path  → write to TMP_OUT then upload to TRAIN_EXPORT
-         - optionally also upload a dated copy under TRAIN_EXPORT_GCS_PREFIX.
+    Étapes
+    ------
+    1. Découvrir les fichiers Parquet quotidiens sous DAILY_DIR (local ou GCS).
+    2. Lire et concaténer tous les shards quotidiens correspondants.
+    3. Ne garder que REQ_COLS et forcer les timestamps en UTC naïf.
+    4. Selon TRAIN_EXPORT :
+       - Si chemin local → écrire directement dans TRAIN_EXPORT
+         - et, optionnellement, uploader une copie datée sous TRAIN_EXPORT_GCS_PREFIX.
+       - Si chemin GCS   → écrire d’abord dans TMP_OUT puis uploader vers TRAIN_EXPORT
+         - et, optionnellement, uploader une copie datée sous TRAIN_EXPORT_GCS_PREFIX.
 
-    Environment variables
-    ---------------------
-    DAILY_DIR : str, default "data_local/daily"
-        Base directory or GCS prefix for daily Parquet files.
+    Variables d’environnement
+    -------------------------
+    DAILY_DIR : str, défaut "data_local/daily"
+        Dossier de base ou préfixe GCS pour les fichiers Parquet quotidiens.
 
-    TRAIN_EXPORT : str, default "exports/velib.parquet"
-        Local or GCS path for the final training base.
+    TRAIN_EXPORT : str, défaut "exports/velib.parquet"
+        Chemin local ou GCS pour la base d’entraînement finale.
 
-    TRAIN_EXPORT_GCS_PREFIX : str (optional)
-        If provided and starts with 'gs://', an extra dated copy
-        'velib_training_YYYYMMDD.parquet' is uploaded under this prefix.
+    TRAIN_EXPORT_GCS_PREFIX : str (optionnel)
+        Si fourni et commence par 'gs://', une copie datée supplémentaire
+        'velib_training_YYYYMMDD.parquet' est uploadée sous ce préfixe.
 
-    TMP_OUT : str, default "/tmp/velib_training.parquet"
-        Temporary local path used when uploading to GCS.
+    TMP_OUT : str, défaut "/tmp/velib_training.parquet"
+        Chemin local temporaire utilisé pour l’upload vers GCS.
     """
-    # Input root (local or GCS)
-    DAILY_DIR  = os.environ.get("DAILY_DIR", "data_local/daily")   # gs://... or folder
+    # Racine des données quotidiennes (local ou GCS)
+    DAILY_DIR  = os.environ.get("DAILY_DIR", "data_local/daily")   # gs://... ou dossier
 
-    # Output configuration
-    # 1) Final training export (local OR gs://…/xxx.parquet)
+    # Configuration de sortie
+    # 1) Export d’entraînement final (local OU gs://…/xxx.parquet)
     TRAIN_EXPORT = os.environ.get("TRAIN_EXPORT", "exports/velib.parquet")
-    # 2) Optional GCS prefix for an extra dated version
-    TRAIN_EXPORT_GCS_PREFIX = os.environ.get("TRAIN_EXPORT_GCS_PREFIX")  # optional
-    # 3) Temporary local file (used for uploading to GCS)
+    # 2) Préfixe GCS optionnel pour une version datée supplémentaire
+    TRAIN_EXPORT_GCS_PREFIX = os.environ.get("TRAIN_EXPORT_GCS_PREFIX")  # optionnel
+    # 3) Fichier local temporaire (utilisé pour l’upload vers GCS)
     TMP_OUT = os.environ.get("TMP_OUT", "/tmp/velib_training.parquet")
 
     paths = _list_daily_paths(DAILY_DIR)
@@ -319,24 +324,24 @@ def main():
 
     df = _read_parquets(paths)
 
-    # Keep only required columns (create missing ones as None)
+    # Ne conserver que les colonnes requises (création de celles manquantes à None)
     for c in REQ_COLS:
         if c not in df.columns:
             df[c] = None
     df = df[REQ_COLS].copy()
 
-    # Normalize timestamps to naive UTC
+    # Normaliser les timestamps en UTC naïf
     df["tbin_utc"] = pd.to_datetime(df["tbin_utc"], utc=True, errors="coerce").dt.tz_convert(None)
     df["ts_utc"]   = pd.to_datetime(df["ts_utc"],   utc=True, errors="coerce").dt.tz_convert(None)
 
     wrote_any = False
 
-    # Case A — TRAIN_EXPORT is a local file
+    # Cas A — TRAIN_EXPORT est un fichier local
     if not _is_gcs(TRAIN_EXPORT):
         _write_local_parquet(df, TRAIN_EXPORT)
         wrote_any = True
 
-        # Optionally also push a dated version to GCS
+        # Option : pousser également une version datée sur GCS
         if TRAIN_EXPORT_GCS_PREFIX and TRAIN_EXPORT_GCS_PREFIX.startswith("gs://"):
             Path(TMP_OUT).parent.mkdir(parents=True, exist_ok=True)
             df.to_parquet(TMP_OUT, index=False)
@@ -344,15 +349,15 @@ def main():
             gcs_url = f"{TRAIN_EXPORT_GCS_PREFIX.rstrip('/')}/velib_training_{stamp}.parquet"
             _upload_file_to_gcs(TMP_OUT, gcs_url)
 
-    # Case B — TRAIN_EXPORT is a direct GCS object
+    # Cas B — TRAIN_EXPORT est un objet GCS
     else:
-        # Write to local TMP_OUT first, then upload exactly to TRAIN_EXPORT
+        # Écrire d’abord dans TMP_OUT en local, puis uploader vers TRAIN_EXPORT
         Path(TMP_OUT).parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(TMP_OUT, index=False)
         _upload_file_to_gcs(TMP_OUT, TRAIN_EXPORT)
         wrote_any = True
 
-        # Optionally also push a dated version under TRAIN_EXPORT_GCS_PREFIX
+        # Option : pousser également une version datée sous TRAIN_EXPORT_GCS_PREFIX
         if TRAIN_EXPORT_GCS_PREFIX and TRAIN_EXPORT_GCS_PREFIX.startswith("gs://"):
             stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
             gcs_url = f"{TRAIN_EXPORT_GCS_PREFIX.rstrip('/')}/velib_training_{stamp}.parquet"

@@ -1,23 +1,24 @@
 # service/core/monitoring_pipeline.py
 
 # =============================================================================
-#  Vélib’ Forecast — Monitoring Pipeline (v2)
+#  Vélib’ Forecast — Pipeline de Monitoring (v2)
 # =============================================================================
-#  File: service/core/monitoring_pipeline.py
-#  Purpose:
-#     Central orchestrator for the Monitoring stack. Sequentially runs the
-#     analysis jobs that build all JSON artifacts consumed by the Monitoring UI:
+#  Fichier : service/core/monitoring_pipeline.py
+#  Rôle :
+#     Orchestrateur central de la brique Monitoring. Exécute séquentiellement
+#     les jobs d’analyse qui produisent tous les artefacts JSON consommés par
+#     l’UI de monitoring :
 #
-#       ├── data_health           → data coverage, freshness, missingness
-#       ├── data_drift            → feature / target drift analysis
-#       ├── model_performance     → daily performance (MAE/RMSE/…)
-#       ├── model_explainability  → feature importance, calibration, residuals
-#       ├── network_overview      → network-wide KPIs and heatmaps
-#       ├── network_dynamics      → hourly evolution, tension, volatility
-#       ├── network_stations      → per-station profiles and summaries
-#       └── intro                 → metadata (dates, versions, links)
+#       ├── data_health           → couverture des données, fraîcheur, manquants
+#       ├── data_drift            → analyse de dérive des features / de la cible
+#       ├── model_performance     → performance quotidienne (MAE/RMSE/…)
+#       ├── model_explainability  → importance des features, calibration, résiduels
+#       ├── network_overview      → KPIs réseau globaux et heatmaps
+#       ├── network_dynamics      → évolution horaire, tension, volatilité
+#       ├── network_stations      → profils et résumés par station
+#       └── intro                 → métadonnées (dates, versions, liens)
 #
-#  Output structure (GCS):
+#  Structure de sortie (GCS) :
 #       gs://<project>_cloudbuild/velib/monitoring/
 #           ├── data/health/latest/*.json
 #           ├── data/drift/latest/*.json
@@ -28,7 +29,7 @@
 #           ├── network/stations/latest/*.json
 #           └── intro/latest/intro.json
 #
-#  Each job writes atomic JSON bundles using the schema:
+#  Chaque job écrit un bundle JSON atomique suivant le schéma :
 #      {
 #          "schema_version": "1.x",
 #          "generated_at": "2025-11-02T08:15:00Z",
@@ -37,44 +38,45 @@
 #      }
 #
 # =============================================================================
-#  USAGE
+#  UTILISATION
 # -----------------------------------------------------------------------------
 #   python -m service.core.monitoring_pipeline
 #
-#   Optional CLI flags:
-#     --steps=STEP1,STEP2,...   → Override steps order (default = DEFAULT_STEPS)
+#   Flags CLI optionnels :
+#     --steps=STEP1,STEP2,...   → surcharge de la liste de steps
+#                                 (par défaut = DEFAULT_STEPS)
 #
-#   Example:
+#   Exemple :
 #     python -m service.core.monitoring_pipeline --steps=data_health,model_performance
 #
 # =============================================================================
-#  ENVIRONMENT VARIABLES
+#  VARIABLES D’ENVIRONNEMENT
 # -----------------------------------------------------------------------------
-#  ─── Required ───────────────────────────────────────────────────────────────
-#   GCS_EXPORTS_PREFIX     gs://.../velib/exports      (read events_*.parquet, perf_*.parquet)
-#   GCS_MONITORING_PREFIX  gs://.../velib/monitoring   (write monitoring JSON)
+#  ─── Requises ────────────────────────────────────────────────────────────────
+#   GCS_EXPORTS_PREFIX     gs://.../velib/exports      (lecture events_*.parquet, perf_*.parquet)
+#   GCS_MONITORING_PREFIX  gs://.../velib/monitoring   (écriture des JSON de monitoring)
 #
-#  ─── Recommended ────────────────────────────────────────────────────────────
+#  ─── Recommandées ───────────────────────────────────────────────────────────
 #   FORECAST_HORIZONS      15,60
 #   MODEL_URI_15           gs://.../models/h15/latest.joblib
 #   MODEL_URI_60           gs://.../models/h60/latest.joblib
 #   TZ_APP                 Europe/Paris
 #
-#  ─── Optional (pipeline control) ────────────────────────────────────────────
-#   STEPS                  Override step list (comma-separated)
-#   DAY                    Target day (YYYY-MM-DD) propagated to jobs that use it
-#   CONTINUE_ON_ERROR      1|0  → continue even if a step fails (default=0)
-#   DRY_RUN                1|0  → print steps without execution
-#   PYTHON_BIN             Custom Python binary (default = sys.executable)
-#   GCS_LOCK               gs://.../velib/locks/monitoring.lock (prevent concurrency)
+#  ─── Optionnelles (pilotage de la pipeline) ─────────────────────────────────
+#   STEPS                  Surcharge de la liste de steps (séparées par des virgules)
+#   DAY                    Jour cible (YYYY-MM-DD) propagé aux jobs qui l’utilisent
+#   CONTINUE_ON_ERROR      1|0  → continuer même si un step échoue (défaut=0)
+#   DRY_RUN                1|0  → afficher les steps sans les exécuter
+#   PYTHON_BIN             Binaire Python custom (défaut = sys.executable)
+#   GCS_LOCK               gs://.../velib/locks/monitoring.lock (prévenir la concurrence)
 #
-#  ─── Optional (time windows / thresholds per job) ───────────────────────────
+#  ─── Optionnelles (fenêtres temporelles / seuils par job) ───────────────────
 #   # Network overview
 #   OVERVIEW_TZ, OVERVIEW_LAST_DAYS, OVERVIEW_REF_DAYS
 #
 #   # Network dynamics
 #   DYNAMICS_TZ, DYNAMICS_LAST_DAYS, DYNAMICS_PENURY_THRESH, DYNAMICS_SATURATION_THRESH
-#   (fallback: PENURY_THRESH, SATURATION_THRESH)
+#   (fallback : PENURY_THRESH, SATURATION_THRESH)
 #
 #   # Network stations (clustering/options)
 #   NETWORK_WINDOW_DAYS, NETWORK_MIN_BINS_KEEP, NETWORK_K, NETWORK_K_MIN, NETWORK_K_MAX
@@ -89,7 +91,7 @@
 #   # Data drift
 #   DRIFT_TZ, DRIFT_WINDOW_DAYS, DRIFT_FEATURES, DRIFT_BINS
 #
-#   # Intro (URIs if you want to override defaults)
+#   # Intro (URIs si besoin de surcharger les defaults)
 #   INTRO_OVERVIEW_KPIS_URI, INTRO_HEALTH_KPIS_URI, INTRO_DRIFT_SUMMARY_URI,
 #   INTRO_MODEL_LATEST_H15_URI, INTRO_MODEL_LATEST_H60_URI,
 #   INTRO_FORECAST_H15_URI, INTRO_FORECAST_H60_URI, INTRO_OUT_PREFIX
@@ -97,17 +99,18 @@
 # =============================================================================
 #  NOTES
 # -----------------------------------------------------------------------------
-#   • Steps are executed sequentially; if one fails and CONTINUE_ON_ERROR=0,
-#     the pipeline stops immediately.
-#   • Jobs overwrite “latest” and may also publish timestamped bundles.
-#   • No job modifies datasets or models — only monitoring outputs.
-#   • Designed to run daily via Cloud Run Job or Cloud Scheduler.
+#   • Les steps sont exécutés séquentiellement ; si l’un échoue et que
+#     CONTINUE_ON_ERROR=0, la pipeline s’arrête immédiatement.
+#   • Les jobs réécrivent les “latest” et peuvent aussi publier des bundles datés.
+#   • Aucun job ne modifie les datasets ou les modèles — uniquement les sorties
+#     de monitoring.
+#   • Conçu pour tourner quotidiennement via Cloud Run Job ou Cloud Scheduler.
 # =============================================================================
 
 """
-Monitoring pipeline orchestrator for Vélib' Forecast.
+Orchestrateur de pipeline de monitoring pour Vélib' Forecast.
 
-Ce module ne fait **qu'une chose** : lancer, dans le bon ordre, toutes les
+Ce module ne fait **qu'une chose** : lancer, dans le bon ordre, tous les
 jobs de monitoring (data, modèle, réseau, intro) en appliquant quelques
 règles de configuration :
 
@@ -179,8 +182,8 @@ class Cfg:
     """
     Configuration runtime de la pipeline de monitoring.
 
-    Attributes
-    ----------
+    Attributs
+    ---------
     steps : list[str]
         Steps à exécuter (data_health, model_performance, ...).
     dry_run : bool
@@ -203,15 +206,15 @@ def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     """
     Lire une variable d'environnement avec valeur par défaut.
 
-    Parameters
+    Paramètres
     ----------
     name : str
         Nom de la variable.
     default : str | None
-        Valeur fallback si la variable est absente ou vide.
+        Valeur de repli si la variable est absente ou vide.
 
-    Returns
-    -------
+    Retourne
+    --------
     str | None
         Valeur résolue ou `default`.
     """
@@ -260,16 +263,16 @@ def _acquire_lock(uri: Optional[str]):
     -----------
     - Si `uri` est None → lock désactivé (retourne None).
     - Si google-cloud-storage n'est pas dispo → avertissement + pas de lock.
-    - Si upload avec `if_generation_match=0` échoue → le lock existe déjà
+    - Si l’upload avec `if_generation_match=0` échoue → le lock existe déjà
       ou erreur de création → on log et on signale l'absence de lock.
 
-    Parameters
+    Paramètres
     ----------
     uri : str | None
-        URI GCS du lock (ex: gs://bucket/velib/locks/monitoring.lock).
+        URI GCS du lock (ex : gs://bucket/velib/locks/monitoring.lock).
 
-    Returns
-    -------
+    Retourne
+    --------
     google.cloud.storage.blob.Blob | None
         Blob GCS représentant le lock, ou None si non acquis.
     """
@@ -308,15 +311,15 @@ def _run_module(python_bin: str, module: str) -> int:
     """
     Exécuter un module Python (`python -m <module>`) et retourner le code de sortie.
 
-    Parameters
+    Paramètres
     ----------
     python_bin : str
         Binaire Python à utiliser.
     module : str
-        Nom du module (ex: 'service.jobs.build_data_health').
+        Nom du module (ex : 'service.jobs.build_data_health').
 
-    Returns
-    -------
+    Retourne
+    --------
     int
         Code de retour du sous-processus (0 = succès).
     """
@@ -337,12 +340,12 @@ def _echo_env(keys: List[str], title: str = "[env]") -> None:
     """
     Loguer une sélection de variables d'environnement (sans secrets).
 
-    Parameters
+    Paramètres
     ----------
     keys : list[str]
         Variables à afficher si elles sont présentes.
     title : str
-        Préfixe de la ligne log.
+        Préfixe de la ligne de log.
     """
     pairs = []
     for k in keys:
@@ -354,7 +357,7 @@ def _echo_env(keys: List[str], title: str = "[env]") -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Par-défaut “fenêtres jours” : 14j partout, OVERVIEW à 28j
+# Par défaut : fenêtres “jours” → 14 j partout, OVERVIEW à 28 j
 # (ne force rien si l’utilisateur a déjà posé la variable)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -362,7 +365,7 @@ def _set_default(name: str, value: str) -> None:
     """
     Poser une variable d'environnement si elle n'existe pas déjà.
 
-    Parameters
+    Paramètres
     ----------
     name : str
         Nom de la variable.
@@ -383,13 +386,13 @@ def _apply_default_windows() -> None:
     - 28 jours pour l'overview réseau (fenêtre plus longue pour les KPIs globaux).
 
     Important : cette fonction **n'écrase pas** les variables déjà définies.
-    Elle ne fait que fixer des defaults.
+    Elle ne fait que fixer des valeurs par défaut.
     """
     # Data Health
-    _set_default("DATA_HEALTH_LAST_DAYS", "14")     # si ton job lit LAST_DAYS
-    _set_default("DATA_HEALTH_CURRENT_DAYS", "14")  # compat avec ton implémentation actuelle
+    _set_default("DATA_HEALTH_LAST_DAYS", "14")     # si le job lit LAST_DAYS
+    _set_default("DATA_HEALTH_CURRENT_DAYS", "14")  # compat avec l’implémentation actuelle
 
-    # Data Drift (v1.4: MON_* pris en priorité)
+    # Data Drift (v1.4 : MON_* pris en priorité)
     _set_default("MON_CURRENT_DAYS", "14")
     _set_default("MON_REFERENCE_DAYS", "14")
     # Compat alternative
@@ -408,7 +411,7 @@ def _apply_default_windows() -> None:
     # Network Stations (fenêtre clustering / profils)
     _set_default("NETWORK_WINDOW_DAYS", "14")
 
-    # Network Overview → EXCEPTION: 28 jours
+    # Network Overview → EXCEPTION : 28 jours
     _set_default("OVERVIEW_LAST_DAYS", "28")
     # (facultatif) référence utilisée dans l’overview si besoin
     _set_default("OVERVIEW_REF_DAYS", "28")
@@ -427,13 +430,13 @@ def main(argv: List[str] | None = None) -> int:
     - Exécuter séquentiellement les steps demandés via `_run_module`.
     - Respecter CONTINUE_ON_ERROR pour décider de s'arrêter ou non.
 
-    Parameters
+    Paramètres
     ----------
     argv : list[str] | None
         Arguments CLI (par défaut `sys.argv`).
 
-    Returns
-    -------
+    Retourne
+    --------
     int
         Code de retour global (0 = succès, sinon dernier code d'erreur rencontré).
     """
@@ -450,10 +453,10 @@ def main(argv: List[str] | None = None) -> int:
         dry_run=(_env("DRY_RUN", "0") in ("1","true","True")),
         continue_on_error=(_env("CONTINUE_ON_ERROR", "0") in ("1","true","True")),
         python_bin=_env("PYTHON_BIN", sys.executable) or sys.executable,
-        gcs_lock=_env("GCS_LOCK"),  # ex: gs://bucket/velib/locks/monitoring.lock
+        gcs_lock=_env("GCS_LOCK"),  # ex : gs://bucket/velib/locks/monitoring.lock
     )
 
-    # Applique nos défauts 14j partout / 28j pour overview (sans écraser l'existant)
+    # Applique nos défauts 14 j partout / 28 j pour overview (sans écraser l'existant)
     _apply_default_windows()
 
     # Echo utile (sans secrets) — tronc commun
@@ -486,7 +489,7 @@ def main(argv: List[str] | None = None) -> int:
         # Drift
         "MON_CURRENT_DAYS", "MON_REFERENCE_DAYS",
         "DRIFT_TZ", "DRIFT_WINDOW_DAYS", "DRIFT_FEATURES", "DRIFT_BINS",
-        # Intro links (optional overrides)
+        # Intro links (surcharges optionnelles)
         "INTRO_OVERVIEW_KPIS_URI", "INTRO_HEALTH_KPIS_URI", "INTRO_DRIFT_SUMMARY_URI",
         "INTRO_MODEL_LATEST_H15_URI", "INTRO_MODEL_LATEST_H60_URI",
         "INTRO_FORECAST_H15_URI", "INTRO_FORECAST_H60_URI", "INTRO_OUT_PREFIX",

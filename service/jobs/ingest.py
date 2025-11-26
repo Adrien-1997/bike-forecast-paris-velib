@@ -1,65 +1,71 @@
 # service/jobs/ingest.py
 
 """
-5-minute ingestion job for the Velib Forecast pipeline.
+Job d’ingestion 5 minutes pour le pipeline Vélib’ Forecast.
 
-This job:
-- Fetches station status and station information from the official Velib GBFS
-  endpoints.
-- Forces the station timestamps to the *job execution time* (ts_utc = now_utc)
-  while optionally keeping the original GBFS `last_reported` as an in-memory
-  `src_ts_utc`.
-- Computes a 5-minute time bin (tbin_utc) aligned on the job execution time.
-- Optionally fetches hourly weather from the Open-Meteo API around the current
-  time window.
-- Merges bike and weather data into a single snapshot DataFrame.
-- Writes the snapshot to local parquet and optionally to GCS ("bronze" layer).
-- Computes "freshness" metrics for stations and weather and publishes them as
-  JSON locally and (optionally) on GCS for the monitoring stack.
+Rôle
+----
+Ce job :
+- récupère le statut des stations et les informations de stations depuis
+  les endpoints officiels GBFS de Vélib ;
+- force les timestamps des stations au *moment d’exécution du job*
+  (ts_utc = now_utc) tout en conservant optionnellement le `last_reported`
+  GBFS original en mémoire dans une colonne `src_ts_utc` ;
+- calcule un bin temporel de 5 minutes (tbin_utc) aligné sur l’heure
+  d’exécution du job ;
+- récupère optionnellement la météo horaire auprès de l’API Open-Meteo
+  autour de la fenêtre temporelle courante ;
+- fusionne données vélos et météo dans un DataFrame de snapshot unique ;
+- écrit ce snapshot en Parquet local et, optionnellement, sur GCS
+  (couche "bronze") ;
+- calcule des métriques de "fraîcheur" pour les stations et la météo
+  et les publie en JSON en local et, optionnellement, sur GCS pour le
+  stack de monitoring.
 
-Schema (strict, UTC naive timestamps)
+Schéma (strict, timestamps UTC naïfs)
 -------------------------------------
 ts_utc, tbin_utc, station_id, bikes, capacity, mechanical, ebike, status,
 lat, lon, name, temp_C, precip_mm, wind_mps
 
-File layout (UTC)
------------------
-Local snapshots:
+Layout des fichiers (UTC)
+-------------------------
+Snapshots locaux :
   data_local/raw/date=YYYY-MM-DD/hour=HH/YYYY-MM-DDT%H-%M.parquet
 
-GCS snapshots (when INGEST_TO_GCS=1):
+Snapshots GCS (quand INGEST_TO_GCS=1) :
   gs://.../bronze/date=YYYY-MM-DD/hour=HH/YYYY-MM-DDT%H-%M.parquet
 
-Environment variables
----------------------
-INGEST_SAVE_PARQUET : "1" | "0"  (default "1")
-    Control local parquet write for the raw 5-minute snapshot.
+Variables d’environnement
+-------------------------
+INGEST_SAVE_PARQUET : "1" | "0"  (défaut "1")
+    Contrôle l’écriture locale en Parquet du snapshot brut 5 minutes.
 
-LOCAL_RAW_DIR : str (default "data_local/raw")
-    Local root directory for raw snapshots.
+LOCAL_RAW_DIR : str (défaut "data_local/raw")
+    Racine locale pour les snapshots bruts.
 
-INGEST_TO_GCS : "1" | "0"  (default "0")
-    When "1", upload the parquet snapshot to GCS under GCS_RAW_PREFIX.
+INGEST_TO_GCS : "1" | "0"  (défaut "0")
+    Quand "1", uploade le snapshot Parquet sur GCS sous GCS_RAW_PREFIX.
 
 GCS_RAW_PREFIX : str
-    GCS prefix (gs://bucket/path) for bronze snapshots when INGEST_TO_GCS=1.
+    Préfixe GCS (gs://bucket/path) pour les snapshots bronze
+    lorsque INGEST_TO_GCS=1.
 
-OPENMETEO_LAT, OPENMETEO_LON : float (as strings)
-    Coordinates used for the Open-Meteo hourly weather query.
+OPENMETEO_LAT, OPENMETEO_LON : float (en tant que chaînes)
+    Coordonnées utilisées pour la requête météo horaire Open-Meteo.
 
-METEO_DISABLE : "1" | "0"  (default "0")
-    When "1", completely skip the weather API call.
+METEO_DISABLE : "1" | "0"  (défaut "0")
+    Quand "1", saute complètement l’appel à l’API météo.
 
-DIAG : "1" | "true" | "True" (default "0")
-    Enable verbose diagnostic logging (sample rows, paths, etc.).
+DIAG : "1" | "true" | "True" (défaut "0")
+    Active un logging diagnostique verbeux (lignes d’exemple, chemins, etc.).
 
-GCS_MONITORING_PREFIX : str (optional)
-    GCS prefix (gs://bucket/path) used to upload freshness JSONs for the
-    monitoring stack.
+GCS_MONITORING_PREFIX : str (optionnel)
+    Préfixe GCS (gs://bucket/path) utilisé pour uploader les JSON de fraîcheur
+    pour le monitoring.
 
-Execution
+Exécution
 ---------
-Run once from the repository root:
+À lancer une fois depuis la racine du dépôt :
 
     python -m jobs.ingest
 """
@@ -98,19 +104,19 @@ COLS_ORDER = [
     "status","lat","lon","name","temp_C","precip_mm","wind_mps"
 ]
 
-# ───────────────────── HTTP session (retries) ─────────────────────
+# ───────────────────── Session HTTP (retries) ─────────────────────
 
 _session: requests.Session | None = None
 
 
 def _session_get() -> requests.Session:
     """
-    Return a process-wide HTTP session configured with retries.
+    Retourne une session HTTP partagée configurée avec des retries.
 
-    The session:
-    - Retries on typical transient HTTP errors (5xx, 429).
-    - Uses an exponential backoff.
-    - Sets a custom User-Agent for easier tracing on the provider side.
+    La session :
+    - retente sur les erreurs HTTP transitoires classiques (5xx, 429) ;
+    - utilise un backoff exponentiel ;
+    - définit un User-Agent spécifique pour tracer plus facilement côté provider.
     """
     global _session
     if _session is None:
@@ -130,24 +136,24 @@ def _session_get() -> requests.Session:
 
 def _http_get_json(url: str, timeout: int = 20) -> dict:
     """
-    Perform an HTTP GET request with the shared session and decode JSON.
+    Effectue une requête HTTP GET avec la session partagée et décode le JSON.
 
-    Parameters
+    Paramètres
     ----------
     url : str
-        Absolute URL to query.
-    timeout : int, default 20
-        Request timeout in seconds.
+        URL absolue à interroger.
+    timeout : int, défaut 20
+        Timeout de la requête en secondes.
 
-    Returns
-    -------
-    dict
-        Parsed JSON payload.
-
-    Raises
+    Retour
     ------
+    dict
+        Payload JSON parsé.
+
+    Lève
+    ----
     requests.HTTPError
-        If the response status code is not successful.
+        Si le code de statut HTTP n’est pas un succès.
     """
     r = _session_get().get(url, timeout=timeout)
     r.raise_for_status()
@@ -158,23 +164,24 @@ def _http_get_json(url: str, timeout: int = 20) -> dict:
 
 def fetch_velib_df() -> pd.DataFrame:
     """
-    Fetch Velib station status and information, merge them, and normalize fields.
+    Récupère le statut et les informations des stations Vélib, fusionne et normalise.
 
-    This function:
-    - Calls the official Velib GBFS `station_status.json` and `station_information.json`.
-    - Builds one row per station.
-    - Forces `ts_utc` to the ingestion job time (now UTC, naive).
-    - Adds a 5-minute time bin (`tbin_utc`) aligned on the job time.
-    - Optionally keeps the source timestamp `last_reported` as an in-memory
-      `src_ts_utc` column (not persisted to parquet).
+    Cette fonction :
+    - appelle les endpoints GBFS officiels `station_status.json` et
+      `station_information.json` ;
+    - construit une ligne par station ;
+    - force `ts_utc` au timestamp d’exécution du job d’ingestion (now UTC naïf) ;
+    - ajoute un bin de 5 minutes (`tbin_utc`) aligné sur l’heure du job ;
+    - conserve optionnellement le timestamp source `last_reported` dans la
+      colonne en mémoire `src_ts_utc` (non persistée dans le Parquet).
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        DataFrame with (at least) the columns listed in COLS_ORDER plus an
-        in-memory `src_ts_utc` used later for freshness computation.
-        If payloads are empty, returns an empty DataFrame with COLS_ORDER
-        as columns.
+        DataFrame contenant (au minimum) les colonnes de COLS_ORDER ainsi
+        qu’une colonne en mémoire `src_ts_utc` utilisée ensuite pour la
+        fraîcheur. Si les payloads sont vides, renvoie un DataFrame vide
+        avec COLS_ORDER comme colonnes.
     """
     js_status = _http_get_json(URL_STATUS)
     js_info   = _http_get_json(URL_INFO)
@@ -185,7 +192,7 @@ def fetch_velib_df() -> pd.DataFrame:
         print("[ingest][gbfs] empty payloads — status:", len(status_list), "info:", len(info_list))
         return pd.DataFrame(columns=COLS_ORDER)
 
-    # "Job time" in UTC (naive), used as ts_utc and for the 5-minute bin.
+    # "Heure du job" en UTC (naïf), utilisée comme ts_utc et pour le bin 5 minutes.
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     tbin_now = pd.Timestamp(now_utc).floor("5min").to_pydatetime()
 
@@ -196,7 +203,7 @@ def fetch_velib_df() -> pd.DataFrame:
         if not sid:
             continue
 
-        # Extract mechanical / ebike counts when exposed by the provider.
+        # Extraction des vélos mécaniques / électriques quand exposée par le provider.
         types = {}
         v = s.get("num_bikes_available_types")
         if isinstance(v, list) and v:
@@ -206,7 +213,7 @@ def fetch_velib_df() -> pd.DataFrame:
         elif isinstance(v, dict):
             types = v
 
-        # Source timestamp from GBFS (last_reported), used only for freshness.
+        # Timestamp source depuis GBFS (last_reported), utilisé uniquement pour la fraîcheur.
         last_reported = s.get("last_reported")
         try:
             src_ts = datetime.utcfromtimestamp(int(last_reported)) if last_reported else now_utc
@@ -215,14 +222,14 @@ def fetch_velib_df() -> pd.DataFrame:
 
         st_rows.append({
             "station_id": sid,
-            "ts_utc": now_utc,  # ingestion job timestamp
+            "ts_utc": now_utc,  # timestamp du job d’ingestion
             "bikes": s.get("num_bikes_available"),
             "mechanical": types.get("mechanical", 0),
             "ebike": types.get("ebike", 0),
             "status": s.get("station_status") or (
                 "OK" if (s.get("is_renting",1) and s.get("is_returning",1)) else "CLOSED"
             ),
-            # Source timestamp used only in memory for freshness; not written to parquet.
+            # Timestamp source utilisé uniquement en mémoire pour la fraîcheur ; non écrit dans le parquet.
             "src_ts_utc": src_ts,
         })
 
@@ -243,12 +250,12 @@ def fetch_velib_df() -> pd.DataFrame:
         })
     df_in = pd.DataFrame(in_rows)
 
-    # Merge status + info on station_id
+    # Fusion statut + info sur station_id
     df = df_st.merge(df_in, on="station_id", how="inner")
     df["ts_utc"]   = pd.to_datetime(df["ts_utc"], utc=True, errors="coerce").dt.tz_localize(None)
     df["tbin_utc"] = pd.to_datetime(tbin_now)
 
-    # Normalize numeric fields.
+    # Normalisation des champs numériques
     for c in ("bikes","mechanical","ebike","capacity","lat","lon"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
@@ -257,26 +264,26 @@ def fetch_velib_df() -> pd.DataFrame:
         print(df[["station_id","ts_utc","tbin_utc","bikes","capacity"]].head(5).to_string(index=False))
     return df
 
-# ───────────────────────── Weather ─────────────────────────
+# ───────────────────────── Météo ─────────────────────────
 
 
 def _weather_window(df_velib: pd.DataFrame) -> Tuple[datetime, datetime]:
     """
-    Build a ±3h UTC time window around the current bin.
+    Construit une fenêtre temporelle ±3h en UTC autour du bin courant.
 
-    The window is derived from the min/max of `tbin_utc` in `df_velib`,
-    floored to the nearest hour. If the timestamps cannot be parsed,
-    fall back to a ±3h window around "now UTC".
+    La fenêtre est dérivée du min/max de `tbin_utc` dans `df_velib`,
+    arrondis à l’heure inférieure. Si les timestamps ne peuvent pas être
+    parsés, on retombe sur une fenêtre ±3h autour de "now UTC".
 
-    Parameters
+    Paramètres
     ----------
     df_velib : pandas.DataFrame
-        Velib DataFrame as returned by `fetch_velib_df`.
+        DataFrame Vélib tel que retourné par `fetch_velib_df`.
 
-    Returns
-    -------
+    Retour
+    ------
     (datetime, datetime)
-        Lower and upper bounds of the time window in UTC (naive datetimes).
+        Bornes inférieure et supérieure de la fenêtre en UTC (datetimes naïfs).
     """
     hours = pd.to_datetime(df_velib["tbin_utc"], errors="coerce").dt.floor("h")
     lo, hi = hours.min(), hours.max()
@@ -288,25 +295,25 @@ def _weather_window(df_velib: pd.DataFrame) -> Tuple[datetime, datetime]:
 
 def fetch_weather_df(df_velib: pd.DataFrame) -> pd.DataFrame:
     """
-    Fetch hourly weather around the Velib time window from Open-Meteo.
+    Récupère la météo horaire autour de la fenêtre Vélib auprès d’Open-Meteo.
 
-    The function:
-    - Derives a ±3h window around the Velib `tbin_utc` values.
-    - Queries the Open-Meteo API for the last 2 days and next 2 days in UTC.
-    - Filters the hourly series to keep only the hours within the window.
-    - Returns temperature, precipitation and wind speed at 10m.
+    La fonction :
+    - dérive une fenêtre ±3h autour des valeurs `tbin_utc` de Vélib ;
+    - interroge l’API Open-Meteo pour les 2 jours passés et 2 jours futurs en UTC ;
+    - filtre la série horaire pour ne garder que les heures dans la fenêtre ;
+    - renvoie température, précipitations et vitesse du vent à 10 m.
 
-    Parameters
+    Paramètres
     ----------
     df_velib : pandas.DataFrame
-        Velib snapshot DataFrame used to compute the time window.
+        Snapshot Vélib utilisé pour calculer la fenêtre temporelle.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        DataFrame with columns ["hour_utc", "temp_C", "precip_mm", "wind_mps"].
-        If METEO_DISABLE=1 or any error occurs, returns an empty DataFrame with
-        these columns.
+        DataFrame avec colonnes ["hour_utc", "temp_C", "precip_mm", "wind_mps"].
+        Si METEO_DISABLE=1 ou en cas d’erreur, renvoie un DataFrame vide avec
+        ces colonnes.
     """
     if METEO_DISABLE:
         print("[ingest][weather] disabled by METEO_DISABLE=1")
@@ -339,27 +346,27 @@ def fetch_weather_df(df_velib: pd.DataFrame) -> pd.DataFrame:
         print(f"[ingest][weather] error: {e}")
         return pd.DataFrame(columns=["hour_utc","temp_C","precip_mm","wind_mps"])
 
-# ─────────────────────── GCS helpers ───────────────────────
+# ─────────────────────── Helpers GCS ───────────────────────
 
 
 def _split_gcs(gcs_url: str) -> tuple[str,str]:
     """
-    Split a GCS URL into bucket and object key.
+    Découper une URL GCS en bucket et object key.
 
-    Parameters
+    Paramètres
     ----------
     gcs_url : str
-        URL starting with "gs://".
+        URL commençant par "gs://".
 
-    Returns
-    -------
+    Retour
+    ------
     (str, str)
         Tuple (bucket_name, object_key).
 
-    Raises
-    ------
+    Lève
+    ----
     AssertionError
-        If the URL does not start with "gs://".
+        Si l’URL ne commence pas par "gs://".
     """
     assert gcs_url.startswith("gs://")
     b, p = gcs_url[5:].split("/", 1)
@@ -368,19 +375,19 @@ def _split_gcs(gcs_url: str) -> tuple[str,str]:
 
 def _upload_parquet_gcs(df: pd.DataFrame, gcs_url: str):
     """
-    Upload a DataFrame as parquet to a GCS location.
+    Uploader un DataFrame au format parquet vers une localisation GCS.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        DataFrame to serialize.
+        DataFrame à sérialiser.
     gcs_url : str
-        Destination GCS URL (gs://bucket/path/to/file.parquet).
+        URL GCS de destination (gs://bucket/path/to/file.parquet).
 
-    Raises
-    ------
+    Lève
+    ----
     RuntimeError
-        If `google-cloud-storage` is not installed.
+        Si `google-cloud-storage` n’est pas installé.
     """
     if storage is None:
         raise RuntimeError("google-cloud-storage not installed")
@@ -393,19 +400,19 @@ def _upload_parquet_gcs(df: pd.DataFrame, gcs_url: str):
 
 def _upload_json_gcs(payload: dict, gcs_url: str):
     """
-    Upload a JSON-serializable payload as a JSON file to GCS.
+    Uploader un payload JSON-sérialisable au format JSON sur GCS.
 
-    Parameters
+    Paramètres
     ----------
     payload : dict
-        Python dictionary to encode as JSON.
+        Dictionnaire Python à encoder en JSON.
     gcs_url : str
-        Destination GCS URL (gs://bucket/path/to/file.json).
+        URL GCS de destination (gs://bucket/path/to/file.json).
 
-    Raises
-    ------
+    Lève
+    ----
     RuntimeError
-        If `google-cloud-storage` is not installed.
+        Si `google-cloud-storage` n’est pas installé.
     """
     if storage is None:
         raise RuntimeError("google-cloud-storage not installed")
@@ -416,14 +423,14 @@ def _upload_json_gcs(payload: dict, gcs_url: str):
 
 def _write_json_local(payload: dict, path: str):
     """
-    Write a JSON payload to a local path, creating parent directories if needed.
+    Écrire un payload JSON en local, en créant les dossiers parents si besoin.
 
-    Parameters
+    Paramètres
     ----------
     payload : dict
-        Python dictionary to encode as JSON.
+        Dictionnaire Python à encoder en JSON.
     path : str
-        Local file path where the JSON will be written.
+        Chemin de fichier local où écrire le JSON.
     """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -432,35 +439,37 @@ def _write_json_local(payload: dict, path: str):
 
 def _compute_freshness_payload(df_velib: pd.DataFrame, df_weather: pd.DataFrame) -> dict:
     """
-    Compute station and weather freshness metrics for monitoring.
+    Calculer des métriques de fraîcheur stations et météo pour le monitoring.
 
-    Station freshness
-    -----------------
-    - Base timestamp:
-        - If `src_ts_utc` exists (GBFS `last_reported`), use it.
-        - Otherwise, fall back to `ts_utc` (job timestamp).
-    - Freshness values (in minutes) are computed as:
+    Fraîcheur des stations
+    ----------------------
+    - Timestamp de base :
+        - si `src_ts_utc` existe (GBFS `last_reported`), on l’utilise ;
+        - sinon, on retombe sur `ts_utc` (timestamp du job).
+    - Les valeurs de fraîcheur (en minutes) sont calculées comme :
         `now_utc - base_timestamp`.
 
-    Weather freshness
-    -----------------
-    - If `df_weather` is non-empty:
-        - Take the max `hour_utc` and compute `now_utc - last_hour` in minutes.
+    Fraîcheur météo
+    ---------------
+    - Si `df_weather` n’est pas vide :
+        - on prend le max de `hour_utc` et on calcule `now_utc - last_hour`
+          en minutes.
 
-    The function also computes a small diagnostic payload with the top-k
-    "oldest" stations (largest freshness).
+    La fonction construit également un petit payload de diagnostic avec les
+    k stations les plus "anciennes" (freshness la plus élevée).
 
-    Parameters
+    Paramètres
     ----------
     df_velib : pandas.DataFrame
-        In-memory Velib DataFrame, including the optional `src_ts_utc` column.
+        DataFrame Vélib en mémoire, y compris la colonne optionnelle
+        `src_ts_utc`.
     df_weather : pandas.DataFrame
-        Weather DataFrame returned by `fetch_weather_df`.
+        DataFrame météo retourné par `fetch_weather_df`.
 
-    Returns
-    -------
+    Retour
+    ------
     dict
-        JSON-ready payload with the following structure:
+        Payload JSON prêt à être sérialisé, de la forme :
 
         {
           "now_utc": <ISO datetime>,
@@ -487,7 +496,7 @@ def _compute_freshness_payload(df_velib: pd.DataFrame, df_weather: pd.DataFrame)
     """
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    # 1) Station freshness.
+    # 1) Fraîcheur des stations
     if "src_ts_utc" in df_velib.columns:
         ts_base = pd.to_datetime(df_velib["src_ts_utc"], errors="coerce")
     else:
@@ -499,7 +508,7 @@ def _compute_freshness_payload(df_velib: pd.DataFrame, df_weather: pd.DataFrame)
     f95 = float(np.nanquantile(freshness_min_st, 0.95)) if len(freshness_min_st) else float("nan")
     fmax = float(np.nanmax(freshness_min_st)) if len(freshness_min_st) else float("nan")
 
-    # Top-k "oldest" stations (largest freshness) — optional but useful in diagnostics.
+    # Top-k stations les plus "anciennes" (freshness max) — utile en diagnostic.
     top_k = 50
     top_idx = np.argsort(freshness_min_st.values)[-top_k:] if len(freshness_min_st) else []
     top_payload = []
@@ -513,7 +522,7 @@ def _compute_freshness_payload(df_velib: pd.DataFrame, df_weather: pd.DataFrame)
                     top_payload.append({"station_id": sid, "freshness_min": round(float(val), 2)})
         top_payload.sort(key=lambda d: d["freshness_min"], reverse=True)
 
-    # 2) Weather freshness (if any).
+    # 2) Fraîcheur météo (si dispo)
     weather_fresh_min = None
     if not df_weather.empty and "hour_utc" in df_weather.columns:
         last_hour = pd.to_datetime(df_weather["hour_utc"], errors="coerce").max()
@@ -531,11 +540,11 @@ def _compute_freshness_payload(df_velib: pd.DataFrame, df_weather: pd.DataFrame)
                 "p95_min": None if math.isnan(f95) else round(f95, 2),
                 "max_min": None if math.isnan(fmax) else round(fmax, 2),
             },
-            # Top 50 "oldest" stations, useful for internal monitoring/debug.
+            # Top 50 stations les plus anciennes, utile pour le monitoring/debug interne.
             "top_oldest": top_payload,
         },
         "weather": {
-            # Can be None if weather is disabled or unavailable.
+            # Peut rester None si la météo est désactivée ou indisponible.
             "freshness_min": weather_fresh_min,
         },
         "meta": {
@@ -545,38 +554,38 @@ def _compute_freshness_payload(df_velib: pd.DataFrame, df_weather: pd.DataFrame)
     }
     return payload
 
-# ───────────────────────── Main ingest ─────────────────────────
+# ───────────────────────── Ingest principal ─────────────────────────
 
 
 def ingest_once(save: bool = True) -> tuple[int, str | None]:
     """
-    Run a single 5-minute ingestion cycle.
+    Exécute un cycle d’ingestion unique (5 minutes).
 
-    Steps
-    -----
-    1. Fetch Velib status+info and build the station snapshot.
-    2. Optionally fetch weather and merge on the hour.
-    3. Reorder columns according to COLS_ORDER.
-    4. Compute the UTC date/hour and parquet filename from `tbin_utc`.
-    5. Optionally write the snapshot to local parquet (controlled by `save` or
-       `INGEST_SAVE_PARQUET`).
-    6. Optionally upload the snapshot to GCS when `INGEST_TO_GCS=1`.
-    7. Compute freshness metrics and write them locally and on GCS (if configured).
+    Étapes
+    ------
+    1. Récupérer statut+info Vélib et construire le snapshot stations.
+    2. Récupérer optionnellement la météo et fusionner sur l’heure.
+    3. Réordonner les colonnes selon COLS_ORDER.
+    4. Déduire la date/heure UTC et le nom du fichier Parquet à partir de `tbin_utc`.
+    5. Écrire optionnellement le snapshot en Parquet local (contrôlé par `save`
+       ou `INGEST_SAVE_PARQUET`).
+    6. Uploader optionnellement le snapshot sur GCS quand `INGEST_TO_GCS=1`.
+    7. Calculer les métriques de fraîcheur et les écrire en local et sur GCS
+       (si configuré).
 
-    Parameters
+    Paramètres
     ----------
-    save : bool, default True
-        If True, write the parquet snapshot locally, regardless of the
-        `INGEST_SAVE_PARQUET` environment variable. If False, rely solely on
-        the environment variable.
+    save : bool, défaut True
+        Si True, force l’écriture en Parquet local, indépendamment de la
+        variable d’environnement `INGEST_SAVE_PARQUET`. Si False, on se
+        repose uniquement sur la variable d’environnement.
 
-    Returns
-    -------
-    (int, str or None)
-        Tuple `(n_rows, gcs_url)` where:
-        - `n_rows` is the number of rows in the output snapshot.
-        - `gcs_url` is the GCS URL of the parquet file if uploaded, otherwise
-          None.
+    Retour
+    ------
+    (int, str ou None)
+        Tuple `(n_rows, gcs_url)` où :
+        - `n_rows` est le nombre de lignes du snapshot ;
+        - `gcs_url` est l’URL GCS du fichier Parquet si uploadé, sinon None.
     """
     df_v = fetch_velib_df()
     if df_v.empty:
@@ -619,10 +628,10 @@ def ingest_once(save: bool = True) -> tuple[int, str | None]:
         print(f"[ingest][snapshot] uploaded {len(df_out):,} rows → {gcs_url}")
         wrote_gcs = gcs_url
 
-    # ───────────── Freshness JSON (monitoring/data/freshness) ─────────────
+    # ───────────── JSON de fraîcheur (monitoring/data/freshness) ─────────────
     freshness = _compute_freshness_payload(df, df_w)
 
-    # Local "latest" and timestamped copies.
+    # Copies locales "latest" et datées.
     local_monitor_root = os.environ.get("LOCAL_MONITOR_DIR", "data_local/monitoring")
     isots = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     local_latest = os.path.join(local_monitor_root, "data/freshness/latest.json")
@@ -631,7 +640,7 @@ def ingest_once(save: bool = True) -> tuple[int, str | None]:
     _write_json_local(freshness, local_dated)
     print(f"[ingest][freshness] wrote {local_latest} & {local_dated}")
 
-    # Optional GCS uploads when monitoring prefix is configured.
+    # Uploads GCS optionnels quand un préfixe de monitoring est configuré.
     gcs_mon = os.environ.get("GCS_MONITORING_PREFIX", "").rstrip("/")
     if gcs_mon.startswith("gs://"):
         g_latest = f"{gcs_mon}/monitoring/data/freshness/latest.json"
@@ -645,12 +654,12 @@ def ingest_once(save: bool = True) -> tuple[int, str | None]:
 
 def main() -> int:
     """
-    CLI entrypoint for the ingestion job.
+    Point d’entrée CLI pour le job d’ingestion.
 
-    Returns
-    -------
+    Retour
+    ------
     int
-        Process exit code (0 on success).
+        Code de sortie du process (0 en cas de succès).
     """
     print("[ingest] start")
     n, out = ingest_once(save=os.environ.get("INGEST_SAVE_PARQUET","1") == "1")

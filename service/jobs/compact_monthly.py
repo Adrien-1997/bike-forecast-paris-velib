@@ -1,32 +1,34 @@
 # service/jobs/compact_monthly.py
 
 """
-Monthly compaction job for the Velib Forecast pipeline.
+Job de compaction mensuelle pour le pipeline Vélib’ Forecast.
 
-This job:
-- Compacts all daily Parquet shards of a given UTC month into a single
-  monthly Parquet file with a strict schema.
-- Optionally deletes the daily shards once the month is considered *closed*
-  (i.e. month < current UTC month).
+Rôle
+----
+Ce job :
+- compacte tous les shards Parquet quotidiens d’un mois UTC donné en un
+  unique fichier Parquet mensuel avec un schéma strict ;
+- supprime optionnellement les fichiers quotidiens une fois que le mois est
+  considéré comme *fermé* (c.-à-d. month < mois UTC courant).
 
-Strict schema
+Schéma strict
 -------------
 ts_utc, tbin_utc, station_id, bikes, capacity, mechanical, ebike, status,
 lat, lon, name, temp_C, precip_mm, wind_mps
 
-Required environment variables
-------------------------------
+Variables d’environnement requises
+----------------------------------
 GCS_DAILY_PREFIX   = gs://<bucket>/<root>/daily
 GCS_MONTHLY_PREFIX = gs://<bucket>/<root>/monthly
-MONTH              = YYYY-MM  (suggested UTC month)
+MONTH              = YYYY-MM  (mois UTC cible)
 
 Options
 -------
 DRY_RUN = "1"
-    When "1", the job does not write or delete anything and only logs what
-    would be done.
+    Quand "1", le job ne lit que les fichiers, log ce qu’il ferait,
+    mais n’écrit ni ne supprime rien.
 
-Execution
+Exécution
 ---------
 python -m jobs.compact_monthly
 """
@@ -57,21 +59,21 @@ COLS = [
     "status","lat","lon","name","temp_C","precip_mm","wind_mps"
 ]
 
-# ──────────────────────────── GCS Helpers ────────────────────────────
+# ──────────────────────────── Helpers GCS ────────────────────────────
 
 def _split(gcs_url: str) -> Tuple[str, str]:
     """
-    Split a GCS URL of the form 'gs://bucket/path' into (bucket, key).
+    Découper une URL GCS de la forme 'gs://bucket/path' en (bucket, key).
 
-    Parameters
+    Paramètres
     ----------
     gcs_url : str
-        GCS URL starting with 'gs://'.
+        URL GCS commençant par 'gs://'.
 
-    Returns
-    -------
+    Retour
+    ------
     (str, str)
-        Tuple (bucket_name, object_key) with the key stripped of trailing '/'.
+        Tuple (bucket_name, object_key) où la clé ne se termine pas par '/'.
     """
     assert gcs_url.startswith("gs://")
     b, p = gcs_url[5:].split("/", 1)
@@ -80,21 +82,22 @@ def _split(gcs_url: str) -> Tuple[str, str]:
 
 def _daily_key_to_date(key: str) -> datetime | None:
     """
-    Parse a daily Parquet object key and extract its UTC date.
+    Extraire la date UTC à partir de la clé d’un Parquet quotidien.
 
-    Accepted naming patterns:
+    Modèles de nommage acceptés :
     - compact_YYYY-MM-DD.parquet
     - velib_YYYYMMDD.parquet
 
-    Parameters
+    Paramètres
     ----------
     key : str
-        Full object key in the bucket.
+        Clé complète de l’objet dans le bucket.
 
-    Returns
-    -------
-    datetime or None
-        Parsed UTC date if the key matches a known pattern, otherwise None.
+    Retour
+    ------
+    datetime ou None
+        Date UTC parsée si la clé correspond à un modèle connu,
+        sinon None.
     """
     fn = key.rsplit("/", 1)[-1]
     m1 = re.match(r"^compact_(\d{4})-(\d{2})-(\d{2})\.parquet$", fn)
@@ -110,19 +113,19 @@ def _daily_key_to_date(key: str) -> datetime | None:
 
 def _list_month_dailies(daily_prefix: str, month: str) -> List[Tuple[str, str]]:
     """
-    List all daily Parquet files for a given UTC month.
+    Lister tous les fichiers Parquet quotidiens pour un mois UTC donné.
 
-    Parameters
+    Paramètres
     ----------
     daily_prefix : str
-        GCS prefix for the daily layer (GCS_DAILY_PREFIX).
+        Préfixe GCS pour la couche quotidienne (GCS_DAILY_PREFIX).
     month : str
-        Target month in 'YYYY-MM' format (UTC).
+        Mois ciblé au format 'YYYY-MM' (UTC).
 
-    Returns
-    -------
-    list of (str, str)
-        List of (bucket, key) tuples for all matching daily files.
+    Retour
+    ------
+    list[(str, str)]
+        Liste de tuples (bucket, key) pour les fichiers quotidiens trouvés.
     """
     bkt, pfx = _split(daily_prefix)
     cli = storage.Client()
@@ -141,17 +144,17 @@ def _list_month_dailies(daily_prefix: str, month: str) -> List[Tuple[str, str]]:
 
 def _months_from_daily_keys(daily_files: List[Tuple[str, str]]) -> Set[str]:
     """
-    Infer the set of 'YYYY-MM' months from a list of daily file keys.
+    Inférer l’ensemble des mois 'YYYY-MM' à partir d’une liste de clés quotidiennes.
 
-    Parameters
+    Paramètres
     ----------
-    daily_files : list of (str, str)
-        List of (bucket, key) tuples for daily files.
+    daily_files : list[(str, str)]
+        Liste de tuples (bucket, key) pour les fichiers quotidiens.
 
-    Returns
-    -------
-    set of str
-        Unique months (YYYY-MM) derived from the filenames.
+    Retour
+    ------
+    set[str]
+        Ensemble des mois uniques (YYYY-MM) dérivés des noms de fichiers.
     """
     months: Set[str] = set()
     for _, key in daily_files:
@@ -163,19 +166,19 @@ def _months_from_daily_keys(daily_files: List[Tuple[str, str]]) -> Set[str]:
 
 def _download_parquet_to_df(bkt: str, key: str) -> pd.DataFrame:
     """
-    Download a parquet file from GCS and load it as a pandas DataFrame.
+    Télécharger un fichier Parquet depuis GCS et le charger en DataFrame pandas.
 
-    Parameters
+    Paramètres
     ----------
     bkt : str
-        Bucket name.
+        Nom du bucket.
     key : str
-        Object key.
+        Clé de l’objet.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        DataFrame with the parquet content.
+        DataFrame contenant le contenu parquet.
     """
     buf = BytesIO()
     storage.Client().bucket(bkt).blob(key).download_to_file(buf)
@@ -186,14 +189,14 @@ def _download_parquet_to_df(bkt: str, key: str) -> pd.DataFrame:
 
 def _upload_parquet_df(df: pd.DataFrame, gcs_url: str):
     """
-    Upload a pandas DataFrame as a parquet file to a GCS location.
+    Uploader un DataFrame pandas en Parquet vers une URL GCS.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Data to upload.
+        Données à uploader.
     gcs_url : str
-        Destination GCS URL (gs://bucket/path/to/file.parquet).
+        URL GCS de destination (gs://bucket/path/to/file.parquet).
     """
     bkt, key = _split(gcs_url)
     buf = BytesIO()
@@ -208,14 +211,14 @@ def _upload_parquet_df(df: pd.DataFrame, gcs_url: str):
 
 def _copy_blob(src_url: str, dst_url: str):
     """
-    Copy a blob from one GCS location to another.
+    Copier un blob d’une localisation GCS à une autre.
 
-    Parameters
+    Paramètres
     ----------
     src_url : str
-        Source GCS URL.
+        URL GCS source.
     dst_url : str
-        Destination GCS URL.
+        URL GCS de destination.
     """
     src_bkt, src_key = _split(src_url)
     dst_bkt, dst_key = _split(dst_url)
@@ -228,12 +231,12 @@ def _copy_blob(src_url: str, dst_url: str):
 
 def _delete_blob(url: str):
     """
-    Delete a blob at the given GCS URL.
+    Supprimer un blob à l’URL GCS donnée.
 
-    Parameters
+    Paramètres
     ----------
     url : str
-        GCS URL of the blob to delete.
+        URL GCS du blob à supprimer.
     """
     bkt, key = _split(url)
     cli = storage.Client()
@@ -242,12 +245,12 @@ def _delete_blob(url: str):
 
 def _delete_keys(keys: List[Tuple[str, str]]):
     """
-    Delete multiple blobs in batch.
+    Supprimer plusieurs blobs en batch.
 
-    Parameters
+    Paramètres
     ----------
-    keys : list of (str, str)
-        List of (bucket, key) tuples to delete.
+    keys : list[(str, str)]
+        Liste de tuples (bucket, key) à supprimer.
     """
     if not keys:
         return
@@ -260,20 +263,20 @@ def _delete_keys(keys: List[Tuple[str, str]]):
 
 def _ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Enforce the strict monthly schema and coerce dtypes.
+    Appliquer le schéma mensuel strict et forcer les dtypes attendus.
 
-    Missing columns are created and filled with None/NaN so that the resulting
-    DataFrame has exactly COLS in the correct order.
+    Les colonnes manquantes sont créées et remplies avec None/NaN, de sorte que
+    le DataFrame résultant contienne exactement COLS dans le bon ordre.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Raw concatenated daily data.
+        Données quotidiennes concaténées (niveau daily).
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        DataFrame with normalized columns and dtypes.
+        DataFrame avec colonnes et dtypes normalisés.
     """
     for c in COLS:
         if c not in df.columns:
@@ -301,21 +304,22 @@ def _ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
 
 def _filter_month_utc(df: pd.DataFrame, month: str) -> pd.DataFrame:
     """
-    Keep only rows whose tbin_utc falls within the given UTC month.
+    Ne conserver que les lignes dont tbin_utc tombe dans le mois UTC donné.
 
-    If tbin_utc is missing or contains NaNs, it is rebuilt from ts_utc.floor('5min').
+    Si tbin_utc est manquant ou contient des NaN, il est reconstruit
+    à partir de ts_utc.floor('5min').
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Input DataFrame (typically already schema-normalized).
+        DataFrame d’entrée (généralement déjà normalisé).
     month : str
-        UTC month in 'YYYY-MM' format.
+        Mois UTC au format 'YYYY-MM'.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        Filtered view for the requested month.
+        Vue filtrée pour le mois demandé.
     """
     start = pd.Timestamp(f"{month}-01 00:00:00")
     end_month = (start + pd.Timedelta(days=32)).replace(day=1)
@@ -331,20 +335,20 @@ def _filter_month_utc(df: pd.DataFrame, month: str) -> pd.DataFrame:
 
 def _deduplicate_latest(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Keep only the latest snapshot per (station_id, tbin_utc) pair.
+    Ne garder que le dernier snapshot par couple (station_id, tbin_utc).
 
-    Sorting order is by station_id, then tbin_utc, then ts_utc,
-    and the last row in each group is retained.
+    L’ordre de tri est : station_id, puis tbin_utc, puis ts_utc.
+    La dernière ligne dans chaque groupe est conservée.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Data containing potential duplicates.
+        Données pouvant contenir des doublons.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        Deduplicated DataFrame with one row per (station_id, tbin_utc).
+        DataFrame dédupliqué avec une ligne par (station_id, tbin_utc).
     """
     df = df.sort_values(["station_id","tbin_utc","ts_utc"])
     df = df.groupby(["station_id","tbin_utc"], as_index=False).tail(1)
@@ -353,20 +357,21 @@ def _deduplicate_latest(df: pd.DataFrame) -> pd.DataFrame:
 
 def _is_closed_month(month: str) -> bool:
     """
-    Check whether a given UTC month is strictly before the current UTC month.
+    Vérifier si un mois UTC est strictement antérieur au mois UTC courant.
 
-    Example:
+    Exemple
+    -------
     - '2025-09' < '2025-10' → True
 
-    Parameters
+    Paramètres
     ----------
     month : str
-        Month in 'YYYY-MM' format.
+        Mois au format 'YYYY-MM'.
 
-    Returns
-    -------
+    Retour
+    ------
     bool
-        True if the month is closed (strictly < current UTC month).
+        True si le mois est fermé (strictement < mois UTC courant), False sinon.
     """
     now = datetime.now(timezone.utc)
     current = (now.year, now.month)
@@ -377,15 +382,15 @@ def _is_closed_month(month: str) -> bool:
 
 def main():
     """
-    CLI entrypoint for the monthly compaction job.
+    Point d’entrée CLI pour le job de compaction mensuelle.
 
-    Steps
-    -----
-    1. List all daily Parquet shards for MONTH under GCS_DAILY_PREFIX.
-    2. Normalize schema and filter rows to the target month.
-    3. Deduplicate snapshots per (station_id, tbin_utc).
-    4. Write a single compact monthly Parquet file under GCS_MONTHLY_PREFIX.
-    5. If the month is closed and DRY_RUN != "1", delete all daily shards.
+    Étapes
+    ------
+    1. Lister tous les shards Parquet quotidiens pour MONTH sous GCS_DAILY_PREFIX.
+    2. Normaliser le schéma et filtrer les lignes sur le mois ciblé.
+    3. Dédupliquer les snapshots par (station_id, tbin_utc).
+    4. Écrire un unique Parquet mensuel compact sous GCS_MONTHLY_PREFIX.
+    5. Si le mois est fermé et que DRY_RUN != "1", supprimer les dailies.
     """
     DAILY_PREFIX   = os.environ.get("GCS_DAILY_PREFIX")
     MONTHLY_PREFIX = os.environ.get("GCS_MONTHLY_PREFIX")
@@ -402,7 +407,7 @@ def main():
 
     print(f"[monthly] start MONTH={MONTH} daily={DAILY_PREFIX} out={MONTHLY_PREFIX} dry_run={int(DRY_RUN)}")
 
-    # 1) Lister les dailies selon MONTH demandé
+    # 1) Lister les dailies selon le MONTH demandé
     daily_files = _list_month_dailies(DAILY_PREFIX, MONTH)
     if not daily_files:
         print(f"[monthly] aucun daily pour {MONTH} — rien à faire")

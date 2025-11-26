@@ -1,17 +1,17 @@
 # service/jobs/train_model.py
 
 # =============================================================================
-# Cloud Run training entrypoint (harmonised)
+# Entrypoint d'entraînement (Cloud Run) harmonisé.
 #
-# Responsibilities:
-# - Download and concatenate daily shards from GCS (or directly download a
-#   single Parquet file used as training base).
-# - Automatically locate the training module (core/train/tools/flat layouts).
-# - Resolve model versioning:
-#       read latest.json → compute next version → export as ENV
-# - Call the training function (XGBoost-only on the forecast side).
-# - Upload the trained model .joblib artifact to GCS as a fallback when the
-#   trainer did not self-publish it.
+# Rôle principal :
+# - Télécharger et concaténer des shards quotidiens depuis GCS (ou récupérer
+#   directement un unique Parquet utilisé comme base d’entraînement).
+# - Localiser automatiquement le module de training (layouts core/train/tools/flat).
+# - Gérer le versionnement du modèle :
+#       lecture de latest.json → calcul de la prochaine version → export en ENV.
+# - Appeler la fonction d’entraînement (côté forecast : XGBoost uniquement).
+# - Uploader l’artefact .joblib entraîné sur GCS comme filet de sécurité
+#   lorsque le script d’entraînement ne publie pas lui-même le modèle.
 # =============================================================================
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from google.cloud import storage
 import importlib.util as _iu
 
 # ─────────────────────────────────────────────
-# GCS helpers
+# Helpers GCS
 # ─────────────────────────────────────────────
 
 RE_COMPACT = re.compile(r".*/compact_(\d{4}-\d{2}-\d{2})\.parquet$")
@@ -33,22 +33,22 @@ RE_COMPACT = re.compile(r".*/compact_(\d{4}-\d{2}-\d{2})\.parquet$")
 
 def _parse_gs(uri: str) -> Tuple[str, str]:
     """
-    Split a GCS URI (gs://bucket/path) into bucket name and object key.
+    Découper une URI GCS (gs://bucket/path) en nom de bucket et object key.
 
-    Parameters
+    Paramètres
     ----------
     uri : str
-        GCS URI starting with "gs://".
+        URI GCS commençant par "gs://".
 
-    Returns
+    Retours
     -------
     (str, str)
-        Tuple (bucket, key) where key has no trailing slash.
+        Tuple (bucket, key) où key ne possède pas de slash final.
 
-    Raises
-    ------
+    Lève
+    ----
     AssertionError
-        If the URI does not start with "gs://".
+        Si l’URI ne commence pas par "gs://".
     """
     assert uri.startswith("gs://"), f"Bad GCS uri: {uri}"
     bkt, key = uri[5:].split("/", 1)
@@ -57,16 +57,16 @@ def _parse_gs(uri: str) -> Tuple[str, str]:
 
 def _download(cli: storage.Client, src_uri: str, dst_path: Path) -> None:
     """
-    Download a GCS object to a local file.
+    Télécharger un objet GCS vers un fichier local.
 
-    Parameters
+    Paramètres
     ----------
     cli : google.cloud.storage.Client
-        Storage client instance.
+        Instance du client Storage.
     src_uri : str
-        Source GCS URI (gs://bucket/path/to/file).
+        URI GCS source (gs://bucket/path/to/file).
     dst_path : pathlib.Path
-        Local destination path. Parent directories are created if needed.
+        Chemin local de destination. Les dossiers parents sont créés si besoin.
     """
     bkt, key = _parse_gs(src_uri)
     dst_path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,24 +75,24 @@ def _download(cli: storage.Client, src_uri: str, dst_path: Path) -> None:
 
 def _upload_to_gcs(local_path: Path, dst_uri: str) -> str:
     """
-    Upload a local file to a GCS object.
+    Uploader un fichier local vers un objet GCS.
 
-    Parameters
+    Paramètres
     ----------
     local_path : pathlib.Path
-        Local path of the file to upload.
+        Chemin local du fichier à uploader.
     dst_uri : str
-        Destination GCS URI (gs://bucket/path/to/file.joblib).
+        URI GCS de destination (gs://bucket/path/to/file.joblib).
 
-    Returns
+    Retours
     -------
     str
-        The GCS URI of the uploaded object.
+        URI GCS de l’objet uploadé.
 
-    Raises
-    ------
+    Lève
+    ----
     FileNotFoundError
-        If the local file does not exist.
+        Si le fichier local n’existe pas.
     """
     if not local_path.exists():
         raise FileNotFoundError(f"Local model not found: {local_path}")
@@ -103,33 +103,33 @@ def _upload_to_gcs(local_path: Path, dst_uri: str) -> str:
 
 def _list_daily(cli: storage.Client, gcs_prefix: str, lookback_days: int) -> List[str]:
     """
-    List daily compact shards (compact_YYYY-MM-DD.parquet) to concatenate.
+    Lister les shards quotidiens compactés (compact_YYYY-MM-DD.parquet) à concaténer.
 
-    The function:
-    - Lists blobs under the given GCS prefix.
-    - Keeps only those matching RE_COMPACT (compact_YYYY-MM-DD.parquet).
-    - Filters shards whose day is >= (today_utc - lookback_days).
-    - Sorts URIs by date encoded in the filename.
+    La fonction :
+    - liste les blobs sous le préfixe GCS donné ;
+    - garde uniquement ceux qui matchent RE_COMPACT (compact_YYYY-MM-DD.parquet) ;
+    - filtre les shards dont le jour est >= (today_utc - lookback_days) ;
+    - trie les URIs par date encodée dans le nom de fichier.
 
-    Parameters
+    Paramètres
     ----------
     cli : google.cloud.storage.Client
-        Storage client instance.
+        Instance du client Storage.
     gcs_prefix : str
-        GCS prefix where compact daily shards are stored, e.g.
-        "gs://bucket/velib/daily".
+        Préfixe GCS où sont stockés les shards daily compactés,
+        par ex. "gs://bucket/velib/daily".
     lookback_days : int
-        Number of days of history to include when training.
+        Nombre de jours d’historique à inclure pour l’entraînement.
 
-    Returns
+    Retours
     -------
     list of str
-        List of GCS URIs for the selected daily shards.
+        Liste d’URIs GCS pour les shards sélectionnés.
 
-    Raises
-    ------
+    Lève
+    ----
     RuntimeError
-        If no shard is found within the lookback window.
+        Si aucun shard n’est trouvé dans la fenêtre de lookback.
     """
     bkt, prefix = _parse_gs(gcs_prefix)
     now = datetime.now(timezone.utc).date()
@@ -144,7 +144,7 @@ def _list_daily(cli: storage.Client, gcs_prefix: str, lookback_days: int) -> Lis
         if day >= min_day:
             uris.append(f"gs://{bkt}/{blob.name}")
 
-    # sort by date in the filename
+    # Tri par date extraite dans le nom de fichier
     uris.sort(key=lambda u: RE_COMPACT.match(u).group(1) if RE_COMPACT.match(u) else u)
     if not uris:
         raise RuntimeError(f"Aucun shard daily trouvé sous {gcs_prefix} sur {lookback_days} jours.")
@@ -153,28 +153,28 @@ def _list_daily(cli: storage.Client, gcs_prefix: str, lookback_days: int) -> Lis
 
 def _concat_locally(cli: storage.Client, shard_uris: List[str], out_path: Path) -> Path:
     """
-    Download and concatenate daily shards into a single local Parquet file.
+    Télécharger et concaténer des shards quotidiens dans un unique Parquet local.
 
-    Steps
-    -----
-    - Download each shard under a temporary folder.
-    - Load each shard as a pandas DataFrame.
-    - Concatenate all shards row-wise.
-    - Write the result to `out_path`.
+    Étapes
+    ------
+    - Télécharger chaque shard dans un dossier temporaire.
+    - Charger chaque shard en DataFrame pandas.
+    - Concaténer tous les shards ligne à ligne.
+    - Écrire le résultat dans `out_path`.
 
-    Parameters
+    Paramètres
     ----------
     cli : google.cloud.storage.Client
-        Storage client instance.
+        Instance du client Storage.
     shard_uris : list of str
-        GCS URIs of daily compact shards to download and merge.
+        URIs GCS des shards daily compactés à télécharger et fusionner.
     out_path : pathlib.Path
-        Local Parquet file path for the concatenated dataset.
+        Chemin du fichier Parquet local pour le dataset concaténé.
 
-    Returns
+    Retours
     -------
     pathlib.Path
-        The `out_path` argument for convenience.
+        Le `out_path` fourni (pour chaînage).
     """
     tmp_dir = out_path.parent / "daily_shards"
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -193,27 +193,29 @@ def _concat_locally(cli: storage.Client, shard_uris: List[str], out_path: Path) 
     return out_path
 
 # ─────────────────────────────────────────────
-# Repo root resolution and sys.path patching
+# Résolution de la racine du dépôt & sys.path
 # ─────────────────────────────────────────────
 
 def _ensure_repo_on_path() -> Path:
     """
-    Ensure the repository root (containing 'service/' or 'train/') is on sys.path.
+    S’assurer que la racine du dépôt (contenant 'service/' ou 'train/')
+    est bien présente dans sys.path.
 
-    Search order
-    ------------
-    1. If the 'service' or 'train' modules can already be imported, return cwd.
-    2. If REPO_ROOT env var is defined and points to a folder that contains
-       'service/' or 'train/', insert it into sys.path and use it.
-    3. Walk up from the current file location's parents plus a few common roots
-       (/app, cwd) and pick the first directory containing 'service/' or
-       'train/'.
-    4. As a last resort, return cwd and emit a warning.
+    Ordre de recherche
+    ------------------
+    1. Si les modules 'service' ou 'train' sont déjà importables,
+       renvoyer le cwd.
+    2. Si la variable d’environnement REPO_ROOT est définie et pointe vers un
+       dossier contenant 'service/' ou 'train/', l’ajouter à sys.path et l’utiliser.
+    3. Remonter depuis le chemin du fichier courant, en testant ses parents
+       (ainsi que /app et cwd) et prendre le premier dossier contenant
+       'service/' ou 'train/'.
+    4. En dernier recours, renvoyer cwd et émettre un warning.
 
-    Returns
+    Retours
     -------
     pathlib.Path
-        The resolved repository root directory.
+        Dossier racine du dépôt tel que résolu.
     """
     if _iu.find_spec("service") is not None or _iu.find_spec("train") is not None:
         return Path.cwd()
@@ -243,26 +245,26 @@ def _ensure_repo_on_path() -> Path:
     return Path.cwd()
 
 # ─────────────────────────────────────────────
-# Versioning helpers (latest.json → bump)
+# Helpers de versionning (latest.json → bump)
 # ─────────────────────────────────────────────
 
 def _read_latest_version(cli: storage.Client, bucket: str, prefix: str) -> Optional[str]:
     """
-    Read gs://bucket/prefix/latest.json and return the 'version' field if present.
+    Lire gs://bucket/prefix/latest.json et renvoyer le champ 'version' si présent.
 
-    Parameters
+    Paramètres
     ----------
     cli : google.cloud.storage.Client
-        Storage client.
+        Client Storage.
     bucket : str
-        Bucket name.
+        Nom du bucket.
     prefix : str
-        Prefix under which latest.json lives.
+        Préfixe sous lequel latest.json est stocké.
 
-    Returns
+    Retours
     -------
-    str or None
-        The version string if found and non-empty, otherwise None.
+    str ou None
+        La chaîne de version si trouvée et non vide, sinon None.
     """
     try:
         blob = cli.bucket(bucket).blob(f"{prefix.rstrip('/')}/latest.json")
@@ -281,18 +283,18 @@ def _read_latest_version(cli: storage.Client, bucket: str, prefix: str) -> Optio
 
 def _parse_semver(s: Optional[str]) -> Tuple[int,int,int]:
     """
-    Parse 'MAJOR.MINOR[.PATCH]' into (major, minor, patch) integers.
+    Parser 'MAJOR.MINOR[.PATCH]' en (major, minor, patch) entiers.
 
-    Parameters
+    Paramètres
     ----------
-    s : str or None
-        Semantic version string, e.g. '2.3.1'. When None or invalid,
-        falls back to (2,0,0).
+    s : str ou None
+        Version sémantique, ex. '2.3.1'. Si None ou invalide,
+        retourne (2,0,0).
 
-    Returns
+    Retours
     -------
     (int, int, int)
-        Parsed (major, minor, patch).
+        Tuple (major, minor, patch).
     """
     if not s:
         return (2,0,0)
@@ -305,22 +307,22 @@ def _parse_semver(s: Optional[str]) -> Tuple[int,int,int]:
 
 def _bump_version(prev: Optional[str], mode: str = "minor") -> Tuple[str,str]:
     """
-    Compute the next version from a previous semantic version.
+    Calculer la version suivante à partir d’une version sémantique précédente.
 
-    Parameters
+    Paramètres
     ----------
-    prev : str or None
-        Previous version string (e.g., '2.0.0'). When None or invalid,
-        '2.0.0' is used as a base.
-    mode : {"major", "minor", "patch"}, default "minor"
-        Type of bump to apply.
+    prev : str ou None
+        Version précédente (ex. '2.0.0'). Si None ou invalide,
+        on utilise '2.0.0' comme base.
+    mode : {"major", "minor", "patch"}, défaut "minor"
+        Type de bump à appliquer.
 
-    Returns
+    Retours
     -------
     (str, str)
-        Tuple (base, next) where:
-        - base is the resolved current version (e.g. '2.0.0')
-        - next is the bumped version (e.g. '2.1.0')
+        Tuple (base, next) où :
+        - base est la version courante résolue (ex. '2.0.0') ;
+        - next est la version bumpée (ex. '2.1.0').
     """
     base_tuple = _parse_semver(prev)
     maj,minr,pat = base_tuple
@@ -337,23 +339,23 @@ def _bump_version(prev: Optional[str], mode: str = "minor") -> Tuple[str,str]:
 
 def _resolve_and_export_version(cli: storage.Client) -> None:
     """
-    Resolve current model version from latest.json and export version env vars.
+    Résoudre la version courante depuis latest.json et exporter les vars ENV.
 
-    Behavior
-    --------
-    - If MODEL_GCS_BUCKET and MODEL_GCS_PREFIX are set:
-        - Read latest.json under that prefix.
-        - Parse its 'version' field as the base version.
-        - Compute MODEL_NEXT_VERSION by bumping base according to VERSION_BUMP.
-    - Otherwise:
-        - Fallback to a default base '2.0.0' and bump from there.
+    Comportement
+    ------------
+    - Si MODEL_GCS_BUCKET et MODEL_GCS_PREFIX sont définis :
+        - lire latest.json sous ce préfixe ;
+        - parser son champ 'version' comme base ;
+        - calculer MODEL_NEXT_VERSION en bumpant la base selon VERSION_BUMP.
+    - Sinon :
+        - retomber sur une base par défaut '2.0.0' et la bumper.
 
-    Exported environment variables
-    ------------------------------
+    Variables d’environnement exportées
+    -----------------------------------
     MODEL_BASE_VERSION : str
-        Resolved current version (or '2.0.0' when none is found).
+        Version courante résolue (ou '2.0.0' si aucune trouvée).
     MODEL_NEXT_VERSION : str
-        Bumped version according to VERSION_BUMP (minor by default).
+        Version bumpée selon VERSION_BUMP (minor par défaut).
     """
     bucket = os.environ.get("MODEL_GCS_BUCKET")
     prefix = os.environ.get("MODEL_GCS_PREFIX")
@@ -371,34 +373,34 @@ def _resolve_and_export_version(cli: storage.Client) -> None:
     print(f"[version] base='{base_v}'  next='{next_v}'  (bump={bump})")
 
 # ─────────────────────────────────────────────
-# Dynamic import of the training callable
+# Import dynamique du callable de training
 # ─────────────────────────────────────────────
 
 def _find_training_callable(module_name: str) -> Callable[..., Any]:
     """
-    Discover a valid training entrypoint inside the given module.
+    Découvrir un point d’entrée d’entraînement valide dans un module donné.
 
-    Search order
-    ------------
-    1. Look for a callable function among:
+    Ordre de recherche
+    ------------------
+    1. Chercher une fonction callable parmi :
        ['train', 'train_model', 'train_forecast', 'fit', 'run', 'main'].
-    2. Fallback: look for a class with a .fit() method and create a wrapper
-       that instantiates the class and calls .fit(**kwargs).
+    2. Fallback : rechercher une classe avec une méthode .fit() et créer
+       un wrapper qui instancie la classe puis appelle .fit(**kwargs).
 
-    Parameters
+    Paramètres
     ----------
     module_name : str
-        Fully qualified Python module name (e.g. 'service.core.forecast').
+        Nom de module Python fully-qualified (ex. 'service.core.forecast').
 
-    Returns
+    Retours
     -------
     callable
-        A callable object that can be invoked with keyword arguments to train.
+        Objet appelable pouvant être invoqué avec des kwargs pour entraîner.
 
-    Raises
-    ------
+    Lève
+    ----
     ImportError
-        If no valid training function or class is found.
+        Si aucune fonction ou classe d’entraînement n’est trouvée.
     """
     mod = importlib.import_module(module_name)
     candidates = ["train", "train_model", "train_forecast", "fit", "run", "main"]
@@ -407,7 +409,7 @@ def _find_training_callable(module_name: str) -> Callable[..., Any]:
         if callable(fn):
             print(f"[train_job] using training entrypoint: {module_name}.{name}", flush=True)
             return fn
-    # fallback: class with .fit()
+    # fallback : classe avec .fit()
     for attr in dir(mod):
         obj = getattr(mod, attr)
         if isinstance(obj, type) and callable(getattr(obj, "fit", None)):
@@ -421,29 +423,28 @@ def _find_training_callable(module_name: str) -> Callable[..., Any]:
 
 def _adapt_kwargs_for_signature(fn: Callable[..., Any], base_kwargs: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Adapt base keyword arguments to match the target function signature.
+    Adapter les kwargs de base à la signature de la fonction cible.
 
-    This helper:
-    - Inspects the target callable's signature.
-    - Renames a few well-known parameters when needed, for example:
-        - horizon_minutes → horizon_bins / horizon_min / horizon / minutes_ahead /
-          target_horizon_min
+    Cette aide :
+    - inspecte la signature du callable cible ;
+    - renomme quelques paramètres "bien connus" si nécessaire, par ex. :
+        - horizon_minutes → horizon_bins / horizon_min / horizon /
+          minutes_ahead / target_horizon_min
         - lookback_days  → lookback / window_days / days
-    - Drops keys that are not supported by the callable unless it accepts
-      arbitrary **kwargs.
+    - supprime les clés non supportées si la fonction ne prend pas de **kwargs.
 
-    Parameters
+    Paramètres
     ----------
     fn : callable
-        Training callable whose signature will be inspected.
+        Callable d’entraînement dont on inspecte la signature.
     base_kwargs : dict
-        Base keyword arguments to adapt (e.g. src, horizon_bins, horizon_minutes,
+        Kwargs de base à adapter (ex. src, horizon_bins, horizon_minutes,
         lookback_days, out_path, ...).
 
-    Returns
+    Retours
     -------
     dict
-        Adapted kwargs dict, safe to use when calling `fn`.
+        Dictionnaire de kwargs adapté, safe pour l’appel de `fn`.
     """
     sig = inspect.signature(fn)
     params = sig.parameters
@@ -480,73 +481,75 @@ def _adapt_kwargs_for_signature(fn: Callable[..., Any], base_kwargs: Dict[str, A
 
 def main() -> int:
     """
-    Cloud Run job entrypoint for model training.
+    Entrypoint d’un job Cloud Run pour l’entraînement du modèle.
 
-    High-level flow
-    ---------------
-    1. Read configuration from environment variables:
-       - TRAIN_EXPORT_GCS : GCS URI of either:
-           - a single training parquet, or
-           - a daily prefix containing compact_YYYY-MM-DD.parquet shards.
-       - HORIZON_MIN      : forecast horizon in minutes (default: 15).
-       - LOOKBACK_DAYS    : number of days to look back when concatenating
-                            daily shards (default: 30).
-    2. Ensure MODEL_TYPE is set (defaults to 'xgb').
-    3. Compute HORIZON_BINS from HORIZON_MIN (5-minute bins).
-    4. Resolve model version (latest.json) and export MODEL_BASE_VERSION and
-       MODEL_NEXT_VERSION environment variables.
-    5. Depending on TRAIN_EXPORT_GCS:
-       - If it ends with '.parquet' → download directly to a local Parquet.
-       - Else → treat it as a prefix and list+concat daily shards.
-    6. Ensure the repository root is on sys.path and resolve the training
-       module (service.core.forecast preferred).
-    7. Find a valid training callable in the module and adapt kwargs to its
-       signature.
-    8. Run training and log returned metrics if any.
-    9. If the trainer did not self-publish (MODEL_GCS_BUCKET/PREFIX not set),
-       upload the resulting model.joblib to MODEL_GCS (or a default path).
+    Flow global
+    -----------
+    1. Lire la configuration depuis les variables d’environnement :
+       - TRAIN_EXPORT_GCS : URI GCS de :
+           - soit un Parquet unique de training,
+           - soit d’un préfixe daily contenant des compact_YYYY-MM-DD.parquet.
+       - HORIZON_MIN      : horizon de prévision en minutes (défaut : 15).
+       - LOOKBACK_DAYS    : nombre de jours d’historique à concaténer
+                            (défaut : 30).
+    2. S’assurer que MODEL_TYPE est défini (par défaut 'xgb').
+    3. Calculer HORIZON_BINS depuis HORIZON_MIN (bins de 5 minutes).
+    4. Résoudre la version du modèle (latest.json) et exporter
+       MODEL_BASE_VERSION et MODEL_NEXT_VERSION.
+    5. Selon TRAIN_EXPORT_GCS :
+       - si se termine par '.parquet' → téléchargement direct vers un Parquet local ;
+       - sinon → préfixe daily : listage + concaténation des shards.
+    6. S’assurer que la racine du repo est dans sys.path et résoudre
+       le module d’entraînement (service.core.forecast en priorité).
+    7. Trouver un callable d’entraînement valide dans le module
+       et adapter les kwargs à sa signature.
+    8. Lancer l’entraînement et logger d’éventuelles métriques retournées.
+    9. Si le script d’entraînement n’a pas autopublié le modèle
+       (MODEL_GCS_BUCKET/PREFIX non définis),
+       uploader l’artefact model.joblib vers MODEL_GCS (ou une valeur par défaut).
 
-    Environment variables
-    ---------------------
-    TRAIN_EXPORT_GCS : str (required)
-        GCS URI pointing either to a training parquet file or to a daily prefix.
-    HORIZON_MIN : str, default "15"
-        Forecast horizon in minutes.
-    LOOKBACK_DAYS : str, default "30"
-        Lookback window in days for daily shards.
-    MODEL_TYPE : str, default "xgb"
-        Model family used by the training script.
-    MODEL_GCS_BUCKET, MODEL_GCS_PREFIX : str (optional)
-        When both are set, the trainer is expected to self-publish the model
-        artifacts under this prefix; the job will then skip the manual upload.
-    MODEL_GCS : str, optional
-        Fallback GCS URI where to store the model artifact if self-publishing
-        is not configured. Defaults to an internal gs:// path.
+    Variables d’environnement
+    -------------------------
+    TRAIN_EXPORT_GCS : str (requis)
+        URI GCS pointant soit vers un Parquet de training, soit vers un préfixe daily.
+    HORIZON_MIN : str, défaut "15"
+        Horizon de prévision en minutes.
+    LOOKBACK_DAYS : str, défaut "30"
+        Fenêtre d’historique en jours pour les shards daily.
+    MODEL_TYPE : str, défaut "xgb"
+        Famille de modèle utilisée par le script d’entraînement.
+    MODEL_GCS_BUCKET, MODEL_GCS_PREFIX : str (optionnels)
+        Si tous deux sont définis, le trainer est censé autopublier le modèle
+        sous ce préfixe ; le job n’effectue alors pas d’upload manuel.
+    MODEL_GCS : str, optionnel
+        URI GCS fallback où stocker l’artefact modèle si l’autopublish
+        n’est pas configuré. Par défaut, un chemin interne gs:// est utilisé.
 
-    Returns
+    Retours
     -------
     int
-        Process exit code (0 on success).
+        Code de sortie du process (0 en cas de succès).
     """
     # Inputs
-    TRAIN_EXPORT_GCS = os.environ["TRAIN_EXPORT_GCS"]  # gs://.../training/*.parquet OR gs://.../daily (prefix)
+    TRAIN_EXPORT_GCS = os.environ["TRAIN_EXPORT_GCS"]  # gs://.../training/*.parquet OU gs://.../daily (préfixe)
     HORIZON_MIN = int(os.environ.get("HORIZON_MIN", "15"))
     LOOKBACK_DAYS = int(os.environ.get("LOOKBACK_DAYS", "30"))
 
-    # ✅ Force XGB by default if not set (aligned with forecast.py XGB-only path)
+    # ✅ Forcer XGB par défaut si non défini (aligné sur forecast.py XGB-only)
     os.environ.setdefault("MODEL_TYPE", "xgb")
 
-    # Horizon in 5-min bins (horizon_bins is used by the trainer)
+    # Horizon en bins 5 minutes (horizon_bins utilisé côté trainer)
     HORIZON_BINS = max(1, HORIZON_MIN // 5)
 
     tmp_root = Path(tempfile.gettempdir()) / "velib_train"
     local_file = tmp_root / "exports" / "velib_concat.parquet"
     cli = storage.Client()
 
-    # 0) Version resolution (latest.json -> bump) → export ENV
+    # 0) Résolution de version (latest.json -> bump) → export ENV
     _resolve_and_export_version(cli)
 
-    # 1) Training dataset: download single Parquet vs concat recent daily shards
+    # 1) Dataset d’entraînement : téléchargement d’un Parquet unique
+    #    vs concaténation de shards daily récents
     if TRAIN_EXPORT_GCS.endswith(".parquet"):
         print(f"[train_job] download {TRAIN_EXPORT_GCS} → {local_file}", flush=True)
         _download(cli, TRAIN_EXPORT_GCS, local_file)
@@ -555,25 +558,25 @@ def main() -> int:
         shard_uris = _list_daily(cli, TRAIN_EXPORT_GCS, LOOKBACK_DAYS)
         _concat_locally(cli, shard_uris, local_file)
 
-    # 2) Ensure repo root is on sys.path before importing training module
+    # 2) S’assurer que la racine du repo est dans sys.path avant d’importer le module de training
     _ensure_repo_on_path()
 
-    # 3) Determine the training module (fixing layout inconsistencies)
+    # 3) Déterminer le module de training (fix des layouts hétérogènes)
     module_name = os.getenv("TRAIN_MODULE")
     if not module_name:
-        # order: core → tools → train → flat (compat)
-        import service.core.forecast  # recommended
+        # ordre : core → tools → train → flat (compat)
+        import service.core.forecast  # recommandé
         module_name = "service.core.forecast"
 
-    # 4) Local model output path
+    # 4) Chemin local pour la sortie modèle
     model_out = tmp_root / "model.joblib"
     model_out.parent.mkdir(parents=True, exist_ok=True)
 
-    # 5) Call training
+    # 5) Appel du training
     train_fn = _find_training_callable(module_name)
     base_kwargs = {
         "src": str(local_file),
-        # both are passed for robustness; trainer XGB uses horizon_bins
+        # les deux sont passés pour robustesse ; côté XGB, le trainer utilise horizon_bins
         "horizon_bins": HORIZON_BINS,
         "horizon_minutes": HORIZON_MIN,
         "lookback_days": LOOKBACK_DAYS,
@@ -586,14 +589,14 @@ def main() -> int:
     if metrics is not None:
         print("[train_job] metrics:", metrics, flush=True)
 
-    # 6) Publishing
-    # Case 1: forecast.py self-publishes if MODEL_GCS_BUCKET/PREFIX are present
+    # 6) Publication
+    # Cas 1 : forecast.py autopublie si MODEL_GCS_BUCKET/PREFIX présents
     has_self_publish = bool(os.environ.get("MODEL_GCS_BUCKET") and os.environ.get("MODEL_GCS_PREFIX"))
 
     if has_self_publish:
         print("[train_job] trainer self-publishing enabled (MODEL_GCS_BUCKET/MODEL_GCS_PREFIX set) → skip manual upload", flush=True)
     else:
-        # Fallback: upload a single “compat” artifact (latest.joblib by default)
+        # Fallback : uploader un unique artefact “compat” (latest.joblib par défaut)
         MODEL_GCS = os.environ.get(
             "MODEL_GCS",
             f"gs://velib-forecast-472820_cloudbuild/velib/models/h15/latest.joblib"

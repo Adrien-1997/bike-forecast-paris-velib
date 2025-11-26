@@ -1,31 +1,35 @@
 # service/jobs/compact_daily.py
 
 """
-Daily compaction job for the Velib Forecast pipeline.
+Job de compaction quotidienne pour le pipeline Vélib’ Forecast.
 
-This job:
-- Compacts all 5-minute raw snapshots of a given UTC day into a single Parquet
-  file with a strict schema.
-- Optionally deletes the raw 5-minute snapshots and their folders for that day
-  once the day is considered "closed" (day < today_UTC).
+Rôle
+----
+Ce job :
+- compacte tous les snapshots bruts de 5 minutes d’une journée UTC donnée
+  en un unique fichier Parquet avec un schéma strict ;
+- supprime optionnellement les snapshots bruts 5 minutes (et leurs dossiers)
+  pour cette journée, une fois qu’elle est considérée comme "fermée"
+  (day < today_UTC).
 
-Strict schema
+Schéma strict
 -------------
 ts_utc, tbin_utc, station_id, bikes, capacity, mechanical, ebike, status,
 lat, lon, name, temp_C, precip_mm, wind_mps
 
-Required environment variables
-------------------------------
+Variables d’environnement requises
+----------------------------------
 GCS_RAW_PREFIX       = gs://<bucket>/<root>/bronze
 GCS_DAILY_PREFIX     = gs://<bucket>/<root>/daily
-DAY                  = YYYY-MM-DD   (suggested UTC day)
+DAY                  = YYYY-MM-DD   (jour UTC suggéré)
 
 Options
 -------
-DELETE_AFTER_COMPACT = 1|0  (default 1)
-    When 1, delete raw snapshots for the day, but only if DAY < today_UTC.
+DELETE_AFTER_COMPACT = 1|0  (par défaut 1)
+    Quand vaut 1, supprime les snapshots bruts de la journée,
+    mais uniquement si DAY < today_UTC.
 
-Execution
+Exécution
 ---------
 python -m service.jobs.compact_daily
 """
@@ -60,17 +64,18 @@ COLS = [
 
 def _split(gcs_url: str) -> Tuple[str, str]:
     """
-    Split a GCS URL of the form 'gs://bucket/path' into bucket name and object key.
+    Découper une URL GCS de la forme 'gs://bucket/path' en (bucket, clé).
 
-    Parameters
+    Paramètres
     ----------
     gcs_url : str
-        GCS URL starting with 'gs://'.
+        URL GCS commençant par 'gs://'.
 
-    Returns
-    -------
+    Retour
+    ------
     (str, str)
-        Tuple (bucket_name, object_key) where object_key has no trailing slash.
+        Tuple (bucket_name, object_key), où object_key ne se termine pas
+        par un slash.
     """
     assert gcs_url.startswith("gs://")
     b, p = gcs_url[5:].split("/", 1)
@@ -79,19 +84,19 @@ def _split(gcs_url: str) -> Tuple[str, str]:
 
 def _list_day_parquets(raw_prefix: str, day: str) -> List[storage.Blob]:
     """
-    List all 5-minute parquet snapshot blobs for a given UTC day.
+    Lister tous les blobs parquet de snapshots 5 minutes pour un jour UTC donné.
 
-    Parameters
+    Paramètres
     ----------
     raw_prefix : str
-        GCS prefix for the bronze layer (GCS_RAW_PREFIX).
+        Préfixe GCS pour la couche bronze (GCS_RAW_PREFIX).
     day : str
-        UTC day in 'YYYY-MM-DD' format.
+        Jour UTC au format 'YYYY-MM-DD'.
 
-    Returns
-    -------
-    list of google.cloud.storage.Blob
-        All blobs under '<raw_prefix>/date=DAY/' ending with '.parquet'.
+    Retour
+    ------
+    list[google.cloud.storage.Blob]
+        Tous les blobs sous '<raw_prefix>/date=DAY/' se terminant par '.parquet'.
     """
     bkt, pfx = _split(raw_prefix)
     pfx = f"{pfx}/date={day}/"
@@ -101,17 +106,17 @@ def _list_day_parquets(raw_prefix: str, day: str) -> List[storage.Blob]:
 
 def _day_from_blob_path(blob: storage.Blob) -> str | None:
     """
-    Extract the 'YYYY-MM-DD' part from a blob path containing 'date=YYYY-MM-DD/'.
+    Extraire la partie 'YYYY-MM-DD' d’un chemin de blob contenant 'date=YYYY-MM-DD/'.
 
-    Parameters
+    Paramètres
     ----------
     blob : google.cloud.storage.Blob
-        Blob whose name is inspected.
+        Blob dont le nom est inspecté.
 
-    Returns
-    -------
-    str or None
-        The day string if found, otherwise None.
+    Retour
+    ------
+    str ou None
+        La chaîne du jour si trouvée, sinon None.
     """
     name = blob.name
     i = name.find("date=")
@@ -126,17 +131,17 @@ def _day_from_blob_path(blob: storage.Blob) -> str | None:
 
 def _download_parquet_to_df(blob: storage.Blob) -> pd.DataFrame:
     """
-    Download a parquet blob from GCS and load it into a pandas DataFrame.
+    Télécharger un blob parquet depuis GCS et le charger dans un DataFrame pandas.
 
-    Parameters
+    Paramètres
     ----------
     blob : google.cloud.storage.Blob
-        Source parquet file.
+        Fichier parquet source.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        Loaded parquet content.
+        Contenu parquet chargé.
     """
     buf = BytesIO()
     blob.download_to_file(buf)
@@ -147,14 +152,14 @@ def _download_parquet_to_df(blob: storage.Blob) -> pd.DataFrame:
 
 def _upload_parquet_df(df: pd.DataFrame, gcs_url: str):
     """
-    Upload a pandas DataFrame as a parquet file to a GCS location.
+    Uploader un DataFrame pandas au format parquet vers une URL GCS.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Data to upload.
+        Données à uploader.
     gcs_url : str
-        Destination GCS URL (gs://bucket/path/to/file.parquet).
+        URL GCS de destination (gs://bucket/path/to/file.parquet).
     """
     bkt, key = _split(gcs_url)
     buf = BytesIO()
@@ -169,14 +174,14 @@ def _upload_parquet_df(df: pd.DataFrame, gcs_url: str):
 
 def _copy_blob(src_url: str, dst_url: str):
     """
-    Copy a blob from one GCS location to another.
+    Copier un blob d’une localisation GCS à une autre.
 
-    Parameters
+    Paramètres
     ----------
     src_url : str
-        Source GCS URL.
+        URL GCS source.
     dst_url : str
-        Destination GCS URL.
+        URL GCS de destination.
     """
     src_bkt, src_key = _split(src_url)
     dst_bkt, dst_key = _split(dst_url)
@@ -189,12 +194,12 @@ def _copy_blob(src_url: str, dst_url: str):
 
 def _delete_blob(url: str):
     """
-    Delete a blob at the given GCS URL.
+    Supprimer un blob à l’URL GCS donnée.
 
-    Parameters
+    Paramètres
     ----------
     url : str
-        GCS URL of the blob to delete.
+        URL GCS du blob à supprimer.
     """
     bkt, key = _split(url)
     cli = storage.Client()
@@ -203,10 +208,10 @@ def _delete_blob(url: str):
 
 def _purge_prefix_tree(raw_prefix: str, day: str):
     """
-    Delete all objects and potential "marker" blobs under gs://.../date=DAY/.
+    Supprimer tous les objets (et éventuels "marker" blobs) sous gs://.../date=DAY/.
 
-    This is used after a successful compaction of a closed day when
-    DELETE_AFTER_COMPACT=1, to free space in the bronze layer.
+    Utilisé après une compaction réussie d’une journée fermée lorsque
+    DELETE_AFTER_COMPACT=1, pour libérer de l’espace dans la couche bronze.
     """
     bkt, pfx = _split(raw_prefix)
     base = f"{pfx}/date={day}/"
@@ -219,7 +224,7 @@ def _purge_prefix_tree(raw_prefix: str, day: str):
             for b in blobs:
                 bucket.blob(b.name).delete()
 
-    # Also try to remove potential "directory marker" blobs.
+    # Essayer aussi de supprimer d’éventuels blobs "marqueurs de dossier".
     candidates = {base, base.rstrip('/') + '/'}
     for hh in range(24):
         hp = f"{base}hour={hh:02d}/"
@@ -243,13 +248,13 @@ def _purge_prefix_tree(raw_prefix: str, day: str):
 
 def _to_naive_utc(s: pd.Series) -> pd.Series:
     """
-    Parse timestamps as UTC and return naive datetime64[ns] values.
+    Parser des timestamps en UTC et retourner des datetime64[ns] naïfs.
 
-    Rules
-    -----
-    - Naive datetimes are localized as UTC.
-    - Aware datetimes are converted to UTC.
-    - Output is timezone-naive but still represents UTC instants.
+    Règles
+    ------
+    - Les datetimes naïfs sont localisés en UTC.
+    - Les datetimes "aware" sont convertis en UTC.
+    - La sortie est timezone-naïve mais représente toujours un instant UTC.
     """
     x = pd.to_datetime(s, utc=True, errors="coerce")
     return x.dt.tz_convert("UTC").dt.tz_localize(None)
@@ -257,20 +262,20 @@ def _to_naive_utc(s: pd.Series) -> pd.Series:
 
 def _enforce_schema(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Enforce the strict daily schema, coercing columns to expected dtypes.
+    Appliquer le schéma quotidien strict, en forçant les dtypes attendus.
 
-    Missing columns are created and filled with None/NaN so that the
-    resulting DataFrame has exactly COLS in the correct order.
+    Les colonnes manquantes sont créées et remplies par None/NaN, de sorte
+    que le DataFrame résultant contienne exactement COLS dans le bon ordre.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Raw concatenated snapshots.
+        Snapshots concaténés bruts.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        DataFrame with normalized columns and dtypes.
+        DataFrame avec colonnes et dtypes normalisés.
     """
     for c in COLS:
         if c not in df.columns:
@@ -278,7 +283,7 @@ def _enforce_schema(df: pd.DataFrame) -> pd.DataFrame:
 
     out = pd.DataFrame({
         "ts_utc":     _to_naive_utc(df["ts_utc"]),
-        # IMPORTANT: respect original tbin_utc if present
+        # IMPORTANT : respecter le tbin_utc original s’il est présent
         "tbin_utc":   _to_naive_utc(df["tbin_utc"]) if "tbin_utc" in df.columns else pd.NaT,
         "station_id": pd.to_numeric(df["station_id"], errors="coerce"),
         "bikes":      pd.to_numeric(df["bikes"],      errors="coerce"),
@@ -294,7 +299,8 @@ def _enforce_schema(df: pd.DataFrame) -> pd.DataFrame:
         "wind_mps":   pd.to_numeric(df["wind_mps"],   errors="coerce"),
     })
 
-    # station_id and core counts are stored as nullable integers in the daily parquet.
+    # station_id et les compteurs principaux sont stockés en entiers nullable
+    # dans le parquet quotidien.
     out["station_id"] = out["station_id"].astype("Int64")
     for c in ["bikes","capacity","mechanical","ebike"]:
         out[c] = out[c].astype("Int64")
@@ -304,30 +310,30 @@ def _enforce_schema(df: pd.DataFrame) -> pd.DataFrame:
 
 def _ensure_5min_grid(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Ensure that tbin_utc is aligned on a 5-minute grid.
+    S’assurer que tbin_utc est bien aligné sur une grille de 5 minutes.
 
-    - Fill missing tbin_utc values from ts_utc.floor('5min').
-    - For existing tbin_utc values that are off-grid (minutes % 5 != 0 or seconds != 0),
-      snap them down to floor('5min').
+    - Remplit les valeurs tbin_utc manquantes à partir de ts_utc.floor('5min').
+    - Pour les tbin_utc existants qui ne sont pas pile sur la grille
+      (minutes % 5 != 0 ou secondes != 0), les aligne vers le bas avec floor('5min').
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        DataFrame with at least ts_utc and tbin_utc.
+        DataFrame contenant au moins ts_utc et tbin_utc.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        Same DataFrame with tbin_utc corrected in-place.
+        Même DataFrame avec tbin_utc corrigé in-place.
     """
     tbin = df["tbin_utc"].copy()
 
-    # Fill NaT values from ts_utc.
+    # Remplir les NaT à partir de ts_utc.
     mask_nat = tbin.isna()
     if mask_nat.any():
         tbin.loc[mask_nat] = pd.to_datetime(df.loc[mask_nat, "ts_utc"]).dt.floor("5min")
 
-    # Fix values that are off the 5-minute grid.
+    # Corriger les valeurs hors grille 5 minutes.
     minutes = tbin.dt.minute
     seconds = tbin.dt.second
     offgrid = ((minutes % 5) != 0) | (seconds != 0)
@@ -336,29 +342,29 @@ def _ensure_5min_grid(df: pd.DataFrame) -> pd.DataFrame:
         print(f"[daily] fixing {n} tbin_utc values to 5-min floor")
         tbin.loc[offgrid] = tbin.loc[offgrid].dt.floor("5min")
 
-    df["tbin_utc"] = tbin.astype("datetime64[ns]")  # naive UTC
+    df["tbin_utc"] = tbin.astype("datetime64[ns]")  # UTC naïf
     return df
 
 
 def _filter_day_utc(df: pd.DataFrame, day: str) -> pd.DataFrame:
     """
-    Keep only rows whose tbin_utc falls within the given UTC day.
+    Ne conserver que les lignes dont tbin_utc tombe dans la journée UTC donnée.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Input DataFrame (typically already schema-normalized).
+        DataFrame d’entrée (généralement déjà normalisé au niveau du schéma).
     day : str
-        UTC day in 'YYYY-MM-DD' format.
+        Jour UTC au format 'YYYY-MM-DD'.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        Filtered view for the requested day.
+        Vue filtrée pour la journée demandée.
     """
     start = pd.Timestamp(f"{day} 00:00:00")
     end   = start + pd.Timedelta(days=1)
-    # IMPORTANT: only fill/correct the grid, do not recompute the whole column from scratch
+    # IMPORTANT : corriger la grille uniquement, ne pas recalculer toute la colonne
     df = _ensure_5min_grid(df)
     mask = (df["tbin_utc"] >= start) & (df["tbin_utc"] < end)
     kept = df.loc[mask].copy()
@@ -370,20 +376,20 @@ def _filter_day_utc(df: pd.DataFrame, day: str) -> pd.DataFrame:
 
 def _deduplicate_latest(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Keep only the latest snapshot per (station_id, tbin_utc) pair.
+    Ne garder que le dernier snapshot par couple (station_id, tbin_utc).
 
-    Sorting order is by station_id, then tbin_utc, then ts_utc,
-    and we take the last row in each group.
+    L’ordre de tri est : station_id, puis tbin_utc, puis ts_utc.
+    On prend la dernière ligne dans chaque groupe.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Data containing potential duplicates.
+        Données pouvant contenir des doublons.
 
-    Returns
-    -------
+    Retour
+    ------
     pandas.DataFrame
-        Deduplicated DataFrame with one row per (station_id, tbin_utc).
+        DataFrame dédupliqué avec une ligne par (station_id, tbin_utc).
     """
     df = df.sort_values(["station_id","tbin_utc","ts_utc"])
     df = df.groupby(["station_id","tbin_utc"], as_index=False).tail(1)
@@ -392,17 +398,17 @@ def _deduplicate_latest(df: pd.DataFrame) -> pd.DataFrame:
 
 def _is_closed_day(day: str) -> bool:
     """
-    Decide whether a day is considered "closed" (strictly before today UTC).
+    Indiquer si une journée est considérée comme "fermée" (strictement avant today UTC).
 
-    Parameters
+    Paramètres
     ----------
     day : str
-        UTC day in 'YYYY-MM-DD' format.
+        Jour UTC au format 'YYYY-MM-DD'.
 
-    Returns
-    -------
+    Retour
+    ------
     bool
-        True if the day is < today_UTC, False otherwise.
+        True si day < today_UTC, False sinon.
     """
     today = datetime.now(timezone.utc).date()
     d = datetime.strptime(day, "%Y-%m-%d").date()
@@ -411,25 +417,25 @@ def _is_closed_day(day: str) -> bool:
 
 def _infer_single_day_from_tbin(df: pd.DataFrame) -> date:
     """
-    Infer the unique UTC day present in tbin_utc.
+    Inférer l’unique jour UTC présent dans tbin_utc.
 
-    Used as a sanity check after compaction. Fails if multiple
-    different dates are present or if tbin_utc is empty.
+    Utilisé comme sanity check après compaction. Échoue s’il y a plusieurs
+    dates différentes ou si tbin_utc est vide.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        DataFrame with a 'tbin_utc' column.
+        DataFrame contenant une colonne 'tbin_utc'.
 
-    Returns
-    -------
-    datetime.date
-        The unique day detected in tbin_utc.
-
-    Raises
+    Retour
     ------
+    datetime.date
+        La journée unique détectée dans tbin_utc.
+
+    Lève
+    ----
     RuntimeError
-        If no date is found or if several distinct days are present.
+        Si aucune date n’est trouvée ou si plusieurs jours distincts sont présents.
     """
     if "tbin_utc" not in df.columns or df["tbin_utc"].isna().all():
         raise RuntimeError("[daily] impossible d'inférer la date: tbin_utc absent ou vide")
@@ -444,11 +450,11 @@ def _infer_single_day_from_tbin(df: pd.DataFrame) -> date:
 
 def main():
     """
-    CLI entrypoint for the daily compaction job.
+    Point d’entrée CLI pour le job de compaction quotidienne.
 
-    Reads all 5-minute snapshots for DAY from GCS_RAW_PREFIX, normalizes and
-    deduplicates them, writes a single compact Parquet file under
-    GCS_DAILY_PREFIX, and optionally purges raw snapshots.
+    Lit tous les snapshots 5 minutes pour DAY depuis GCS_RAW_PREFIX,
+    les normalise et les déduplique, écrit un unique fichier Parquet compact
+    sous GCS_DAILY_PREFIX, et purge optionnellement les snapshots bruts.
     """
     RAW_PREFIX   = os.environ.get("GCS_RAW_PREFIX")
     DAILY_PREFIX = os.environ.get("GCS_DAILY_PREFIX")
@@ -471,7 +477,7 @@ def main():
         return 0
     print(f"[daily] found {len(blobs)} snapshot files")
 
-    # Day is enforced by the "date=YYYY-MM-DD" path structure
+    # Le jour est imposé par la structure de chemin "date=YYYY-MM-DD"
     days_from_paths = {_day_from_blob_path(b) for b in blobs}
     days_from_paths.discard(None)
     if not days_from_paths:
@@ -482,9 +488,9 @@ def main():
     else:
         path_day = next(iter(days_from_paths))
         if path_day != DAY:
-            print(f"[daily][note] blob-path day={path_day} ...rs from env DAY={DAY} — using path_day for filtering & naming")
+            print(f"[daily][note] blob-path day={path_day} differs from env DAY={DAY} — using path_day for filtering & naming")
 
-    # Read all snapshots
+    # Lecture de tous les snapshots
     dfs: List[pd.DataFrame] = []
     failed = 0
     for b in blobs:
@@ -513,7 +519,7 @@ def main():
     stations_present = df_all["station_id"].nunique()
     print(f"[daily] bins_present={bins_present} | stations_present={stations_present}")
 
-    # Cross-check inferred day from data
+    # Vérification croisée du jour inféré depuis les données
     try:
         day_actual = _infer_single_day_from_tbin(df_all)
         if str(day_actual) != path_day:
@@ -521,7 +527,7 @@ def main():
     except Exception as e:
         print(f"[daily][warn] could not infer day from data: {e}")
 
-    # Write daily parquet (atomic pattern: tmp → final)
+    # Écriture du parquet quotidien (pattern atomique : tmp → final)
     out_key_final = f"compact_{path_day}.parquet"
     out_final = f"{DAILY_PREFIX.rstrip('/')}/{out_key_final}"
     out_tmp   = f"{DAILY_PREFIX.rstrip('/')}/_tmp_compact_{path_day}_{int(datetime.now(timezone.utc).timestamp())}.parquet"
@@ -531,7 +537,7 @@ def main():
     _delete_blob(out_tmp)
     print(f"[daily] wrote {len(df_all):,} rows → {out_final}")
 
-    # Purge raw snapshots if requested and the day is closed
+    # Purge des snapshots bruts si demandé et si la journée est fermée
     if DELETE_FLAG and _is_closed_day(path_day):
         _purge_prefix_tree(RAW_PREFIX, path_day)
         print(f"[daily] deleted snapshots & markers under {RAW_PREFIX}/date={path_day}/")

@@ -1,62 +1,63 @@
 # service/jobs/build_network_overview.py
 
 """
-Vélib’ Forecast — Network Overview monitoring job (LATEST ONLY).
+Vélib’ Forecast — Job de monitoring "Network Overview" (LATEST ONLY).
 
-Role
+Rôle
 ----
-This job reads the *events* parquet files:
+Ce job lit les fichiers parquet *events* :
 
     gs://.../velib/exports/events_YYYY-MM-DD.parquet
 
-over a rolling window of days and builds all the JSON artifacts needed by the
-**Network Overview** page of the Monitoring UI:
+sur une fenêtre glissante de plusieurs jours et construit tous les artefacts JSON
+nécessaires à la page **Network Overview** de l’UI de monitoring :
 
 - kpis.json
-    * global KPIs (stations_active, snapshot availability, 7-day coverage,
-      volatility today, etc.)
+    * KPIs globaux (stations actives, disponibilité du snapshot,
+      couverture 7 jours, volatilité aujourd’hui, etc.)
 - snapshot_distribution.json
-    * counts and percentages (bikes available, docks available, penury,
-      saturation) for the last network snapshot
+    * décomposition en comptes / pourcentages (vélos disponibles, bornes dispo,
+      pénurie, saturation) pour le dernier snapshot réseau
 - snapshot_map.json
-    * per-station snapshot info for the map (bikes, docks_avail, penury/saturation flags)
+    * info par station pour la carte (bikes, docks_avail, flags pénurie/saturation)
 - today_curve.json
-    * time series of "% of stations with ≥1 bike" during the chosen "today"
+    * série temporelle du "% de stations avec ≥1 vélo" sur le "today" choisi
       (day_for_today_utc)
 - ref_median_curve.json
-    * reference median curve across past days with the same weekday (UTC, 5-min bins)
+    * courbe médiane de référence sur les jours passés ayant le même weekday
+      (UTC, bins 5 minutes)
 - kpis_today_vs_lags.json
-    * day-level KPIs for today vs J-7 / J-14 / J-21 (availability & penury/saturation)
+    * KPIs journaliers pour today vs J-7 / J-14 / J-21 (disponibilité & pénurie/saturation)
 - stations_tension.json
-    * per-station penury/saturation rates (for “tension” ranking)
+    * taux de pénurie/saturation par station (pour le ranking de "tension")
 
-All outputs are published under:
+Toutes les sorties sont publiées sous :
 
     <GCS_MONITORING_PREFIX>/monitoring/network/overview/latest/
 
-with a top-level `manifest.json` that describes the window, timezone, sources
-and artifacts produced.
+avec un `manifest.json` top-level qui décrit la fenêtre, la timezone, les sources
+et les artefacts produits.
 
-Environment
------------
-Required:
+Environnement
+-------------
+Obligatoire :
     GCS_EXPORTS_PREFIX    = gs://bucket/velib/exports
-    GCS_MONITORING_PREFIX = gs://bucket/velib      (or .../monitoring)
+    GCS_MONITORING_PREFIX = gs://bucket/velib      (ou .../monitoring)
 
-Optional (unified MON_* with legacy fallbacks):
+Optionnel (ENV unifié MON_* avec compat legacy) :
     MON_TZ         = Europe/Paris
-    MON_LAST_DAYS  = 7    (used e.g. for coverage & tension)
-    MON_REF_DAYS   = 28   (history length for reference median curve)
+    MON_LAST_DAYS  = 7    (utilisé pour coverage & tension)
+    MON_REF_DAYS   = 28   (historique pour la courbe médiane de référence)
 
-Legacy aliases still honoured:
+Alias legacy encore pris en compte :
     OVERVIEW_TZ, OVERVIEW_LAST_DAYS, OVERVIEW_REF_DAYS
 
 Notes
 -----
-- JSON is sanitized: NaN/±Inf → null.
-- Outputs are *LATEST ONLY*: no dated folders; the UI always reads from `latest/`.
-- `day_for_today_utc` is derived from the last available `events_YYYY-MM-DD.parquet`
-  file name; all "today vs ref" calculations are anchored on that UTC day.
+- Le JSON est nettoyé : NaN/±Inf → null.
+- Sorties en mode *LATEST ONLY* : pas de dossiers datés ; le front lit toujours dans `latest/`.
+- `day_for_today_utc` est dérivé du nom du dernier fichier `events_YYYY-MM-DD.parquet`;
+  tous les calculs "today vs ref" sont ancrés sur ce jour UTC.
 """
 
 from __future__ import annotations
@@ -81,89 +82,94 @@ except Exception as e:
 SCHEMA_VERSION = "1.3"  # 1.2 → 1.3 (ENV unifié MON_*, manifest, LATEST only)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ENV helpers (unifiés)
+# Helpers ENV (unifiés)
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _env(name: str, default=None):
     """
-    Read an environment variable with a default fallback.
+    Lit une variable d’environnement avec une valeur par défaut.
 
-    Parameters
+    Paramètres
     ----------
     name : str
-        Environment variable name.
+        Nom de la variable d’environnement.
     default : Any
-        Fallback value if the variable is missing or empty.
+        Valeur de repli si la variable est absente ou vide.
 
-    Returns
-    -------
+    Retourne
+    --------
     Any
-        Raw string value from the environment, or the default.
+        Valeur brute (str) lue dans l’ENV, ou la valeur par défaut.
     """
     v = os.environ.get(name)
     return v if (v is not None and v != "") else default
 
+
 def _env_int(name: str, default: int) -> int:
     """
-    Read an integer-valued environment variable.
+    Lit une variable d’environnement de type entier.
 
-    If parsing fails, the provided default is returned.
+    En cas d’échec de parsing, retourne la valeur par défaut.
 
-    Parameters
+    Paramètres
     ----------
     name : str
-        Environment variable name.
+        Nom de la variable d’environnement.
     default : int
-        Default integer value.
+        Valeur entière de repli.
 
-    Returns
-    -------
+    Retourne
+    --------
     int
-        Parsed integer or default.
+        Entier parsé ou valeur par défaut.
     """
     try:
         return int(_env(name, default))
     except Exception:
         return default
 
+
 # ──────────────────────────────────────────────────────────────────────────────
-# GCS helpers
+# Helpers GCS
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _split(gs: str) -> Tuple[str, str]:
     """
-    Split a GCS URI `gs://bucket/path` into (bucket, key).
+    Découpe une URI GCS `gs://bucket/path` en (bucket, key).
 
-    Parameters
+    Paramètres
     ----------
     gs : str
-        GCS URI.
+        URI GCS.
 
-    Returns
-    -------
+    Retourne
+    --------
     (str, str)
-        Bucket name and object key (without trailing slash).
+        Nom de bucket et clé d’objet (sans slash final).
 
-    Raises
-    ------
+    Lève
+    ----
     AssertionError
-        If the URI does not start with `gs://`.
+        Si l’URI ne commence pas par `gs://`.
     """
     assert gs.startswith("gs://"), f"bad GCS uri: {gs}"
     b, k = gs[5:].split("/", 1)
     return b, k.rstrip("/")
 
+
 def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
     """
-    Read a Parquet blob from GCS into a pandas DataFrame.
+    Lit un blob parquet GCS dans un DataFrame pandas.
 
-    Parameters
+    Paramètres
     ----------
     blob : google.cloud.storage.Blob
-        GCS blob pointing to a parquet file.
+        Blob GCS pointant vers un fichier parquet.
 
-    Returns
-    -------
+    Retourne
+    --------
     pandas.DataFrame
-        DataFrame loaded from the parquet content.
+        DataFrame chargé depuis le parquet.
     """
     buf = BytesIO()
     blob.download_to_file(buf)
@@ -171,33 +177,34 @@ def _read_parquet_blob_to_df(blob: "storage.Blob") -> pd.DataFrame:
     tbl = pq.read_table(buf)
     return tbl.to_pandas()
 
+
 def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datetime) -> List["storage.Blob"]:
     """
-    List `events_YYYY-MM-DD.parquet` blobs in a given UTC date window.
+    Liste les blobs `events_YYYY-MM-DD.parquet` sur une fenêtre de dates UTC.
 
-    The filter is done on the date embedded in the file name.
+    Le filtrage se fait sur la date encodée dans le nom de fichier.
 
-    Parameters
+    Paramètres
     ----------
     exports_prefix : str
-        Base GCS prefix for exports (GCS_EXPORTS_PREFIX).
+        Préfixe GCS de base pour les exports (GCS_EXPORTS_PREFIX).
     start_date : datetime
-        Start of the window (inclusive, UTC).
+        Début de fenêtre (inclus, UTC).
     end_date : datetime
-        End of the window (inclusive, UTC).
+        Fin de fenêtre (inclus, UTC).
 
-    Returns
-    -------
+    Retourne
+    --------
     list[google.cloud.storage.Blob]
-        Sorted list of blobs matching `events_YYYY-MM-DD.parquet`
-        within the requested date range.
+        Liste triée de blobs correspondant à `events_YYYY-MM-DD.parquet`
+        dans la fenêtre demandée.
     """
     bkt, key_prefix = _split(exports_prefix)
     client = storage.Client()
     bucket = client.bucket(bkt)
     blobs = list(client.list_blobs(bucket, prefix=key_prefix.strip("/") + "/"))
     pat = re.compile(r"events_(\d{4}-\d{2}-\d{2})\.parquet$")
-    out = []
+    out: List["storage.Blob"] = []
     for bl in blobs:
         m = pat.search(bl.name)
         if not m:
@@ -208,20 +215,27 @@ def _list_event_blobs(exports_prefix: str, start_date: datetime, end_date: datet
     out.sort(key=lambda b: b.name)
     return out
 
+
 def _upload_json_gs(obj: dict, gs_uri: str, log_prefix: str = "network.overview"):
     """
-    Upload a JSON document to GCS, with NaN/±Inf sanitized to null.
+    Envoie un document JSON vers GCS, en remplaçant NaN/±Inf par null.
 
-    Parameters
+    Notes
+    -----
+    - Parcourt récursivement dicts/listes et remplace les floats non finis par null.
+    - Encode le JSON en UTF-8, séparateurs compacts.
+    - Écrit sur l’URI GCS cible avec content-type `application/json`.
+
+    Paramètres
     ----------
     obj : dict
-        JSON-serializable payload (will be sanitized).
+        Payload JSON-sérialisable (sera nettoyé).
     gs_uri : str
-        Target GCS URI.
-    log_prefix : str, default "network.overview"
-        Prefix used in log messages.
+        URI GCS cible.
+    log_prefix : str, défaut "network.overview"
+        Préfixe utilisé dans les logs.
     """
-    # JSON safe: remplace NaN/±Inf par null
+    # Nettoyage JSON : remplace NaN/±Inf par null
     def _san(o):
         if isinstance(o, dict):
             return {k: _san(v) for k, v in o.items()}
@@ -237,122 +251,144 @@ def _upload_json_gs(obj: dict, gs_uri: str, log_prefix: str = "network.overview"
     storage.Client().bucket(bkt).blob(key).upload_from_string(data, content_type="application/json")
     print(f"[{log_prefix}] wrote → {gs_uri} ({len(data):,} bytes)")
 
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Core helpers
+# Helpers cœur
 # ──────────────────────────────────────────────────────────────────────────────
+
 def _detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
     """
-    Auto-detect core columns in the events dataframe.
+    Auto-détecte les colonnes clés du DataFrame d’évènements.
 
-    The function is tolerant to different naming conventions and returns a
-    mapping with the following keys (values may be None if not found):
+    La fonction est tolérante à différents schémas et renvoie un mapping
+    avec les clés (valeurs éventuellement None) :
 
         ts, station, bikes, capacity, docks, name, lat, lon
 
-    Minimal required columns are: timestamp, station_id, bikes.
+    Les colonnes minimales requises sont : timestamp, station_id, bikes.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Raw events dataframe.
+        DataFrame brut d’évènements.
 
-    Returns
-    -------
+    Retourne
+    --------
     dict
-        Mapping from logical column names to actual DataFrame column names.
+        Mapping des noms logiques vers les noms effectifs.
 
-    Raises
-    ------
+    Lève
+    ----
     KeyError
-        If minimal columns are not present.
+        Si les colonnes minimales sont absentes.
     """
     lower = {c.lower(): c for c in df.columns}
+
     def any_of(*cands):
         for c in cands:
             if c in lower:
                 return lower[c]
         return None
-    ts = any_of("ts","tbin_utc","timestamp","datetime")
-    st = any_of("station_id","stationcode","id","station")
-    bikes = any_of("bikes","num_bikes_available","velos","velos_disponibles")
-    cap = any_of("capacity","num_docks_total","dock_count","cap")
-    docks = any_of("docks_avail","num_docks_available","places_disponibles","free_docks")
-    name = any_of("name","station_name","nom")
-    lat = any_of("lat","latitude")
-    lon = any_of("lon","lng","longitude")
+
+    ts = any_of("ts", "tbin_utc", "timestamp", "datetime")
+    st = any_of("station_id", "stationcode", "id", "station")
+    bikes = any_of("bikes", "num_bikes_available", "velos", "velos_disponibles")
+    cap = any_of("capacity", "num_docks_total", "dock_count", "cap")
+    docks = any_of("docks_avail", "num_docks_available", "places_disponibles", "free_docks")
+    name = any_of("name", "station_name", "nom")
+    lat = any_of("lat", "latitude")
+    lon = any_of("lon", "lng", "longitude")
     if not ts or not st or not bikes:
         raise KeyError(f"[overview] Colonnes minimales absentes (ts={ts}, station={st}, bikes={bikes})")
     return dict(ts=ts, station=st, bikes=bikes, capacity=cap, docks=docks, name=name, lat=lat, lon=lon)
 
+
 def _to_local(s_utc_like: pd.Series, tzname: str) -> pd.Series:
     """
-    Convert a timestamp-like Series to a localized datetime (tz-aware).
+    Convertit une série de timestamps en datetimes localisés (tz-aware).
 
-    Parameters
+    Paramètres
     ----------
     s_utc_like : pandas.Series
-        Series convertible to datetime (assumed UTC).
+        Série convertible en datetime (supposée en UTC).
     tzname : str
-        Target timezone name (e.g. "Europe/Paris").
+        Nom de la timezone cible (ex. "Europe/Paris").
 
-    Returns
-    -------
+    Retourne
+    --------
     pandas.Series
-        Timezone-aware series converted to the target timezone.
+        Série de datetimes localisés dans la timezone cible.
     """
     s = pd.to_datetime(s_utc_like, utc=True, errors="coerce")
     return s.dt.tz_convert(tzname)
 
+
 def _today_bounds_local(series_local: pd.Series) -> Tuple[pd.Timestamp, pd.Timestamp]:
     """
-    Get local day bounds [start, end) for the last timestamp in a local series.
+    Donne les bornes [start, end) du jour local du dernier timestamp de la série.
 
-    Parameters
+    Paramètres
     ----------
     series_local : pandas.Series
-        Localized datetime series.
+        Série de datetimes localisés.
 
-    Returns
-    -------
+    Retourne
+    --------
     (pandas.Timestamp, pandas.Timestamp)
-        Start (00:00) and end (next day 00:00) of that local day.
+        Début (00:00) et fin (00:00 du jour suivant) de ce jour local.
     """
     tmax = series_local.max()
     start = tmax.normalize()
     end = start + pd.Timedelta(days=1)
     return start, end
 
+
 def _safe_ratio(n: float, d: float) -> float:
     """
-    Safely compute (n / d * 100), rounded to 2 decimals.
+    Calcule en sécurité (n / d * 100), arrondi à 2 décimales.
 
-    Returns NaN if d == 0.
+    Retourne
+    --------
+    float
+        Pourcentage n/d*100, ou NaN si d == 0.
     """
     return float("nan") if d == 0 else round(100.0 * n / d, 2)
 
+
 def _part_bool(x: pd.Series) -> float:
     """
-    Percentage (0–100) of True values in a boolean series.
+    Pourcentage (0–100) de True dans une série booléenne.
 
-    Returns NaN for empty series.
+    Retourne NaN pour une série vide.
+
+    Paramètres
+    ----------
+    x : pandas.Series
+        Série booléenne.
+
+    Retourne
+    --------
+    float
+        Pourcentage de valeurs True.
     """
     if x.size == 0:
         return float("nan")
     return float((x.mean() * 100.0).round(2))
 
+
 def _safe_num(v: object) -> Optional[float]:
     """
-    Safely cast a value to float, returning None for NaN/Inf or errors.
+    Conversion robuste vers float, renvoyant None pour NaN/Inf ou erreur.
 
-    Parameters
+    Paramètres
     ----------
     v : Any
-        Input value.
+        Valeur d’entrée.
 
-    Returns
-    -------
+    Retourne
+    --------
     float | None
-        Finite float or None.
+        Float fini ou None.
     """
     try:
         f = float(v)
@@ -360,44 +396,50 @@ def _safe_num(v: object) -> Optional[float]:
     except Exception:
         return None
 
-def _compute_snapshot(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, station_universe: List[str]) -> Tuple[dict, pd.DataFrame, pd.DataFrame]:
-    """
-    Compute a global network snapshot and derived structures.
 
-    Snapshot definition
-    -------------------
-    - Take the last timestamp present in the window.
-    - Select all rows with exactly that timestamp.
-    - Derive per-station:
+def _compute_snapshot(
+    df: pd.DataFrame,
+    cols: Dict[str, Optional[str]],
+    tzname: str,
+    station_universe: List[str],
+) -> Tuple[dict, pd.DataFrame, pd.DataFrame]:
+    """
+    Construit le snapshot global réseau et les structures dérivées.
+
+    Définition du snapshot
+    ----------------------
+    - On prend le dernier timestamp présent dans la fenêtre.
+    - On sélectionne toutes les lignes exactement à ce timestamp.
+    - Par station, on dérive :
         * has_bike, has_dock
         * penury (bikes == 0)
         * saturation (docks == 0)
-    - Compute global KPIs:
-        * stations_active vs universe
+    - KPIs globaux :
+        * stations_active vs univers
         * availability_bike_pct, availability_dock_pct
         * penury_pct, saturation_pct
 
-    Also returns:
-    - `dist`: a small distribution DataFrame for the snapshot
-    - `map_df`: indexed fields for the snapshot map (one row per station).
+    La fonction renvoie aussi :
+    - `dist` : petit DataFrame de distribution pour le snapshot
+    - `map_df` : index pour la carte (une ligne par station).
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Events dataframe, already filtered on the main time window.
+        DataFrame évènementiel déjà filtré sur la fenêtre temporelle.
     cols : dict
-        Column mapping as returned by `_detect_columns`.
+        Mapping de colonnes tel que `_detect_columns`.
     tzname : str
-        Timezone for snapshot_ts_local.
+        Timezone pour snapshot_ts_local.
     station_universe : list[str]
-        List of station IDs considered part of the universe.
+        Liste des stations faisant partie de l’univers.
 
-    Returns
-    -------
+    Retourne
+    --------
     (dict, pandas.DataFrame, pandas.DataFrame)
-        - kpis: global snapshot KPIs (JSON-ready dict)
-        - dist: snapshot distribution (bike/dock/pen/sat)
-        - map_df: per-station snapshot rows for the map.
+        - kpis : KPIs globaux (dict JSON-ready)
+        - dist : distribution instantanée
+        - map_df : DataFrame pour la carte snapshot.
     """
     df = df.copy()
     last_ts = pd.to_datetime(df[cols["ts"]], utc=True, errors="coerce").max()
@@ -406,7 +448,10 @@ def _compute_snapshot(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: 
     # dérive docks_avail si absent
     docks_col = cols["docks"]
     if docks_col is None and cols["capacity"]:
-        docks = (pd.to_numeric(snap[cols["capacity"]], errors="coerce") - pd.to_numeric(snap[cols["bikes"]], errors="coerce")).clip(lower=0)
+        docks = (
+            pd.to_numeric(snap[cols["capacity"]], errors="coerce")
+            - pd.to_numeric(snap[cols["bikes"]], errors="coerce")
+        ).clip(lower=0)
         snap["__docks_avail"] = docks
         docks_col = "__docks_avail"
 
@@ -426,8 +471,8 @@ def _compute_snapshot(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: 
 
     kpis = {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
-        "snapshot_ts_utc": pd.Timestamp(last_ts).tz_convert("UTC").isoformat().replace("+00:00","Z"),
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "snapshot_ts_utc": pd.Timestamp(last_ts).tz_convert("UTC").isoformat().replace("+00:00", "Z"),
         "snapshot_ts_local": str(_to_local(pd.Series([last_ts]), tzname).iloc[0]),
         "stations_universe": universe,
         "stations_active": int(active),
@@ -438,22 +483,26 @@ def _compute_snapshot(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: 
         "saturation_pct": _part_bool(sat) if sat is not None else float("nan"),
     }
 
-    # Distribution instantanée
-    dist = pd.DataFrame({
-        "metric": ["bike_avail","dock_avail","penury","saturation"],
-        "count": [
-            int(has_bike.sum()) if has_bike is not None else 0,
-            int(has_dock.sum()) if has_dock is not None else 0,
-            int(pen.sum()) if pen is not None else 0,
-            int(sat.sum()) if sat is not None else 0,
-        ],
-    })
+    # Distribution instantanée (counts + pct)
+    dist = pd.DataFrame(
+        {
+            "metric": ["bike_avail", "dock_avail", "penury", "saturation"],
+            "count": [
+                int(has_bike.sum()) if has_bike is not None else 0,
+                int(has_dock.sum()) if has_dock is not None else 0,
+                int(pen.sum()) if pen is not None else 0,
+                int(sat.sum()) if sat is not None else 0,
+            ],
+        }
+    )
     dist["total_active"] = active
     dist["pct"] = dist.apply(lambda r: _safe_ratio(r["count"], r["total_active"]), axis=1)
 
     # Index carte snapshot
     map_rows = []
-    latc = cols["lat"]; lonc = cols["lon"]; namec = cols["name"]
+    latc = cols["lat"]
+    lonc = cols["lon"]
+    namec = cols["name"]
     for _, row in snap.iterrows():
         sid = str(row[cols["station"]])
         lat = float(row[latc]) if latc and pd.notna(row[latc]) else None
@@ -463,46 +512,58 @@ def _compute_snapshot(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: 
         d = None
         if docks_col and docks_col in snap.columns:
             d = int(pd.to_numeric(row[docks_col], errors="coerce")) if pd.notna(row[docks_col]) else None
-        map_rows.append({
-            "station_id": sid, "name": name, "lat": lat, "lon": lon,
-            "bikes": b, "docks_avail": d,
-            "is_penury": (1 if (b == 0 if b is not None else False) else 0),
-            "is_saturation": (1 if (d == 0 if d is not None else False) else 0),
-        })
+        map_rows.append(
+            {
+                "station_id": sid,
+                "name": name,
+                "lat": lat,
+                "lon": lon,
+                "bikes": b,
+                "docks_avail": d,
+                "is_penury": (1 if (b == 0 if b is not None else False) else 0),
+                "is_saturation": (1 if (d == 0 if d is not None else False) else 0),
+            }
+        )
     map_df = pd.DataFrame(map_rows)
 
     return kpis, dist, map_df
 
-def _coverage_volatility(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, last_days: int) -> Tuple[float,float]:
-    """
-    Compute 7-day coverage and "volatility_today" KPI.
 
-    Coverage (per station)
+def _coverage_volatility(
+    df: pd.DataFrame,
+    cols: Dict[str, Optional[str]],
+    tzname: str,
+    last_days: int,
+) -> Tuple[float, float]:
+    """
+    Calcule la couverture 7j et la KPI "volatility_today".
+
+    Coverage (par station)
     ----------------------
-    - Window: last `last_days` days (local time).
-    - For each station:
-        * coverage = (# timestamps seen for station) / (# distinct timestamps total)
-    - Global coverage_7d_pct = mean station coverage × 100.
+    - Fenêtre : `last_days` derniers jours (temps local).
+    - Pour chaque station :
+        coverage = (# timestamps vus pour la station) / (# timestamps distincts globaux)
+    - coverage_7d_pct global = moyenne coverage stations × 100.
 
     Volatility today
     ----------------
-    - Window: current local day (00:00–24:00).
-    - For each station: std-dev of bikes over the day.
-    - volatility_today = median of these std-devs.
+    - Fenêtre : jour local courant (00:00–24:00).
+    - Pour chaque station : écart-type des bikes sur la journée.
+    - volatility_today = médiane de ces écart-types.
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Events dataframe on the full window.
+        DataFrame évènementiel sur la fenêtre.
     cols : dict
-        Column mapping.
+        Mapping de colonnes.
     tzname : str
-        Timezone name.
+        Timezone.
     last_days : int
-        Number of days used to measure coverage.
+        Nombre de jours pour la couverture.
 
-    Returns
-    -------
+    Retourne
+    --------
     (float, float)
         coverage_pct, volatility_today.
     """
@@ -515,7 +576,9 @@ def _coverage_volatility(df: pd.DataFrame, cols: Dict[str, Optional[str]], tznam
     if win.empty:
         return float("nan"), float("nan")
     total_ts = win[cols["ts"]].nunique()
-    per_station = (win.groupby(cols["station"])[cols["ts"]].nunique() / max(total_ts,1)).reindex(win[cols["station"]].unique()).fillna(0.0)
+    per_station = (
+        win.groupby(cols["station"])[cols["ts"]].nunique() / max(total_ts, 1)
+    ).reindex(win[cols["station"]].unique()).fillna(0.0)
     coverage_pct = float((per_station.mean() * 100.0).round(2))
 
     start_day, end_day = _today_bounds_local(ts_local)
@@ -523,36 +586,38 @@ def _coverage_volatility(df: pd.DataFrame, cols: Dict[str, Optional[str]], tznam
     vol = (today.groupby(cols["station"])[cols["bikes"]].std(ddof=0)).median()
     return coverage_pct, float(0.0 if pd.isna(vol) else round(vol, 2))
 
-def _today_vs_median_utc(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, ref_days: int, day_for_today_utc: datetime) -> Tuple[dict, dict]:
-    """
-    Build:
-      - today_curve: % of stations with ≥1 bike per 5-min bin
-        on the chosen UTC day (day_for_today_utc)
-      - ref_median_curve: median curve across `ref_days` past days
-        with the same weekday, per 5-min UTC bin.
 
-    Parameters
+def _today_vs_median_utc(
+    df: pd.DataFrame,
+    cols: Dict[str, Optional[str]],
+    tzname: str,
+    ref_days: int,
+    day_for_today_utc: datetime,
+) -> Tuple[dict, dict]:
+    """
+    Construit :
+      - today_curve : % de stations avec ≥1 vélo, par bin de 5 minutes,
+        pour le jour UTC choisi (day_for_today_utc)
+      - ref_median_curve : courbe médiane sur les `ref_days` jours précédents
+        ayant le même weekday, par bin UTC 5 minutes.
+
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Events dataframe on the full window.
+        DataFrame évènementiel sur la fenêtre.
     cols : dict
-        Column mapping.
+        Mapping de colonnes.
     tzname : str
-        Timezone name (not used directly here but kept for symmetry).
+        Nom de timezone (gardé pour symétrie, peu utilisé ici).
     ref_days : int
-        Number of days used to build the reference window.
+        Nombre de jours pour construire la référence.
     day_for_today_utc : datetime
-        Reference UTC day used as "today".
+        Jour UTC de référence utilisé comme "today".
 
-    Returns
-    -------
+    Retourne
+    --------
     (dict, dict)
-        today_curve_doc, ref_median_doc (both JSON-ready dicts).
-    """
-    """
-    Construit:
-      - today_curve: % stations avec ≥1 vélo par 5 min DU JOUR UTC CHOISI (day_for_today_utc)
-      - ref_median_curve: médiane sur les 'ref_days' jours précédents, même weekday, en 5 min (UTC)
+        today_curve_doc, ref_median_doc (dicts JSON-ready).
     """
     df = df.copy()
     ts_utc = pd.to_datetime(df[cols["ts"]], utc=True, errors="coerce")
@@ -566,17 +631,28 @@ def _today_vs_median_utc(df: pd.DataFrame, cols: Dict[str, Optional[str]], tznam
     start_utc = pd.Timestamp(day_for_today_utc)
     end_utc = start_utc + pd.Timedelta(days=1)
 
+    # sous-ensemble du jour "today" en UTC
     today = df[(ts_utc >= start_utc) & (ts_utc < end_utc)].copy()
 
+    # fenêtre de référence : ref_days, même weekday
     ref_start = start_utc - pd.Timedelta(days=ref_days)
-    ref = df[(ts_utc >= ref_start) & (ts_utc < start_utc) & (df["_weekday"] == start_utc.weekday())].copy()
+    ref = df[
+        (ts_utc >= ref_start)
+        & (ts_utc < start_utc)
+        & (df["_weekday"] == start_utc.weekday())
+    ].copy()
 
     def agg_part(d: pd.DataFrame) -> pd.DataFrame:
+        """
+        Agrège une sous-fenêtre en % de stations avec ≥1 vélo, par ts & hhmm.
+        """
         if d.empty:
-            return pd.DataFrame(columns=["_hhmm","pct"])
-        out = (d.groupby(["_ts_utc","_hhmm"])[["__has_bike"]]
-                 .agg(has_bike=("__has_bike","mean"), n=("__has_bike","size"))
-                 .reset_index())
+            return pd.DataFrame(columns=["_hhmm", "pct"])
+        out = (
+            d.groupby(["_ts_utc", "_hhmm"])[["__has_bike"]]
+            .agg(has_bike=("__has_bike", "mean"), n=("__has_bike", "size"))
+            .reset_index()
+        )
         out["pct"] = out["has_bike"] * 100.0
         return out
 
@@ -584,52 +660,67 @@ def _today_vs_median_utc(df: pd.DataFrame, cols: Dict[str, Optional[str]], tznam
     ref_curve = agg_part(ref)
 
     # médiane par hh:mm sur la référence (UTC)
-    bins = pd.Index(pd.date_range("00:00","23:55",freq="5min").strftime("%H:%M"))
+    bins = pd.Index(pd.date_range("00:00", "23:55", freq="5min").strftime("%H:%M"))
     ref_med = ref_curve.groupby("_hhmm")["pct"].median().reindex(bins)
 
     today_doc = {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "day_for_today_utc": start_utc.strftime("%Y-%m-%d"),
-        "points": [{"hhmm": str(h), "pct": _safe_num(v)} for h, v in (cur[["_hhmm","pct"]].itertuples(index=False, name=None) if not cur.empty else [])]
+        "points": [
+            {"hhmm": str(h), "pct": _safe_num(v)}
+            for h, v in (
+                cur[["_hhmm", "pct"]].itertuples(index=False, name=None)
+                if not cur.empty
+                else []
+            )
+        ],
     }
     ref_doc = {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "day_for_today_utc": start_utc.strftime("%Y-%m-%d"),
-        "median": {{"hhmm": str(h), "pct_median": _safe_num(v)} for h, v in ref_med.items()}
+        "median": [
+            {"hhmm": str(h), "pct_median": _safe_num(v)}
+            for h, v in ref_med.items()
+        ],
     }
     return today_doc, ref_doc
 
-def _kpis_today_vs_lags_utc(df: pd.DataFrame, cols: Dict[str, Optional[str]], day_for_today_utc: datetime) -> dict:
+
+def _kpis_today_vs_lags_utc(
+    df: pd.DataFrame,
+    cols: Dict[str, Optional[str]],
+    day_for_today_utc: datetime,
+) -> dict:
     """
-    Compute day-level KPIs for today vs J-7 / J-14 / J-21 (UTC).
+    Calcule les KPIs journalières pour today vs J-7 / J-14 / J-21 (UTC).
 
-    For each day we compute:
-      - avail_bike:  mean over the day of "% stations with ≥1 bike"
-      - avail_dock:  mean over the day of "% stations with ≥1 dock"
-      - pen:         mean over the day of "% stations in penury (bikes == 0)"
-      - sat:         mean over the day of "% stations in saturation (docks == 0)"
+    Pour chaque jour on calcule :
+      - avail_bike :  moyenne sur la journée du "% de stations avec ≥1 vélo"
+      - avail_dock :  moyenne sur la journée du "% de stations avec ≥1 borne libre"
+      - pen :         moyenne du "% de stations en pénurie (bikes == 0)"
+      - sat :         moyenne du "% de stations en saturation (docks == 0)"
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Events dataframe.
+        DataFrame évènementiel.
     cols : dict
-        Column mapping.
+        Mapping de colonnes.
     day_for_today_utc : datetime
-        Reference UTC day used as "today".
+        Jour UTC de référence pour "today".
 
-    Returns
-    -------
+    Retourne
+    --------
     dict
-        JSON document with fields "today" and "lags".
+        Document JSON avec champs "today" et "lags".
     """
     ts_utc_all = pd.to_datetime(df[cols["ts"]], utc=True, errors="coerce")
 
     def day_kpis(day_start_utc: pd.Timestamp) -> dict:
         """
-        Compute availability / penury / saturation KPIs for a single UTC day.
+        Calcule les KPIs disponibilité / pénurie / saturation pour un jour UTC.
         """
         day_end = day_start_utc + pd.Timedelta(days=1)
         d = df[(ts_utc_all >= day_start_utc) & (ts_utc_all < day_end)].copy()
@@ -637,7 +728,7 @@ def _kpis_today_vs_lags_utc(df: pd.DataFrame, cols: Dict[str, Optional[str]], da
             return {"avail_bike": np.nan, "avail_dock": np.nan, "pen": np.nan, "sat": np.nan}
 
         b = pd.to_numeric(d[cols["bikes"]], errors="coerce")
-        has_bike = (b > 0)
+        has_bike = b > 0
 
         docks = None
         if cols["docks"] and cols["docks"] in d.columns:
@@ -646,73 +737,91 @@ def _kpis_today_vs_lags_utc(df: pd.DataFrame, cols: Dict[str, Optional[str]], da
             docks = (pd.to_numeric(d[cols["capacity"]], errors="coerce") - b).clip(lower=0)
 
         has_dock = (docks > 0) if docks is not None else None
-        pen = (b == 0)
+        pen = b == 0
         sat = (docks == 0) if docks is not None else None
 
         return {
             "avail_bike": float((has_bike.mean() * 100.0).round(2)),
             "avail_dock": float((has_dock.mean() * 100.0).round(2)) if has_dock is not None else np.nan,
-            "pen":        float((pen.mean() * 100.0).round(2)),
-            "sat":        float((sat.mean() * 100.0).round(2)) if sat is not None else np.nan,
+            "pen": float((pen.mean() * 100.0).round(2)),
+            "sat": float((sat.mean() * 100.0).round(2)) if sat is not None else np.nan,
         }
 
     start_today = pd.Timestamp(day_for_today_utc)
     k_today = day_kpis(start_today)
     k_lags = {
-        "J-7":  day_kpis(start_today - pd.Timedelta(days=7)),
+        "J-7": day_kpis(start_today - pd.Timedelta(days=7)),
         "J-14": day_kpis(start_today - pd.Timedelta(days=14)),
         "J-21": day_kpis(start_today - pd.Timedelta(days=21)),
     }
 
     def pack(d: dict) -> dict:
-        """Convert all numeric values to safe floats (None for NaN/Inf)."""
+        """
+        Convertit toutes les valeurs numériques en floats "safe" (None pour NaN/Inf).
+        """
         return {k: (_safe_num(v) if v is not None else None) for k, v in d.items()}
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "day_for_today_utc": start_today.strftime("%Y-%m-%d"),
         "today": pack(k_today),
         "lags": {k: pack(v) for k, v in k_lags.items()},
     }
 
-def _stations_tension(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: str, last_days: int) -> dict:
+
+def _stations_tension(
+    df: pd.DataFrame,
+    cols: Dict[str, Optional[str]],
+    tzname: str,
+    last_days: int,
+) -> dict:
     """
-    Compute penury/saturation rates per station over the last `last_days` (local).
+    Calcule les taux de pénurie / saturation par station sur les `last_days` derniers jours (temps local).
 
-    For each station:
-      - penury_rate     = mean over the window of (bikes == 0)
-      - saturation_rate = mean over the window of (docks == 0 or capacity - bikes <= 0)
+    Pour chaque station :
+      - penury_rate     = moyenne sur la fenêtre de (bikes == 0)
+      - saturation_rate = moyenne sur la fenêtre de (docks == 0
+                          ou capacity - bikes <= 0)
 
-    This is used by the Monitoring UI to display a "tension" ranking.
+    Utilisé par l’UI Monitoring pour afficher un ranking de "tension".
 
-    Parameters
+    Paramètres
     ----------
     df : pandas.DataFrame
-        Events dataframe on the full window.
+        DataFrame évènementiel sur la fenêtre.
     cols : dict
-        Column mapping.
+        Mapping de colonnes.
     tzname : str
-        Timezone name.
+        Nom de timezone.
     last_days : int
-        Number of days for the window.
+        Nombre de jours de fenêtre.
 
-    Returns
-    -------
+    Retourne
+    --------
     dict
-        JSON document with "rows": [{station_id, penury_rate, saturation_rate}, ...].
+        Document JSON avec "rows": [{station_id, penury_rate, saturation_rate}, ...].
     """
     ts_loc = _to_local(df[cols["ts"]], tzname)
     tmax = ts_loc.max()
     start_ld = tmax - pd.Timedelta(days=last_days)
     win = df[(ts_loc >= start_ld) & (ts_loc <= tmax)].copy()
     if win.empty:
-        return {"schema_version": SCHEMA_VERSION, "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"), "rows": []}
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "rows": [],
+        }
 
-    pen_rate = win.groupby(cols["station"])[cols["bikes"]].apply(lambda s: (pd.to_numeric(s, errors="coerce") == 0).mean())
-    # saturation
+    # taux de pénurie
+    pen_rate = win.groupby(cols["station"])[cols["bikes"]].apply(
+        lambda s: (pd.to_numeric(s, errors="coerce") == 0).mean()
+    )
+    # taux de saturation
     if cols["docks"] and cols["docks"] in win.columns:
-        sat_rate = win.groupby(cols["station"])[cols["docks"]].apply(lambda s: (pd.to_numeric(s, errors="coerce") == 0).mean())
+        sat_rate = win.groupby(cols["station"])[cols["docks"]].apply(
+            lambda s: (pd.to_numeric(s, errors="coerce") == 0).mean()
+        )
     elif cols["capacity"] and cols["capacity"] in win.columns:
         cap = pd.to_numeric(win[cols["capacity"]], errors="coerce")
         bks = pd.to_numeric(win[cols["bikes"]], errors="coerce")
@@ -720,59 +829,63 @@ def _stations_tension(df: pd.DataFrame, cols: Dict[str, Optional[str]], tzname: 
     else:
         sat_rate = pd.Series(np.nan, index=pen_rate.index)
 
-    out = (pd.DataFrame({
-        "station_id": pen_rate.index.astype(str),
-        "penury_rate": pen_rate.values,
-        "saturation_rate": sat_rate.values,
-    }).sort_values(["penury_rate","saturation_rate"], ascending=False))
+    out = pd.DataFrame(
+        {
+            "station_id": pen_rate.index.astype(str),
+            "penury_rate": pen_rate.values,
+            "saturation_rate": sat_rate.values,
+        }
+    ).sort_values(["penury_rate", "saturation_rate"], ascending=False)
     rows = out.to_dict(orient="records")
     return {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
-        "rows": rows
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "rows": rows,
     }
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────────────────
+
 def main() -> int:
     """
-    CLI entrypoint for the Network Overview job (LATEST ONLY).
+    Point d’entrée CLI pour le job Network Overview (LATEST ONLY).
 
     Pipeline
     --------
-    1. Read `GCS_EXPORTS_PREFIX`, `GCS_MONITORING_PREFIX`.
-    2. Resolve effective configuration:
+    1. Lire `GCS_EXPORTS_PREFIX`, `GCS_MONITORING_PREFIX`.
+    2. Résoudre la configuration effective :
          - TZNAME (MON_TZ / OVERVIEW_TZ)
          - LAST_DAYS (MON_LAST_DAYS / OVERVIEW_LAST_DAYS)
          - REF_DAYS  (MON_REF_DAYS / OVERVIEW_REF_DAYS)
-    3. Define a UTC read window of `WINDOW_DAYS = max(LAST_DAYS, REF_DAYS, 7)`:
-         start = 00:00 of (now - (WINDOW_DAYS - 1))
+    3. Définir une fenêtre de lecture UTC `WINDOW_DAYS = max(LAST_DAYS, REF_DAYS, 7)` :
+         start = 00:00 de (now - (WINDOW_DAYS - 1))
          end   = now (UTC)
-    4. List and read all `events_YYYY-MM-DD.parquet` in the window.
-       If none are found, publish a minimal manifest and return.
-    5. Detect columns, normalize dtypes, drop invalid rows, and enforce the
-       strict UTC window.
-    6. Build the station universe over the last `WINDOW_DAYS`.
-    7. Derive `day_for_today_utc` from the last events_* file (operational day).
-    8. Compute all artifacts:
-         - snapshot KPIs + distribution + map index,
-         - coverage & volatility,
-         - today vs median curves (UTC),
-         - today vs J-7 / J-14 / J-21 day-level KPIs,
-         - per-station tension (penury/saturation).
-    9. Upload all JSON artifacts under:
+    4. Lister et lire tous les `events_YYYY-MM-DD.parquet` dans la fenêtre.
+       Si aucun, publier un manifest minimal et retourner.
+    5. Détecter les colonnes, normaliser les types, drop les lignes invalides,
+       puis appliquer la fenêtre stricte UTC.
+    6. Construire l’univers de stations sur les `WINDOW_DAYS`.
+    7. Dériver `day_for_today_utc` du dernier fichier events_* (jour opérationnel).
+    8. Calculer tous les artefacts :
+         - KPIs snapshot + distribution + index carte,
+         - couverture & volatilité,
+         - courbes today vs médiane (UTC),
+         - KPIs journalières today vs J-7 / J-14 / J-21,
+         - tension par station (pénurie/saturation).
+    9. Uploader tous les JSON sous :
          <GCS_MONITORING_PREFIX>/monitoring/network/overview/latest/
-    10. Build and upload a `manifest.json` describing:
-         - schema version, window_days, tz,
+    10. Construire et uploader `manifest.json` décrivant :
+         - version de schéma, window_days, tz,
          - sources (exports prefix),
-         - produced artifacts,
+         - artefacts produits,
          - day_for_today_utc.
 
-    Returns
-    -------
+    Retourne
+    --------
     int
-        Exit code (0 = success).
+        Code de sortie (0 = succès).
     """
     EXPORTS_PREFIX = _env("GCS_EXPORTS_PREFIX")    # gs://bucket/velib/exports
     MON_PREFIX     = _env("GCS_MONITORING_PREFIX") # gs://bucket/velib (ou .../monitoring)
@@ -786,9 +899,11 @@ def main() -> int:
     REF_DAYS  = _env_int("MON_REF_DAYS", _env_int("OVERVIEW_REF_DAYS", 28))
 
     now = datetime.now(timezone.utc)
-    # Fenêtre de lecture : max(LAST_DAYS, REF_DAYS, 7) pour tout calcul
-    WINDOW_DAYS  = max(LAST_DAYS, REF_DAYS, 7)
-    start = (now - timedelta(days=WINDOW_DAYS - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Fenêtre de lecture : max(LAST_DAYS, REF_DAYS, 7) pour couvrir tous les calculs
+    WINDOW_DAYS = max(LAST_DAYS, REF_DAYS, 7)
+    start = (now - timedelta(days=WINDOW_DAYS - 1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     print(f"[network.overview] window UTC: {start.date()} → {now.date()} (days={WINDOW_DAYS})")
 
     # 1) Lire les parquets évènementiels dans la fenêtre
@@ -803,7 +918,7 @@ def main() -> int:
         # publier un manifest minimal pour latest
         manifest = {
             "schema_version": SCHEMA_VERSION,
-            "generated_at": now.isoformat().replace("+00:00","Z"),
+            "generated_at": now.isoformat().replace("+00:00", "Z"),
             "latest_prefix": base_latest,
             "window_days": int(LAST_DAYS),
             "tz": TZNAME,
@@ -834,13 +949,14 @@ def main() -> int:
     # 2) Colonnes & typage
     cols = _detect_columns(ev)
     for c in [cols["ts"], cols["station"]]:
-        if c is None: raise RuntimeError("colonnes minimales manquantes")
+        if c is None:
+            raise RuntimeError("colonnes minimales manquantes")
 
-    # TZ-AWARE UTC parsing
+    # Parsing UTC tz-aware
     ev[cols["ts"]] = pd.to_datetime(ev[cols["ts"]], utc=True, errors="coerce")
     ev[cols["station"]] = ev[cols["station"]].astype("string")
 
-    # numeric columns
+    # colonnes numériques
     for c in [cols["bikes"], cols["capacity"], cols["docks"], cols["lat"], cols["lon"]]:
         if c and c in ev.columns:
             ev[c] = pd.to_numeric(ev[c], errors="coerce")
@@ -850,26 +966,33 @@ def main() -> int:
     ev = ev.dropna(subset=[cols["ts"], cols["station"]]).copy()
 
     # fenêtre stricte (UTC aware)
-    ev = ev[(ev[cols["ts"]] >= pd.Timestamp(start)) &
-            (ev[cols["ts"]] <= pd.Timestamp(now))].copy()
+    ev = ev[
+        (ev[cols["ts"]] >= pd.Timestamp(start))
+        & (ev[cols["ts"]] <= pd.Timestamp(now))
+    ].copy()
 
-    # 3) Univers de stations (sur la fenêtre)
+    # 3) Univers de stations (sur WINDOW_DAYS)
     ts_loc_all = _to_local(ev[cols["ts"]], TZNAME)
     tmax = ts_loc_all.max()
     uni_start = tmax - pd.Timedelta(days=WINDOW_DAYS)
     station_universe = (
         ev.loc[(ts_loc_all >= uni_start) & (ts_loc_all <= tmax), cols["station"]]
-        .astype(str).dropna().unique().tolist()
+        .astype(str)
+        .dropna()
+        .unique()
+        .tolist()
     )
 
-    # 4) Calculs clés
-    # Jour opérationnel basé sur le DERNIER fichier events_* disponible
+    # 4) Jour opérationnel basé sur le DERNIER fichier events_* disponible
     m = re.search(r"events_(\d{4}-\d{2}-\d{2})\.parquet$", blobs[-1].name)
     if not m:
         raise RuntimeError("Impossible de déterminer la date du dernier fichier events")
     day_for_today_utc = datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    print(f"[network.overview] day_for_today_utc auto-detected → {day_for_today_utc.date()} (from last events_*.parquet)")
+    print(
+        f"[network.overview] day_for_today_utc auto-detected → {day_for_today_utc.date()} (from last events_*.parquet)"
+    )
 
+    # 5) Calculs principaux
     kpis, dist, map_df = _compute_snapshot(ev, cols, TZNAME, station_universe)
     cov, vol = _coverage_volatility(ev, cols, TZNAME, LAST_DAYS)
     kpis["coverage_pct"] = cov
@@ -879,27 +1002,32 @@ def main() -> int:
     kpis["day_for_today_utc"] = day_for_today_utc.strftime("%Y-%m-%d")
 
     # Courbes & comparatifs en UTC (jour choisi)
-    today_curve_doc, ref_median_doc = _today_vs_median_utc(ev, cols, TZNAME, REF_DAYS, day_for_today_utc)
+    today_curve_doc, ref_median_doc = _today_vs_median_utc(
+        ev, cols, TZNAME, REF_DAYS, day_for_today_utc
+    )
     kpi_bars_doc = _kpis_today_vs_lags_utc(ev, cols, day_for_today_utc)
     tension_doc = _stations_tension(ev, cols, TZNAME, LAST_DAYS)
 
-    # 5) Uploads (LATEST only + manifest)
-    _upload_json_gs(kpis,                           f"{base_latest}/kpis.json")
+    # 6) Uploads (LATEST only + manifest)
+    _upload_json_gs(kpis, f"{base_latest}/kpis.json")
     _upload_json_gs(dist.to_dict(orient="records"), f"{base_latest}/snapshot_distribution.json")
-    _upload_json_gs(today_curve_doc,                f"{base_latest}/today_curve.json")
-    _upload_json_gs(ref_median_doc,                 f"{base_latest}/ref_median_curve.json")
-    _upload_json_gs(kpi_bars_doc,                   f"{base_latest}/kpis_today_vs_lags.json")
-    _upload_json_gs({
-        "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
-        "rows": map_df.to_dict(orient="records"),
-    }, f"{base_latest}/snapshot_map.json")
-    _upload_json_gs(tension_doc,                    f"{base_latest}/stations_tension.json")
+    _upload_json_gs(today_curve_doc, f"{base_latest}/today_curve.json")
+    _upload_json_gs(ref_median_doc, f"{base_latest}/ref_median_curve.json")
+    _upload_json_gs(kpi_bars_doc, f"{base_latest}/kpis_today_vs_lags.json")
+    _upload_json_gs(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "rows": map_df.to_dict(orient="records"),
+        },
+        f"{base_latest}/snapshot_map.json",
+    )
+    _upload_json_gs(tension_doc, f"{base_latest}/stations_tension.json")
 
     # Manifest top-level (pour la page)
     manifest = {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "latest_prefix": base_latest,
         "window_days": int(LAST_DAYS),
         "tz": TZNAME,
@@ -919,6 +1047,7 @@ def main() -> int:
 
     print("[network.overview] done (latest only)")
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

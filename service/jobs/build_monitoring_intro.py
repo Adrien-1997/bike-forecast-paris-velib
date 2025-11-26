@@ -50,27 +50,28 @@
 # =============================================================================
 
 """
-Monitoring Intro job for Vélib’ Forecast.
+Job Monitoring Intro pour Vélib’ Forecast.
 
-This job aggregates a **compact set of status & KPI signals** for the
-Monitoring home page header, by reading already-produced monitoring artifacts:
+Ce job agrège un **ensemble compact de statuts et de signaux KPI** pour
+l’en-tête de la page d’accueil Monitoring, en lisant les artefacts de
+monitoring déjà produits :
 
-- Network overview KPIs (active stations…)
-- Data health KPIs (7-day coverage)
-- Data freshness (stations & weather)
-- Data drift summary (PSI)
-- Model metadata (h15 / h60 versions)
-- Latest batch forecast files for h15 and h60
+- KPIs overview réseau (stations actives…)
+- KPIs de santé des données (coverage sur 7 jours)
+- Fraîcheur des données (stations & météo)
+- Résumé de data drift (PSI)
+- Métadonnées des modèles (versions h15 / h60)
+- Derniers fichiers de batch forecasts pour h15 et h60
 
-It produces two JSON documents under:
+Il produit deux documents JSON sous :
 
 - `<GCS_MONITORING_PREFIX>/monitoring/intro/latest/intro.json`
-- `<GCS_MONITORING_PREFIX>/monitoring/intro/latest/{ISO}.json`  (snapshot)
+- `<GCS_MONITORING_PREFIX>/monitoring/intro/latest/{ISO}.json`  (snapshot daté)
 
-The JSON is:
-- resilient to missing inputs (any source can be absent),
-- sanitized for NaN/Inf (converted to null),
-- structured for direct consumption by the Monitoring UI.
+Le JSON est :
+- résilient aux entrées manquantes (n’importe quelle source peut être absente),
+- nettoyé des NaN/Inf (convertis en null),
+- structuré pour être consommé directement par l’UI Monitoring.
 """
 
 from __future__ import annotations
@@ -87,86 +88,89 @@ TZ = "Europe/Paris"
 
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     """
-    Read an environment variable with a default.
+    Lire une variable d’environnement avec valeur par défaut.
 
-    Parameters
+    Paramètres
     ----------
     name : str
-        Environment variable name.
+        Nom de la variable d’environnement.
     default : str | None
-        Fallback value returned when the variable is unset or empty.
+        Valeur de repli retournée si la variable est absente ou vide.
 
-    Returns
-    -------
+    Retour
+    ------
     str | None
-        Raw value from environment or the default.
+        Valeur brute de l’environnement ou valeur par défaut.
     """
     v = os.environ.get(name)
     return v if (v is not None and v != "") else default
 
+
 def _ensure_mon_base(mon_prefix: str) -> str:
     """
-    Ensure a base GCS prefix ends with `/monitoring`.
+    S’assurer qu’un préfixe GCS se termine par `/monitoring`.
 
-    Examples
+    Exemples
     --------
     - `gs://bucket/velib`      → `gs://bucket/velib/monitoring`
-    - `gs://bucket/velib/monitoring` (unchanged)
+    - `gs://bucket/velib/monitoring` (inchangé)
 
-    Parameters
+    Paramètres
     ----------
     mon_prefix : str
-        Base monitoring prefix from env (GCS_MONITORING_PREFIX).
+        Préfixe racine de monitoring (GCS_MONITORING_PREFIX).
 
-    Returns
-    -------
+    Retour
+    ------
     str
-        Prefix guaranteed to end with `/monitoring`.
+        Préfixe garanti de se terminer par `/monitoring`.
     """
     base = mon_prefix.rstrip("/")
     if not base.endswith("/monitoring"):
         base = base + "/monitoring"
     return base
 
+
 def _split_gs(gs: str):
     """
-    Split a GCS URI `gs://bucket/path` into (bucket, key).
+    Découper une URI GCS `gs://bucket/path` en (bucket, key).
 
-    Parameters
+    Paramètres
     ----------
     gs : str
-        GCS URI.
+        URI GCS.
 
-    Returns
-    -------
-    (str, str)
-        Bucket name, object key (without trailing slash).
-
-    Raises
+    Retour
     ------
+    (str, str)
+        Nom du bucket, clé objet (sans slash final).
+
+    Lève
+    ----
     AssertionError
-        If the URI does not start with `gs://`.
+        Si l’URI ne commence pas par `gs://`.
     """
     assert gs.startswith("gs://"), f"bad GCS URI: {gs}"
     b, k = gs[5:].split("/", 1)
     return b, k
 
+
 def _read_json_gcs(client: storage.Client, gs: Optional[str]) -> Optional[Dict[str, Any]]:
     """
-    Read and parse a JSON object from GCS.
+    Lire et parser un objet JSON depuis GCS.
 
-    Parameters
+    Paramètres
     ----------
     client : google.cloud.storage.Client
-        GCS client instance.
+        Instance de client GCS.
     gs : str | None
-        GCS URI of the JSON file.
+        URI GCS du fichier JSON.
 
-    Returns
-    -------
+    Retour
+    ------
     dict | None
-        Parsed JSON document, or None if the URI is missing/invalid or
-        any I/O / parsing error occurs (best-effort behavior).
+        Document JSON parsé, ou None si l’URI est absente/invalide ou si
+        une erreur d’I/O / parsing survient (comportement best-effort).
     """
     if not gs or not gs.startswith("gs://"):
         return None
@@ -177,17 +181,18 @@ def _read_json_gcs(client: storage.Client, gs: Optional[str]) -> Optional[Dict[s
     except Exception:
         return None
 
+
 def _san(o):
     """
-    Recursively sanitize values for JSON serialization.
+    Nettoyer récursivement les valeurs pour la sérialisation JSON.
 
-    - numpy scalars → native Python types,
-    - NaN / Inf     → None,
-    - pandas NA     → None,
-    - other types   → left unchanged.
+    - scalaires numpy → types natifs Python,
+    - NaN / Inf       → None,
+    - pandas NA       → None,
+    - autres types    → laissés intacts.
 
-    This ensures that the final JSON is "safe" and will not contain
-    invalid numeric values for the UI.
+    Cela garantit que le JSON final est "safe" et ne contient pas de valeurs
+    numériques invalides pour l’UI.
     """
     if isinstance(o, dict):
         return {k: _san(v) for k, v in o.items()}
@@ -206,26 +211,27 @@ def _san(o):
         if pd.isna(o):
             return None
     except Exception:
-        # If pandas is not available or `isna` fails, we fall back to raw value.
+        # Si pandas n’est pas dispo ou si isna échoue, on renvoie la valeur brute.
         pass
     return o
 
+
 def _write_json_gcs(client: storage.Client, gs: str, doc: Dict[str, Any]) -> None:
     """
-    Serialize a document to JSON and upload it to GCS with safe defaults.
+    Sérialiser un document en JSON et l’uploader sur GCS avec des options sûres.
 
-    - `cache_control` is set to "no-store" (always fresh for UI).
-    - Content type is `application/json; charset=utf-8`.
-    - Document is sanitized to remove NaN/Inf.
+    - `cache_control` est positionné à "no-store" (toujours frais pour l’UI).
+    - Le content-type est `application/json; charset=utf-8`.
+    - Le document est nettoyé pour retirer NaN/Inf.
 
-    Parameters
+    Paramètres
     ----------
     client : google.cloud.storage.Client
-        GCS client instance.
+        Instance de client GCS.
     gs : str
-        Target GCS URI.
+        URI GCS de destination.
     doc : dict
-        JSON-serializable payload (will be sanitized).
+        Payload JSON-sérialisable (sera nettoyé).
     """
     b, k = _split_gs(gs)
     blob = client.bucket(b).blob(k)
@@ -237,19 +243,20 @@ def _write_json_gcs(client: storage.Client, gs: str, doc: Dict[str, Any]) -> Non
         content_type=blob.content_type,
     )
 
+
 def _minutes_since(iso: Optional[str]) -> Optional[float]:
     """
-    Compute the age (in minutes) since a given ISO8601 timestamp.
+    Calculer l’âge (en minutes) depuis un timestamp ISO8601 donné.
 
-    Parameters
+    Paramètres
     ----------
     iso : str | None
-        ISO timestamp, optionally with trailing 'Z'.
+        Timestamp ISO, éventuellement suffixé par 'Z'.
 
-    Returns
-    -------
+    Retour
+    ------
     float | None
-        Age in minutes (>= 0) or None if parsing fails.
+        Âge en minutes (>= 0) ou None si le parsing échoue.
     """
     if not iso:
         return None
@@ -259,35 +266,35 @@ def _minutes_since(iso: Optional[str]) -> Optional[float]:
     except Exception:
         return None
 
+
 def _led_from_value(x: Optional[float], ok: float, warn: float, reverse: bool = False) -> str:
     """
-    Map a numeric value to a simple LED status ("ok", "warn", "down").
+    Mapper une valeur numérique vers un statut LED simple ("ok", "warn", "down").
 
-    Behavior
-    --------
-    - If x is None/non-numeric → "down".
-    - If reverse is False:
+    Comportement
+    ------------
+    - Si x est None/non-numérique → "down".
+    - Si reverse est False :
         * x <= ok   → "ok"
         * x <= warn → "warn"
-        * else      → "down"
-    - If reverse is True, the comparison is done on -x.
+        * sinon     → "down"
+    - Si reverse est True, la comparaison se fait sur -x.
 
-    Parameters
+    Paramètres
     ----------
     x : float | None
-        Value to evaluate (e.g. age in minutes).
+        Valeur à évaluer (ex. âge en minutes).
     ok : float
-        Threshold below which we consider the status "ok".
+        Seuil en dessous duquel le statut est "ok".
     warn : float
-        Threshold below which we consider the status "warn".
-    reverse : bool, default False
-        If True, status is based on -x instead (useful for scores where
-        a higher value is "better").
+        Seuil en dessous duquel le statut est "warn".
+    reverse : bool, défaut False
+        Si True, on raisonne sur -x (utile pour des scores où "plus grand" = mieux).
 
-    Returns
-    -------
+    Retour
+    ------
     str
-        One of "ok", "warn", "down".
+        L’un de "ok", "warn", "down".
     """
     if x is None or not isinstance(x, (int, float)):
         return "down"
@@ -298,25 +305,26 @@ def _led_from_value(x: Optional[float], ok: float, warn: float, reverse: bool = 
         return "warn"
     return "down"
 
+
 def _led_from_psi(psi: Optional[float]) -> str:
     """
-    LED logic for PSI-based data drift status.
+    Logique LED pour le statut de data drift basé sur le PSI.
 
-    Thresholds
-    ----------
+    Seuils
+    ------
     - PSI < 0.10 → "ok"
     - PSI < 0.20 → "warn"
-    - else       → "down"
+    - sinon      → "down"
 
-    Parameters
+    Paramètres
     ----------
     psi : float | None
-        Population Stability Index value.
+        Valeur du Population Stability Index.
 
-    Returns
-    -------
+    Retour
+    ------
     str
-        "ok", "warn" or "down".
+        "ok", "warn" ou "down".
     """
     """Seuils drift (PSI): <0.10 ok, <0.20 warn, sinon down."""
     if psi is None or not isinstance(psi, (int, float)):
@@ -331,34 +339,34 @@ def _led_from_psi(psi: Optional[float]) -> str:
 
 def _parse_forecast_doc(doc: Optional[Dict[str, Any]]) -> Tuple[Optional[str], Optional[int]]:
     """
-    Parse a forecast JSON document and extract basic metadata.
+    Parser un document JSON de forecast et extraire les métadonnées de base.
 
-    Accepted shapes
-    ---------------
-    A) Bundle document:
+    Formes acceptées
+    ----------------
+    A) Document "bundle" :
        {
          "generated_at": "...Z",
          "horizon_min": 15,
          "data": [ ... ]
        }
 
-    B) Variant:
+    B) Variante :
        {
          "generated_at": "...Z",
          "predictions": [ ... ]
        }
 
-    C) Legacy:
+    C) Legacy :
        [
          {...},
          {...}
        ]
 
-    Returns
-    -------
+    Retour
+    ------
     (str | None, int | None)
         Tuple (generated_at_iso, rows_count).
-        Missing values are returned as None.
+        Les valeurs manquantes sont renvoyées à None.
     """
     """
     Formes acceptées :
@@ -384,47 +392,47 @@ def _parse_forecast_doc(doc: Optional[Dict[str, Any]]) -> Tuple[Optional[str], O
 
 def main() -> int:
     """
-    CLI entrypoint for the Monitoring Intro job.
+    Entrypoint CLI pour le job Monitoring Intro.
 
-    High-level pipeline
+    Pipeline high-level
     -------------------
-    1. Read `GCS_MONITORING_PREFIX` and resolve the base monitoring prefix.
-    2. Configure LED thresholds (forecast age, weather freshness).
-    3. Resolve URIs of all upstream monitoring artifacts:
-       - overview KPIs
-       - data health KPIs
-       - data freshness (stations + weather)
-       - drift summary
-       - models h15/h60
-       - latest forecast bundles h15/h60
-    4. Read these JSON documents from GCS in a **best-effort** way:
-       missing files simply yield empty dicts.
-    5. Aggregate key KPIs:
-       - active stations
-       - p95 freshness for stations
-       - weather freshness (minutes)
-       - coverage over 7 days
-       - global PSI and top drift feature
-       - model version strings for h15/h60
-       - forecast age and row counts
-    6. Compute LED statuses:
-       - `api_stations` (active vs 0)
-       - `batch_forecast_h15`, `batch_forecast_h60`, global `batch_forecast`
+    1. Lire `GCS_MONITORING_PREFIX` et résoudre le préfixe de base monitoring.
+    2. Configurer les seuils LED (âge forecast, fraîcheur météo).
+    3. Résoudre les URIs de toutes les sources amont :
+       - KPIs overview réseau
+       - KPIs de santé des données
+       - Fraîcheur des données (stations + météo)
+       - Résumé de drift
+       - Modèles h15/h60
+       - Derniers bundles de forecast h15/h60
+    4. Lire ces documents JSON GCS en mode **best-effort** :
+       fichiers manquants → dicts vides.
+    5. Agréger les KPIs clés :
+       - stations actives
+       - p95 de fraîcheur pour les stations
+       - fraîcheur météo (minutes)
+       - couverture sur 7 jours
+       - PSI global et top feature de drift
+       - versions de modèles h15/h60
+       - âge et volume des forecasts
+    6. Calculer les statuts LED :
+       - `api_stations` (actives > 0)
+       - `batch_forecast_h15`, `batch_forecast_h60`, `batch_forecast` global
        - `weather_provider`
        - `data_drift` (via PSI)
-    7. Build a compact `intro.json` document with:
-       - `kpis` (numbers for top-level cards),
-       - `statuses` (detailed LED blocks),
-       - `activity` (small summary list),
-       - `sources` (URIs used).
-    8. Write:
-       - `intro/latest/intro.json` (moving alias),
-       - `intro/latest/{ISO}.json` (dated snapshot).
+    7. Construire un document `intro.json` compact avec :
+       - `kpis` (chiffres pour les cartes top-level),
+       - `statuses` (blocs LED détaillés),
+       - `activity` (liste de petits résumés),
+       - `sources` (URIs utilisées).
+    8. Écrire :
+       - `intro/latest/intro.json` (alias mouvant),
+       - `intro/latest/{ISO}.json` (snapshot daté).
 
-    Returns
-    -------
+    Retour
+    ------
     int
-        Exit code (0 on success).
+        Code de sortie (0 en cas de succès).
     """
     MON_PREFIX = _env("GCS_MONITORING_PREFIX")
     if not (MON_PREFIX and MON_PREFIX.startswith("gs://")):
@@ -437,7 +445,7 @@ def main() -> int:
     LED_FR_OK   = float(_env("INTRO_LED_FRESH_OK_MIN", "5"))    # utilisé pour MÉTÉO
     LED_FR_WARN = float(_env("INTRO_LED_FRESH_WARN_MIN", "12"))
 
-    # URIs par défaut (peuvent être surchargées par ENV)
+    # URIs par défaut (surchageables via ENV)
     overview_kpis_uri = _env("MON_OVERVIEW_KPIS_URI", f"{mon_base}/network/overview/latest/kpis.json")
     health_kpis_uri   = _env("MON_HEALTH_KPIS_URI",   f"{mon_base}/data/health/latest/kpis.json")
     freshness_uri     = _env("MON_FRESHNESS_URI",     f"{mon_base}/data/freshness/latest.json")  # NEW
@@ -463,7 +471,7 @@ def main() -> int:
     fc15_doc   = _read_json_gcs(client, fc_h15_uri) or {}
     fc60_doc   = _read_json_gcs(client, fc_h60_uri) or {}
 
-    # Modèles (fallbacks lisibles)
+    # Modèles (fallback lisible)
     model_version_15 = model15.get("version") or model15.get("model_version") or "h15"
     model_version_60 = model60.get("version") or model60.get("model_version") or "h60"
     model_versions = f"{model_version_15} / {model_version_60}"
@@ -496,7 +504,7 @@ def main() -> int:
     except Exception:
         met_fresh = None
 
-    # Couverture sur 7 jours — on garde le health KPI comme source (si dispo)
+    # Couverture sur 7 jours — on s’appuie sur health KPI comme source (si dispo)
     coverage_7d = health.get("coverage_global_pct")
 
     psi_global      = drift.get("psi_global")
@@ -505,7 +513,7 @@ def main() -> int:
     ts_drift        = drift.get("generated_at")
 
     ts_overview = overview.get("generated_at")
-    ts_health   = health.get("generated_at")       # utilisé seulement comme "source_generated_at" pour coverage
+    ts_health   = health.get("generated_at")       # seulement pour "source_generated_at" de coverage
     ts_fresh    = freshness.get("now_utc") or freshness.get("generated_at")
 
     # LEDs
@@ -601,6 +609,7 @@ def main() -> int:
     _write_json_gcs(client, dated_uri,  doc)
     print(f"[intro] wrote {latest_uri} and {dated_uri}")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
