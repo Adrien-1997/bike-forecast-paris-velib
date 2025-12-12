@@ -1,4 +1,4 @@
-# api/routes/stations.py
+# api/routes/weather.py
 
 """Weather endpoints for Vélib’ Forecast.
 

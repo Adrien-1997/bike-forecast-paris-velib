@@ -29,22 +29,10 @@ logs/
 *.env
 *.env.*
 
-# --- Données lourdes (locales) ---
-data/
-exports/
-models/
 
-# --- Bases / artefacts ---
-*.duckdb
-*.db
-*.sqlite
-*.sqlite3
 
 # --- Notebooks ---
 *.ipynb_checkpoints/
-
-# --- Site statique local ---
-site/
 
 # --- Exports data (souvent volumineux) ---
 *.parquet
@@ -65,10 +53,10 @@ ui/.parcel-cache/
 ui/next-env.d.ts
 
 # --- Apps API (FastAPI) ---
-apps/api/node_modules/
-apps/api/.venv/
-apps/api/.pytest_cache/
-apps/api/__pycache__/
+api/node_modules/
+api/.venv/
+api/.pytest_cache/
+api/__pycache__/
 
 # --- Cloud Build / Docker (ne PAS ignorer les Dockerfile & YAML) ---
 # (pas de règle ici, juste un rappel)
@@ -79,3 +67,4 @@ bucket-lifecycle.json
 .netlify
 
 infra/
+maintenance/

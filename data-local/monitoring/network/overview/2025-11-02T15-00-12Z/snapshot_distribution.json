@@ -1,0 +1,1 @@
+[{"metric":"bike_avail","count":1439,"total_active":1495,"pct":96.25},{"metric":"dock_avail","count":1471,"total_active":1495,"pct":98.39},{"metric":"penury","count":56,"total_active":1495,"pct":3.75},{"metric":"saturation","count":24,"total_active":1495,"pct":1.61}]

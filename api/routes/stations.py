@@ -31,11 +31,10 @@ The endpoint is deliberately tolerant:
 
 from __future__ import annotations
 
-import io
-import os
 import json
 import math
-from typing import List, Optional, Tuple
+import os
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -57,8 +56,8 @@ router = APIRouter(tags=["stations"])
 def _json_safe_df(df: pd.DataFrame) -> list[dict]:
     """Convert a DataFrame to a list of JSON-safe records.
 
-    Behaviour:
-    ----------
+    Behaviour
+    ---------
     - If `df` is None or empty → return `[]`.
     - Datetime columns:
         * converted to UTC,
@@ -113,12 +112,13 @@ def _json_safe_df(df: pd.DataFrame) -> list[dict]:
 # ───────────────────────── GCS / Serving helpers ─────────────────────────
 def _serving_forecast_prefix() -> str:
     """
-    Source de vérité pour le bundle latest_forecast.json.
+    Source of truth for the `latest_forecast.json` bundle.
 
-    Priority:
-    ---------
-      1) ENV `SERVING_FORECAST_PREFIX`
-      2) `settings.SERVING_FORECAST_PREFIX`
+    Priority
+    --------
+    1) ENV `SERVING_FORECAST_PREFIX`
+    2) `settings.SERVING_FORECAST_PREFIX`
+    3) `settings.GCS_SERVING_PREFIX` (legacy)
 
     Returns
     -------
@@ -128,7 +128,13 @@ def _serving_forecast_prefix() -> str:
     env_val = (os.environ.get("SERVING_FORECAST_PREFIX") or "").strip()
     if env_val:
         return env_val.rstrip("/")
-    return (getattr(settings, "SERVING_FORECAST_PREFIX", "") or "").rstrip("/")
+
+    base = (
+        getattr(settings, "SERVING_FORECAST_PREFIX", None)
+        or getattr(settings, "GCS_SERVING_PREFIX", "")
+        or ""
+    )
+    return base.rstrip("/")
 
 
 def _bundle_uri() -> str:
@@ -141,7 +147,7 @@ def _bundle_uri() -> str:
         - `"latest_forecast.json"` (local file) when no prefix is available.
     """
     base = _serving_forecast_prefix()
-    # si base est vide → on tentera de lire un chemin local "latest_forecast.json"
+    # if base is empty → try local file "latest_forecast.json"
     return f"{base}/latest_forecast.json" if base else "latest_forecast.json"
 
 
@@ -172,8 +178,8 @@ def _read_forecast_bundle_latest() -> dict:
     """
     Read `latest_forecast.json` bundle and return it as a dict.
 
-    Expected shape (minimal example):
-    ---------------------------------
+    Expected shape (minimal example)
+    --------------------------------
     {
       "generated_at": "...",
       "horizons": [15, 60],
@@ -193,7 +199,7 @@ def _read_forecast_bundle_latest() -> dict:
     """
     uri = _bundle_uri()
 
-    # Lecture locale si pas de GCS disponible ou si l'URI n'est pas gs://
+    # Local read if no GCS available or if URI is not gs://
     if not uri.startswith("gs://") or storage is None:
         try:
             with open(uri, "r", encoding="utf-8") as f:
@@ -201,7 +207,7 @@ def _read_forecast_bundle_latest() -> dict:
         except Exception:
             return {}
 
-    # Lecture GCS
+    # GCS read
     try:
         bkt, key = _split_gs(uri)
         cli = storage.Client()
@@ -237,20 +243,20 @@ def _to_int_series(s: pd.Series, default: int = 0) -> pd.Series:
 @router.get("/stations")
 def list_stations():
     """
-    Liste minimale pour la carte :
+    Minimal list for the map:
       station_id (string), name, lat, lon, capacity,
       num_bikes_available, num_docks_available.
 
-    Data sources (priority):
-    ------------------------
-      1) **Live snapshot** (GBFS via `fetch_live_snapshot()`):
-         - returns the freshest information,
-         - includes current bikes and capacity per station.
+    Data sources (priority)
+    -----------------------
+    1) **Live snapshot** (GBFS via `fetch_live_snapshot()`):
+       - returns the freshest information,
+       - includes current bikes and capacity per station.
 
-      2) **Fallback**: `latest_forecast.json` bundle:
-         - used when live snapshot is unavailable or fails,
-         - no "live bikes" count (bikes = 0 by construction),
-         - still exposes `station_id` + `capacity` to build the map.
+    2) **Fallback**: `latest_forecast.json` bundle:
+       - used when live snapshot is unavailable or fails,
+       - no "live bikes" count (bikes = 0 by construction),
+       - still exposes `station_id` + `capacity` to build the map.
 
     Returns
     -------
@@ -258,7 +264,7 @@ def list_stations():
         JSON-safe list of station records, as produced by `_json_safe_df`.
         Returns `[]` on any failure / missing data.
     """
-    # 1) Source principale : live
+    # 1) Primary source: live
     try:
         live = fetch_live_snapshot()
     except Exception as e:
@@ -268,7 +274,7 @@ def list_stations():
     if live is not None and not live.empty:
         df = live.copy()
 
-        # Clé canonique station_id (string)
+        # Canonical station_id (string)
         if "station_id" in df.columns:
             station_id = df["station_id"].astype("string")
         elif "stationcode" in df.columns:
@@ -276,11 +282,13 @@ def list_stations():
         elif "id" in df.columns:
             station_id = df["id"].astype("string")
         else:
-            # pas de clé exploitable → liste vide
+            # no usable key → empty list
             return []
 
         capacity = _to_int_series(df.get("capacity", pd.Series([0] * len(df))))
-        bikes = _to_int_series(df.get("bikes", df.get("num_bikes_available", pd.Series([0] * len(df)))))
+        bikes = _to_int_series(
+            df.get("bikes", df.get("num_bikes_available", pd.Series([0] * len(df))))
+        )
 
         out = pd.DataFrame(
             {
@@ -295,7 +303,7 @@ def list_stations():
         ).drop_duplicates(subset=["station_id"], keep="last")
         return _json_safe_df(out)
 
-    # 2) Fallback : bundle forecast JSON
+    # 2) Fallback: forecast bundle JSON
     try:
         bundle = _read_forecast_bundle_latest()
     except Exception as e:
@@ -305,15 +313,18 @@ def list_stations():
     if not bundle or "data" not in bundle:
         return []
 
-    # Utilise l’horizon 15 si présent, sinon n’importe lequel non vide
+    # Use horizon 15 if present, otherwise any non-empty horizon
     data = bundle.get("data", {})
-    rows = data.get("15") or next((v for k, v in data.items() if isinstance(v, list) and v), [])
+    rows = data.get("15") or next(
+        (v for _, v in data.items() if isinstance(v, list) and v),
+        [],
+    )
     if not rows:
         return []
 
     fc = pd.DataFrame(rows)
 
-    # station_id (string) depuis station_id OU stationcode
+    # station_id (string) from station_id OR stationcode
     if "station_id" in fc.columns:
         station_id = fc["station_id"].astype("string")
     elif "stationcode" in fc.columns:
@@ -326,7 +337,7 @@ def list_stations():
     else:
         capacity = _to_int_series(fc.get("capacity_bin", pd.Series([0] * len(fc))))
 
-    bikes = pd.Series([0] * len(fc), dtype=int)  # pas de current bikes dans le bundle forecast
+    bikes = pd.Series([0] * len(fc), dtype=int)  # no live bikes in forecast bundle
 
     out = pd.DataFrame(
         {

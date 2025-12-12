@@ -12,14 +12,17 @@ This route exposes lightweight "badge" information consumed by the UI, such as:
   - `freshness_min`: age of the forecast in minutes.
 
 The implementation is deliberately defensive:
-- GCS failures result in empty freshness,
+- backend (local vs GCS) is selected via STORAGE_BACKEND,
+- failures (file missing, GCS error, etc.) result in empty freshness,
 - live snapshot failures result in empty weather,
 - the route always returns a 200 with `None` for missing parts.
 """
 
 from __future__ import annotations
 
+import os
 import json
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -29,16 +32,37 @@ from fastapi import APIRouter, Response
 
 from core.settings import settings
 
+# google.cloud.storage is optional: only used when STORAGE_BACKEND != "local"
 try:
     from google.cloud import storage  # type: ignore
 except Exception:  # pragma: no cover
-    # Optional dependency: in local/dev without GCS, storage may be missing.
     storage = None  # type: ignore
 
 router = APIRouter(prefix="/badges", tags=["badges"])
 
 
-# ───────────────────────────── Helpers: config / URIs ─────────────────────────────
+# ───────────────────────────── Backend selection (local vs GCS) ─────────────────────────────
+
+STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "gcs").lower()
+USE_LOCAL = STORAGE_BACKEND == "local"
+
+# Repo root ≈ <repo>/
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DATA_ROOT = Path(os.getenv("DATA_ROOT", REPO_ROOT / "data"))
+
+# GCS prefix used to map to local files when STORAGE_BACKEND=local
+# Example:
+#   gs://velib-forecast-472820_cloudbuild/velib/serving/forecast/latest_forecast.json
+#   → DATA_ROOT / "serving/forecast/latest_forecast.json"
+GCS_LOCAL_ROOT_PREFIX = (
+    os.getenv(
+        "GCS_LOCAL_ROOT_PREFIX",
+        "gs://velib-forecast-472820_cloudbuild/velib/",
+    ).rstrip("/")
+    + "/"
+)
+
+
 def _forecast_serving_prefix() -> str:
     """Return the forecast serving prefix from settings (normalized).
 
@@ -48,34 +72,60 @@ def _forecast_serving_prefix() -> str:
 
     Returns an empty string if not configured.
     """
-    p = getattr(settings, "SERVING_FORECAST_PREFIX", None) or getattr(settings, "serving_forecast_prefix", None)
+    p = getattr(settings, "SERVING_FORECAST_PREFIX", None) or getattr(
+        settings, "serving_forecast_prefix", None
+    )
     return (p or "").rstrip("/")
 
 
 def _bundle_uri() -> str:
-    """Build the GCS URI for the forecast bundle `latest_forecast.json`."""
+    """Build the URI for the forecast bundle `latest_forecast.json`.
+
+    This is always expressed as a GCS-style URI (gs://...), even when
+    running in local mode; in local mode, it will be mapped to DATA_ROOT.
+    """
     base = _forecast_serving_prefix()
+    if not base:
+        return ""
     return f"{base}/latest_forecast.json"
 
 
-# ───────────────────────────── Helpers: GCS read ─────────────────────────────
-def _read_json_from_gcs(uri: str) -> Optional[dict]:
-    """Read a JSON document from GCS and return it as a dict.
+# ───────────────────────────── Helpers: backend read (local or GCS) ─────────────────────────────
+
+def _read_json_any(uri: str) -> Optional[dict]:
+    """Read a JSON document from either local disk or GCS, depending on STORAGE_BACKEND.
 
     Parameters
     ----------
     uri : str
-        GCS URI, e.g. "gs://bucket/path/to/latest_forecast.json".
+        Logical URI, typically a `gs://...` pointing under the velib root.
 
     Returns
     -------
     dict | None
         Parsed JSON dict, or None if:
-        - `google-cloud-storage` is not available,
-        - the URI is not a `gs://` URI,
-        - the blob does not exist,
+        - backend is misconfigured,
+        - the file/blob does not exist,
         - or any error occurs during download / parsing.
     """
+    if not uri:
+        return None
+
+    # Local backend: map gs://... under GCS_LOCAL_ROOT_PREFIX → DATA_ROOT/...
+    if USE_LOCAL:
+        if not uri.startswith(GCS_LOCAL_ROOT_PREFIX):
+            # Not a velib URI we know how to map → treat as not found
+            return None
+        rel = uri[len(GCS_LOCAL_ROOT_PREFIX):]
+        path = DATA_ROOT / rel.lstrip("/")
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    # GCS backend
     if storage is None or not uri.startswith("gs://"):
         return None
     try:
@@ -100,6 +150,7 @@ def _self_base() -> str:
 
 
 # ───────────────────────────── Helpers: weather source ─────────────────────────────
+
 def _weather_from_live_api() -> Dict[str, Any]:
     """Fetch weather information from the live snapshot API.
 
@@ -159,7 +210,9 @@ def _weather_from_live_api() -> Dict[str, Any]:
     if isinstance(payload, list) and payload:
         try:
             df = pd.DataFrame(payload)
-            tcol = "tbin_utc" if "tbin_utc" in df.columns else ("ts_utc" if "ts_utc" in df.columns else None)
+            tcol = "tbin_utc" if "tbin_utc" in df.columns else (
+                "ts_utc" if "ts_utc" in df.columns else None
+            )
             if tcol:
                 df[tcol] = pd.to_datetime(df[tcol], utc=True, errors="coerce")
                 tmax = df[tcol].max()
@@ -185,6 +238,7 @@ def _weather_from_live_api() -> Dict[str, Any]:
 
 
 # ───────────────────────────── Helpers: forecast freshness ─────────────────────────────
+
 def _freshness_from_forecast_bundle() -> Dict[str, Any]:
     """Compute freshness metadata from `latest_forecast.json`.
 
@@ -206,7 +260,7 @@ def _freshness_from_forecast_bundle() -> Dict[str, Any]:
         or `{}` if the bundle is missing / invalid.
     """
     uri = _bundle_uri()
-    meta = _read_json_from_gcs(uri)
+    meta = _read_json_any(uri)
     if not isinstance(meta, dict):
         return {}
 
@@ -229,6 +283,7 @@ def _freshness_from_forecast_bundle() -> Dict[str, Any]:
 
 
 # ───────────────────────────── Route ─────────────────────────────
+
 @router.get("")
 def get_badges(response: Response):
     """Return small "badge" metadata for the UI (weather + freshness).
@@ -261,7 +316,7 @@ def get_badges(response: Response):
     # Weather from live snapshot API
     weather = _weather_from_live_api()
 
-    # Freshness from forecast bundle on GCS
+    # Freshness from forecast bundle (local or GCS)
     freshness = _freshness_from_forecast_bundle()
 
     updated_at = freshness.get("forecast_generated_at") or weather.get("ts_utc")

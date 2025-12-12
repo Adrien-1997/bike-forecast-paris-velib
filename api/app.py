@@ -9,7 +9,7 @@ l’API publique de Vélib' Forecast :
 - Résolution souple du module `core` pour partager des utilitaires (settings…).
 - Chargement des `Settings` Pydantic (chemins GCS, CORS, météo, monitoring…).
 - Montage des routers :
-    * routes "legacy" : health, stations, forecast, history, badges, snapshot, weather,
+    * routes "legacy" : health, stations, forecast, badges, snapshot, weather,
     * routes "monitoring" : network overview/dynamics/stations, model perf/explain,
       data health/drift/freshness, intro.
 - Middleware global :
@@ -69,14 +69,14 @@ except Exception:
 
 # ─────────── Routes legacy ───────────
 # Endpoints principaux (avant monitoring) :
-# - /healthz, /stations, /forecast, /history, /badges, /snapshot, /weather, …
+# - /healthz, /stations, /forecast, /badges, /snapshot, /weather, …
 try:
-    from api.routes import health, stations, forecast, history, badges, snapshot, weather
+    from api.routes import health, stations, forecast, badges, snapshot, weather
 except Exception:
     try:
-        from .routes import health, stations, forecast, history, badges, snapshot, weather
+        from .routes import health, stations, forecast, badges, snapshot, weather
     except Exception:
-        from routes import health, stations, forecast, history, badges, snapshot, weather
+        from routes import health, stations, forecast, badges, snapshot, weather
 
 # ─────────── Routes monitoring ───────────
 # Endpoints de monitoring structurés par sous-pages :
@@ -189,7 +189,6 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(stations.router)
 app.include_router(forecast.router)
-app.include_router(history.router)
 app.include_router(badges.router)
 app.include_router(snapshot.router)
 app.include_router(weather.router)

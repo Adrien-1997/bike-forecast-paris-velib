@@ -1,101 +1,347 @@
 <!doctype html>
-<html lang="fr" dir="ltr">
+<html lang="fr">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-
-    <title>velo-paris.fr — Site en maintenance</title>
-    <meta name="description" content="Site en maintenance — revenez dès lundi pour de nouvelles prédictions." />
-    <meta name="keywords" content="vélo, Paris, mobilité, data, prévisions, open data, vélo en libre-service, statistiques, environnement, transports durables" />
-    <meta name="author" content="Adrien Morel" />
-
-    <!-- Open Graph / Social -->
-    <meta property="og:title" content="velo-paris.fr — Maintenance" />
-    <meta property="og:description" content="Site en maintenance — revenez dès lundi pour de nouvelles prédictions." />
-    <meta property="og:url" content="https://velo-paris.fr" />
-    <meta property="og:type" content="website" />
-    <meta property="og:image" content="https://velo-paris.fr/favicon.svg" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="velo-paris.fr — Maintenance" />
-    <meta name="twitter:description" content="Site en maintenance — revenez dès lundi pour de nouvelles prédictions." />
-    <meta name="twitter:image" content="https://velo-paris.fr/favicon.svg" />
-
-    <!-- Favicon -->
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="/favicon.svg" />
-    <meta name="theme-color" content="#0b1220" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="alternate icon" href="favicon.ico" />
+    <link rel="apple-touch-icon" href="favicon.svg" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="color-scheme" content="dark light" />
+    <title>velo-paris.fr — Vélib’ Forecast (project)</title>
+    <meta
+      name="description"
+      content="Vélib’ Forecast — projet data (prévisions + monitoring). Code source, documentation et exécution locale."
+    />
 
-    <!-- Styles -->
-    <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css" />
+    <style>
+      :root {
+        --bg: #0b0d12;
+        --card: rgba(255, 255, 255, 0.06);
+        --card-2: rgba(255, 255, 255, 0.08);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.72);
+        --muted2: rgba(255, 255, 255, 0.6);
+        --border: rgba(255, 255, 255, 0.12);
+        --halo: rgba(125, 180, 255, 0.22);
+        --halo2: rgba(255, 130, 190, 0.14);
+        --accent: #7bb4ff;
+        --accent2: #ff77b7;
+        --ok: #46d39a;
+        --shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+        --radius: 18px;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+          "Courier New", monospace;
+        --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
+          "Apple Color Emoji", "Segoe UI Emoji";
+      }
+
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f7f7fb;
+          --card: rgba(0, 0, 0, 0.05);
+          --card-2: rgba(0, 0, 0, 0.06);
+          --text: rgba(0, 0, 0, 0.9);
+          --muted: rgba(0, 0, 0, 0.7);
+          --muted2: rgba(0, 0, 0, 0.58);
+          --border: rgba(0, 0, 0, 0.12);
+          --shadow: 0 18px 50px rgba(0, 0, 0, 0.12);
+          --halo: rgba(90, 140, 255, 0.18);
+          --halo2: rgba(255, 120, 180, 0.14);
+        }
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        font-family: var(--sans);
+        color: var(--text);
+        background: var(--bg);
+        overflow-x: hidden;
+      }
+
+      .bg {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: -1;
+      }
+      .bg::before,
+      .bg::after {
+        content: "";
+        position: absolute;
+        width: 900px;
+        height: 900px;
+        border-radius: 999px;
+        filter: blur(60px);
+        opacity: 0.85;
+        transform: translateZ(0);
+      }
+      .bg::before {
+        left: -260px;
+        top: -320px;
+        background: radial-gradient(circle at 30% 30%, var(--halo), transparent 60%);
+      }
+      .bg::after {
+        right: -320px;
+        bottom: -360px;
+        background: radial-gradient(circle at 40% 40%, var(--halo2), transparent 60%);
+      }
+
+      .wrap {
+        min-height: 100%;
+        display: grid;
+        place-items: center;
+        padding: 42px 18px;
+      }
+
+      .card {
+        width: min(980px, 100%);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: linear-gradient(180deg, var(--card), transparent);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      header {
+        padding: 28px 26px 18px;
+        border-bottom: 1px solid var(--border);
+        background: linear-gradient(180deg, var(--card-2), transparent);
+      }
+
+      .topline {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+      }
+
+      .brand {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--ok);
+        box-shadow: 0 0 0 6px rgba(70, 211, 154, 0.14);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 22px;
+        letter-spacing: 0.2px;
+      }
+
+      .sub {
+        margin: 10px 0 0;
+        color: var(--muted);
+        font-size: 14.5px;
+        line-height: 1.45;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+
+      a.btn {
+        display: inline-flex;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        text-decoration: none;
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.04);
+        transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+        font-size: 13.5px;
+        white-space: nowrap;
+      }
+      a.btn:hover {
+        transform: translateY(-1px);
+        background: rgba(255, 255, 255, 0.07);
+        border-color: rgba(255, 255, 255, 0.18);
+      }
+
+      .btn.primary {
+        border-color: rgba(123, 180, 255, 0.35);
+        background: rgba(123, 180, 255, 0.12);
+      }
+
+      main {
+        padding: 22px 26px 28px;
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 18px;
+      }
+
+      @media (max-width: 900px) {
+        main { grid-template-columns: 1fr; }
+      }
+
+      .panel {
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.04);
+        padding: 16px;
+      }
+
+      .panel h2 {
+        margin: 0 0 10px;
+        font-size: 14px;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        color: var(--muted2);
+      }
+
+      .list {
+        margin: 10px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .list li {
+        margin: 10px 0;
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.45;
+      }
+      .badge {
+        font-family: var(--mono);
+        font-size: 12px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.04);
+        white-space: nowrap;
+      }
+
+      .code {
+        margin: 0;
+        padding: 12px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.25);
+        font-family: var(--mono);
+        font-size: 12.5px;
+        line-height: 1.55;
+        overflow: auto;
+      }
+
+      footer {
+        padding: 16px 26px 22px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        color: var(--muted2);
+        font-size: 12.5px;
+      }
+
+      footer a {
+        color: var(--muted);
+        text-decoration: none;
+        border-bottom: 1px dashed rgba(255, 255, 255, 0.25);
+      }
+      footer a:hover {
+        color: var(--text);
+        border-bottom-color: rgba(255, 255, 255, 0.6);
+      }
+    </style>
   </head>
 
   <body>
+    <div class="bg" aria-hidden="true"></div>
+
     <div class="wrap">
-      <header>
-        <div class="container">
-          <a class="brand" href="#" aria-label="Accueil velo-paris">
-            <img class="mark" src="/favicon.svg" width="40" height="40" alt="Logo velo-paris" />
-            <span class="brandtext">
-              <span class="brand-velo">vélo</span>
-              <span class="brand-sep">·</span>
-              <span class="brand-paris">paris</span>
-            </span>
-          </a>
-          <span class="badge">
-            <span class="dot" aria-hidden="true"></span>
-            Maintenance en cours
-          </span>
-        </div>
-      </header>
+      <div class="card" role="main">
+        <header>
+          <div class="topline">
+            <div class="brand">
+              <span class="dot" aria-hidden="true"></span>
+              <div>
+                <h1>Vélib’ Forecast — velo-paris.fr</h1>
+                <p class="sub">
+                  Projet data : prévisions de disponibilité + monitoring.
+                  Code, documentation et exécution locale disponibles sur GitHub.
+                </p>
+              </div>
+            </div>
 
-      <main class="hero">
-        <section class="panel">
-          <div class="halo" aria-hidden="true"></div>
-          <div class="cover">
-            <h1>Site en maintenance</h1>
-            <p class="lead">
-              Revenez bientôt pour de nouvelles prédictions.
+            <div class="actions">
+              <a class="btn primary" href="https://github.com/Adrien-1997/bike-forecast-paris-velib" target="_blank" rel="noreferrer">
+                <span aria-hidden="true">↗</span> Open on GitHub
+              </a>
+              <a class="btn" href="https://www.linkedin.com/in/adrien-morel/" target="_blank" rel="noreferrer">
+                LinkedIn
+              </a>
+            </div>
+          </div>
+        </header>
+
+        <main>
+          <section class="panel">
+            <h2>What you’ll find</h2>
+            <ul class="list">
+              <li><span class="badge">API</span> FastAPI endpoints for serving & monitoring artifacts</li>
+              <li><span class="badge">UI</span> Next.js frontend (maps + charts)</li>
+              <li><span class="badge">Jobs</span> Pipelines producing JSON artifacts (monitoring / serving)</li>
+              <li><span class="badge">Data</span> Open data + weather, exported and compacted over time</li>
+            </ul>
+          </section>
+
+          <aside class="panel">
+            <h2>Run locally</h2>
+            <p class="sub" style="margin: 0 0 12px">
+              See <span class="badge">README-local.md</span> in the repository for the full setup.
+              Minimal commands:
             </p>
-          </div>
-          <div class="under">
-            <div class="row">
-              <span class="pill">Mise à jour UI</span>
-              <span class="pill">API & monitoring</span>
-              <span class="pill">Données ouvertes Paris</span>
-            </div>
-            <div class="progress" aria-label="Progression maintenance" role="status">
-              <div class="bar" style="width: 38%"></div>
-            </div>
-          </div>
-        </section>
-      </main>
 
-      <footer>
-        <div class="footer-grid">
-          <div>© <span id="year"></span> velo-paris.fr — Projet indépendant</div>
-          <div class="social">
-            <a href="https://www.linkedin.com/in/adrien-morel/" target="_blank" aria-label="LinkedIn Adrien Morel" rel="noopener">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512" fill="currentColor" aria-hidden="true">
-                <path d="M100.3 448H7.4V149.1h92.9V448zM53.8 108.1C24.1 108.1 0 83.9 0 54.2 0 24.5 24.1.4 53.8.4s53.8 24.1 53.8 53.8c0 29.7-24.1 53.9-53.8 53.9zM447.9 448h-92.7V302.4c0-34.7-.7-79.2-48.2-79.2-48.2 0-55.6 37.7-55.6 76.6V448h-92.8V149.1h89.1v40.8h1.3c12.4-23.6 42.6-48.2 87.6-48.2 93.7 0 110.9 61.7 110.9 141.9V448z"/>
-              </svg>
-            </a>
-            <div class="social-label">Suivez moi sur LinkedIn</div>
-          </div>
-        </div>
+            <pre class="code"><code># API (local)
+.\.venv\Scripts\python.exe -m uvicorn api.app:app `
+  --reload `
+  --reload-dir api `
+  --port 8081 `
+  --env-file api/.env
 
-        <p class="disclaimer">
-          <strong>Mention légale :</strong> Ce site est un projet indépendant,
-          non affilié à une institution publique, ni au service de vélos en libre-service de la Ville de Paris.
-          Les données utilisées proviendront de sources ouvertes (Open Data Paris, etc.).
-          « Vélib’ » est une marque déposée appartenant à ses titulaires respectifs.
-        </p>
-      </footer>
+# UI (local)
+cd ui
+npm install
+npm run build
+npm run start</code></pre>
+
+            <p class="sub" style="margin: 12px 0 0">
+              Repo: <a href="https://github.com/Adrien-1997/bike-forecast-paris-velib" target="_blank" rel="noreferrer">Adrien-1997/bike-forecast-paris-velib</a>
+            </p>
+          </aside>
+        </main>
+
+        <footer>
+          <div>
+            © <span id="y"></span> velo-paris.fr · Independent project · Open data sources
+          </div>
+          <div>
+            <a href="https://velo-paris.fr" target="_blank" rel="noreferrer">velo-paris.fr</a> ·
+            <a href="https://github.com/Adrien-1997/bike-forecast-paris-velib" target="_blank" rel="noreferrer">GitHub</a>
+          </div>
+        </footer>
+      </div>
     </div>
 
     <script>
-      document.getElementById("year").textContent = new Date().getFullYear();
+      document.getElementById("y").textContent = String(new Date().getFullYear());
     </script>
   </body>
 </html>

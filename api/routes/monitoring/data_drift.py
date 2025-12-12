@@ -1,9 +1,9 @@
-# api/routes/monitoring_data_drift.py
+# api/routes/data_drift.py
 
 """Monitoring — Data Drift endpoints.
 
 Ce module expose les endpoints `/monitoring/data/drift` qui servent les artefacts
-JSON produits par le job `build_data_drift.py` sur GCS :
+JSON produits par le job `build_data_drift.py` :
 
 Arborescence cible (LATEST only)
 --------------------------------
@@ -18,87 +18,98 @@ Arborescence cible (LATEST only)
     zones.json
     features_detected.json
 
-Principes :
+Principe de ce module :
 - Le backend **ne recalcule rien** : il ne fait que proxy des JSON déjà
-  construits et uploadés par les jobs batch.
-- Les URIs GCS sont dérivées de `GCS_MONITORING_PREFIX` (env ou settings),
-  normalisée via `_mon_prefix_or_500()`.
+  construits par les jobs batch.
+- Les URIs sont dérivées de `GCS_MONITORING_PREFIX` (env),
+  mais la lecture se fait soit :
+    * en **local** (STORAGE_BACKEND=local) sous `DATA_ROOT/monitoring/...`,
+    * soit via **GCS** (STORAGE_BACKEND=gcs, mode historique).
 - Tous les JSON sont "sanitisés" pour le transport :
   - les `NaN` / `+/-Inf` sont convertis en `null` via `_json_sanitize`,
   - l'API retourne toujours du JSON valide côté client.
-- Les headers HTTP suivants sont posés :
-  - `Cache-Control: public, max-age=120` (par défaut),
-  - `Access-Control-Allow-Origin: *` (CORS permissif pour les widgets UI).
 """
 
 from __future__ import annotations
+
 import os
 import json
 import math
-from typing import Tuple
+from pathlib import Path
+from typing import Tuple, Dict, Any
 
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 
+# google.cloud.storage est optionnel : utilisé seulement en mode GCS
 try:
     from google.cloud import storage  # type: ignore
-except Exception as e:
-    # Contrairement à d'autres modules, ici GCS est requis :
-    # sans client storage, on ne peut rien servir → erreur explicite au démarrage.
-    raise RuntimeError("google-cloud-storage requis côté API") from e
-
+except Exception:  # pragma: no cover - mode local ou lib manquante
+    storage = None
 
 router = APIRouter(prefix="/monitoring/data")
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Backend de stockage (GCS vs local)
+# ──────────────────────────────────────────────────────────────────────────────
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Helpers GCS — calqués sur network_overview.py
-# ──────────────────────────────────────────────────────────────────────────────
+STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "gcs").lower()
+USE_LOCAL = STORAGE_BACKEND == "local"
+
+# Repo root ≈ <repo>/
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DATA_ROOT = Path(os.getenv("DATA_ROOT", REPO_ROOT / "data"))
+
+# Préfixe GCS commun pour le mapping local :
+#   gs://.../velib/monitoring/... → data/monitoring/...
+GCS_LOCAL_ROOT_PREFIX = (
+    os.getenv(
+        "GCS_LOCAL_ROOT_PREFIX",
+        "gs://velib-forecast-472820_cloudbuild/velib/",
+    ).rstrip("/")
+    + "/"
+)
+
 
 def _split_gs(uri: str) -> Tuple[str, str]:
-    """Découpe une URI `gs://bucket/key` en `(bucket, key)`.
-
-    Parameters
-    ----------
-    uri : str
-        URI GCS commençant par `gs://`.
-
-    Returns
-    -------
-    tuple[str, str]
-        Nom du bucket et chemin de l'objet.
-
-    Raises
-    ------
-    ValueError
-        Si l'URI ne commence pas par `gs://`.
-    """
+    """Découpe une URI `gs://bucket/key` en `(bucket, key)`."""
     if not uri.startswith("gs://"):
         raise ValueError(f"Bad GCS URI: {uri}")
     bucket, key = uri[5:].split("/", 1)
     return bucket, key
 
 
-def _gcs_read_json(gs_uri: str) -> dict:
-    """Télécharge un blob JSON depuis GCS et le parse en dictionnaire Python.
+def _local_path_from_gs(uri: str) -> Path:
+    """Mappe une URI GCS velib/… vers un fichier local sous DATA_ROOT.
 
-    Parameters
-    ----------
-    gs_uri : str
-        URI GCS du document JSON.
-
-    Returns
-    -------
-    dict
-        Contenu JSON parsé.
-
-    Raises
-    ------
-    FileNotFoundError
-        Si le blob n'existe pas sur GCS.
-    ValueError
-        Si le contenu n'est pas un JSON valide.
+    Exemple :
+        gs://.../velib/monitoring/data/drift/latest/summary.json
+        → DATA_ROOT / "monitoring/data/drift/latest/summary.json"
     """
+    if not uri.startswith(GCS_LOCAL_ROOT_PREFIX):
+        raise ValueError(
+            f"Cannot map GCS URI to local path:\n  uri={uri}\n  prefix={GCS_LOCAL_ROOT_PREFIX}"
+        )
+    rel = uri[len(GCS_LOCAL_ROOT_PREFIX) :]  # "monitoring/data/drift/latest/..."
+    path = DATA_ROOT / rel
+    if not path.exists():
+        raise FileNotFoundError(path)
+    return path
+
+
+def _read_json_any(gs_uri: str) -> Dict[str, Any]:
+    """Lit un JSON soit en local (DATA_ROOT), soit sur GCS, selon STORAGE_BACKEND."""
+    if USE_LOCAL:
+        path = _local_path_from_gs(gs_uri)
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:  # pragma: no cover - erreurs disque
+            raise ValueError(f"Invalid JSON in local file {path}: {e}") from e
+
+    # Mode GCS (historique)
+    if storage is None:
+        raise RuntimeError("google-cloud-storage requis en mode GCS")
+
     bkt, key = _split_gs(gs_uri)
     client = storage.Client()
     bucket = client.bucket(bkt)
@@ -113,37 +124,18 @@ def _gcs_read_json(gs_uri: str) -> dict:
 
 
 def _mon_prefix_or_500() -> str:
-    """Retourne le préfixe GCS_MONITORING_PREFIX normalisé ou lève une 500.
-
-    Lit la variable d'environnement `GCS_MONITORING_PREFIX`, applique :
-    - strip des espaces,
-    - strip des guillemets simples / doubles,
-    - suppression du `/` final.
-
-    Le résultat doit commencer par `gs://`, sinon une `HTTPException(500)`
-    est levée (la stack de monitoring n'est pas correctement configurée).
-    """
+    """Retourne le préfixe GCS_MONITORING_PREFIX normalisé ou lève une 500."""
     mon_raw = os.environ.get("GCS_MONITORING_PREFIX", "")
     mon = mon_raw.strip().strip("'\"").rstrip("/")
     if not mon.startswith("gs://"):
         print(f"[data_drift] GCS_MONITORING_PREFIX invalide. Lu='{mon_raw}' nettoyé='{mon}'")
         raise HTTPException(status_code=500, detail="GCS_MONITORING_PREFIX manquant ou invalide")
-    print(f"[data_drift] GCS_MONITORING_PREFIX='{mon}'")
+    print(f"[data_drift] GCS_MONITORING_PREFIX='{mon}' (backend={STORAGE_BACKEND})")
     return mon
 
 
 def _json_sanitize(obj):
-    """Remplace NaN/±Inf par None pour produire un JSON valide.
-
-    Fonction récursive appliquée avant renvoi au client pour éviter
-    les JSON non standards (NaN, Inf...).
-
-    Règles :
-    - dict → on applique la fonction à toutes les valeurs,
-    - list → on applique la fonction à tous les éléments,
-    - float → si non fini (NaN / ±Inf) → None,
-    - le reste est renvoyé inchangé.
-    """
+    """Remplace NaN/±Inf par None pour produire un JSON valide."""
     if isinstance(obj, dict):
         return {k: _json_sanitize(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -154,34 +146,13 @@ def _json_sanitize(obj):
 
 
 def _proxy_json(gs_uri: str, request: Request, ttl: int = 120) -> JSONResponse:
-    """Proxy générique GCS JSON → HTTP JSON avec en-têtes de cache.
-
-    Parameters
-    ----------
-    gs_uri : str
-        URI GCS du fichier JSON à servir.
-    request : Request
-        Requête FastAPI (actuellement non utilisée, gardée pour extension).
-    ttl : int, default 120
-        Durée de vie du cache HTTP (secondes), utilisée dans `Cache-Control`.
-
-    Returns
-    -------
-    fastapi.responses.JSONResponse
-        Réponse HTTP contenant le JSON nettoyé (`_json_sanitize`).
-
-    Raises
-    ------
-    HTTPException
-        - 404 si le document est introuvable,
-        - 502 en cas d'erreur GCS / parsing JSON.
-    """
+    """Proxy générique JSON (local ou GCS) → HTTP JSON avec en-têtes de cache."""
     try:
-        payload = _gcs_read_json(gs_uri)
+        payload = _read_json_any(gs_uri)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Document non trouvé")
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Erreur lecture GCS: {e}")
+        raise HTTPException(status_code=502, detail=f"Erreur lecture backend: {e}")
 
     safe = _json_sanitize(payload)
     resp = JSONResponse(safe)
@@ -198,15 +169,11 @@ def _proxy_json(gs_uri: str, request: Request, ttl: int = 120) -> JSONResponse:
 def get_data_drift(request: Request):
     """Renvoie le `summary.json` du dossier `latest` de data drift.
 
-    GCS cible :
-    ----------
-    <GCS_MONITORING_PREFIX>/monitoring/data/drift/latest/summary.json
+    Cible logique :
+        <GCS_MONITORING_PREFIX>/monitoring/data/drift/latest/summary.json
 
-    Utilisation côté UI :
-    ---------------------
-    - bloc "state global" du data drift,
-    - PSI global, statut, éventuels indicateurs de stabilité,
-    - sert de point d'entrée pour décider d'afficher des alertes (ou non).
+    En mode local :
+        data/monitoring/data/drift/latest/summary.json
     """
     prefix = _mon_prefix_or_500()
     base = f"{prefix}/monitoring" if not prefix.endswith("/monitoring") else prefix
@@ -217,30 +184,7 @@ def get_data_drift(request: Request):
 
 @router.get("/drift/{name}")
 def get_data_drift_file(name: str, request: Request):
-    """Accès direct à un JSON spécifique de data drift (psi, ks, deltas…).
-
-    Parameters
-    ----------
-    name : str
-        Nom logique du fichier, sans extension. Doit appartenir à l'ensemble :
-        {
-          "psi_by_feature", "ks_by_feature", "deltas_by_feature",
-          "psi_global_daily_ema", "summary", "alerts", "bounds", "zones",
-          "features_detected",
-        }
-    request : Request
-        Requête FastAPI.
-
-    Returns
-    -------
-    fastapi.responses.JSONResponse
-        Contenu JSON du fichier, via `_proxy_json`.
-
-    Raises
-    ------
-    HTTPException
-        - 404 si `name` n'est pas dans la liste des fichiers connus.
-    """
+    """Accès direct à un JSON spécifique de data drift (psi, ks, deltas…)."""
     valid = {
         "psi_by_feature", "ks_by_feature", "deltas_by_feature",
         "psi_global_daily_ema", "summary", "alerts", "bounds", "zones",
@@ -258,10 +202,7 @@ def get_data_drift_file(name: str, request: Request):
 
 @router.get("/drift/available")
 def list_available():
-    """Liste statique des fichiers disponibles sous `data/drift/latest`.
-
-    Utile pour introspection ou debug rapide depuis le navigateur / API docs.
-    """
+    """Liste statique des fichiers disponibles sous `data/drift/latest`."""
     return {
         "path": "monitoring/data/drift/latest/",
         "files": [

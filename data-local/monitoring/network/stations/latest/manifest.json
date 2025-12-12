@@ -1,0 +1,1 @@
+{"schema_version":"1.2","generated_at":"2025-12-03T11:13:49.978561Z","latest_prefix":"gs://velib-forecast-472820_cloudbuild/velib/monitoring/network/stations/latest","window_days":14,"sources":{"exports_prefix":"gs://velib-forecast-472820_cloudbuild/velib/exports"},"artifacts":["kpis.json","centroids.json","pca_scatter.json","pca_circle.json","stats7.json"]}

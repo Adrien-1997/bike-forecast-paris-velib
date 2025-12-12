@@ -66,11 +66,11 @@ function buildForwardHeaders(src: Record<string, string | undefined> | undefined
   // Toujours demander du JSON côté backend (notre API répond en JSON)
   if (!h.has("accept")) h.set("accept", "application/json");
 
-  // ⚠️ Empêche la double compression : on demande une réponse "brute"
+  // Empêche la double compression : on demande une réponse "brute"
   // Netlify ajoutera lui-même les en-têtes de compression si nécessaire.
   h.set("accept-encoding", "identity");
 
-  // 🔐 Injecte le token global si aucun header Authorization n'est présent
+  // Injecte le token global si aucun header Authorization n'est présent
   if (!h.has("authorization") && BEARER) {
     h.set("authorization", BEARER);
   }

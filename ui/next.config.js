@@ -9,7 +9,7 @@ function buildFrameAncestors() {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  // Ajoute toujours 'self' (ton propre domaine)
+  // Ajoute toujours 'self'
   const base = ["'self'"];
 
   // En dev, autorise localhost pour tests externes si utile
@@ -39,7 +39,7 @@ const nextConfig = {
     },
   },
 
-  // 🔐 Headers de sécurité
+  // Headers de sécurité
   async headers() {
     const frameAncestors = buildFrameAncestors();
 
@@ -48,9 +48,8 @@ const nextConfig = {
       {
         source: "/:path*",
         headers: [
-          // On protège globalement
           { key: "Content-Security-Policy", value: `frame-ancestors 'self';` },
-          // ⚠️ N'ajoute PAS X-Frame-Options ici (déprécié et peut entrer en conflit)
+          // PAS X-Frame-Options ici (déprécié et peut entrer en conflit)
         ],
       },
 
