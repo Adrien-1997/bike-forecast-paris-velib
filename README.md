@@ -702,6 +702,6 @@ Les jobs batch peuvent être packagés de la même manière (image unique + `JOB
 
 - Données Vélib' : se référer aux CGU de **Vélib' Métropole / Île-de-France Mobilités**.  
 - Données météo : se référer aux CGU du fournisseur (Open-Meteo, etc.).  
-- Code & modèles : à préciser (`MIT`, `Apache-2.0`, ou autre).
+- Code & modèles : `MIT`
 
 Ce projet est utilisé comme **démonstration technique / portfolio** et n’est pas destiné, en l’état, à un usage commercial tiers.
