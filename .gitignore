@@ -23,11 +23,7 @@ ehthumbs.db
 logs/
 **/*.log
 
-# --- Secrets / env ---
-.env
-.env.*
-*.env
-*.env.*
+
 
 
 
