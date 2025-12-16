@@ -1,1 +1,1 @@
-[{"metric":"bike_avail","count":1444,"total_active":1503,"pct":96.07},{"metric":"dock_avail","count":1481,"total_active":1503,"pct":98.54},{"metric":"penury","count":59,"total_active":1503,"pct":3.93},{"metric":"saturation","count":22,"total_active":1503,"pct":1.46}]
+[{"metric":"bike_avail","count":1416,"total_active":1503,"pct":94.21},{"metric":"dock_avail","count":1488,"total_active":1503,"pct":99.0},{"metric":"penury","count":87,"total_active":1503,"pct":5.79},{"metric":"saturation","count":15,"total_active":1503,"pct":1.0}]

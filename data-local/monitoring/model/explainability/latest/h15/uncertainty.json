@@ -1,1 +1,1 @@
-{"schema_version":"1.5","generated_at":"2025-12-03T11:13:19.656925Z","method":"residual_quantiles/by_hour","nominal":0.9,"coverage":{"empirical":0.9370281815638453,"n":425349},"horizon_min":15,"window_days":14}
+{"schema_version":"1.5","generated_at":"2025-12-16T18:08:18.880244Z","method":"residual_quantiles/by_hour","nominal":0.9,"coverage":{"empirical":0.9427135576562611,"n":296091},"horizon_min":15,"window_days":14}
