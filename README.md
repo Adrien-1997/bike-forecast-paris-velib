@@ -15,8 +15,6 @@ avec un **pipeline reproductible**, un **suivi de la qualité des données** et 
 >   (les endpoints multi-horizon conservent `?h=` quand applicable).
 > - Le serving forecast est réorganisé sous : `serving/forecast/latest/h{H}/...` (manifest + forecast JSON).
 > - Le snapshot réseau “live” est exposé via un endpoint **serving** appelant directement GBFS (pas de stockage GCS).
->
-> Si l’UI consomme ces endpoints, vérifie que les chemins de base correspondent à la nouvelle arborescence.
 
 ---
 
