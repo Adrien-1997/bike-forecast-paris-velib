@@ -6,6 +6,18 @@ pipeline de données, entraînement des modèles, API, interface web et monitori
 L’objectif : fournir une **plateforme de prévision de disponibilité Vélib’** (stations, vélos, places disponibles)
 avec un **pipeline reproductible**, un **suivi de la qualité des données** et un **monitoring temps quasi-réel** du réseau et des modèles.
 
+> **Note — refactor API (routage & serving)**
+>
+> Les routes de l’API ont été refactorées pour **standardiser l’organisation “latest-only”** et aligner la forme des endpoints entre les pages Monitoring (overview / performance / explainability / data health / drift) et le Serving (forecast).
+>
+> Changements clés :
+> - Les routes Monitoring suivent désormais un pattern cohérent : `.../latest/manifest.json` puis `.../latest/<doc>.json`
+>   (les endpoints multi-horizon conservent `?h=` quand applicable).
+> - Le serving forecast est réorganisé sous : `serving/forecast/latest/h{H}/...` (manifest + forecast JSON).
+> - Le snapshot réseau “live” est exposé via un endpoint **serving** appelant directement GBFS (pas de stockage GCS).
+>
+> Si l’UI consomme ces endpoints, vérifie que les chemins de base correspondent à la nouvelle arborescence.
+
 ---
 
 ## 1. Vue d’ensemble
