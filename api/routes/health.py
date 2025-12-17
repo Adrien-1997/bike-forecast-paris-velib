@@ -63,35 +63,36 @@ GCS_LOCAL_ROOT_PREFIX = (
 
 
 def _local_blob_meta(uri: str) -> Optional[Dict[str, Any]]:
-    """Return lightweight metadata for a "logical" GCS URI, using the local FS.
-
-    Mapping rule (when STORAGE_BACKEND=local):
-      GCS_LOCAL_ROOT_PREFIX → DATA_ROOT/
-
-    Returns
-    -------
-    dict | None
-        Same structure as `_gcs_blob_meta`, or None if the URI cannot be
-        mapped locally.
-    """
+    """Return lightweight metadata for a "logical" GCS URI, using the local FS."""
     if not USE_LOCAL:
         return None
     if not uri.startswith(GCS_LOCAL_ROOT_PREFIX):
         return None
 
-    rel = uri[len(GCS_LOCAL_ROOT_PREFIX) :]
+    rel = uri[len(GCS_LOCAL_ROOT_PREFIX):]
     path = DATA_ROOT / rel.lstrip("/")
+
     if not path.exists():
-        # File missing locally → stub object (tolerant behaviour)
         return {"uri": uri, "etag": None, "size": None}
+
+    # If it maps to a directory, it's a configuration/layout issue.
+    # We stay tolerant but avoid returning misleading size=0.
+    if path.is_dir():
+        return {
+            "uri": uri,
+            "etag": None,
+            "size": None,
+            "updated": None,
+            "warning": "URI maps to a directory on local FS",
+        }
 
     try:
         stat = path.stat()
         updated = dt.datetime.utcfromtimestamp(stat.st_mtime).isoformat() + "Z"
         return {
             "uri": uri,
-            "etag": None,  # no ETag concept on local FS
-            "size": stat.st_size,
+            "etag": None,
+            "size": stat.st_size if stat.st_size > 0 else None,
             "updated": updated,
         }
     except Exception:

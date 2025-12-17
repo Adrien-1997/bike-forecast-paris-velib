@@ -45,7 +45,7 @@ try:
 except Exception:  # pragma: no cover - local mode / libs manquantes
     storage = None
 
-router = APIRouter(prefix="/monitoring/network")
+router = APIRouter(prefix="/monitoring/network/dynamics", tags=["monitoring-network"])
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Backend de stockage (GCS vs local)
@@ -178,7 +178,10 @@ def _proxy_json(gs_uri: str, request: Request, ttl: int = 120) -> JSONResponse:
 # Endpoints DYNAMICS
 # ──────────────────────────────────────────────────────────────────────────────
 
-DocNameDynamics = Literal[
+# Router (à mettre en haut du fichier, à la place de l'existant)
+router = APIRouter(prefix="/monitoring/network/dynamics", tags=["monitoring-network"])
+
+NameDynamics = Literal[
     "heatmaps_profiles",
     "hourly_pen_sat",
     "episodes",
@@ -187,39 +190,42 @@ DocNameDynamics = Literal[
     "regularity_today",
 ]
 
-_TTL_BY_DOC = {
+_TTL_BY_NAME: Dict[str, int] = {
     "heatmaps_profiles": 300,
-    "hourly_pen_sat":    120,
-    "episodes":          180,
-    "by_zone":           300,
-    "tension_by_station":180,
-    "regularity_today":  120,
+    "hourly_pen_sat": 120,
+    "episodes": 180,
+    "by_zone": 300,
+    "tension_by_station": 180,
+    "regularity_today": 120,
 }
 
-
-@router.get("/dynamics/available")
-def network_dynamics_available():
-    docs = [
-        "heatmaps_profiles",
-        "hourly_pen_sat",
-        "episodes",
-        "by_zone",
-        "tension_by_station",
-        "regularity_today",
-    ]
-    return {
-        "docs": docs,
-        "time_travel": "utiliser ?at=YYYY-MM-DDTHH-MM-SSZ ou sans param pour latest"
-    }
-
-
-@router.get("/dynamics/{doc}")
-def network_dynamics_doc(doc: DocNameDynamics, request: Request, at: Optional[str] = None):
-    mon = _mon_prefix_or_500()  # ex: gs://.../velib
-    folder = _sanitize_at(at)   # 'latest' ou timestamp normalisé
-
+def _base_latest(mon: str) -> str:
     base = f"{mon}/monitoring" if not mon.endswith("/monitoring") else mon
-    gs_uri = f"{base}/network/dynamics/{folder}/{doc}.json"
+    return f"{base}/network/dynamics/latest"
 
-    ttl = _TTL_BY_DOC.get(doc, 120)
-    return _proxy_json(gs_uri, request, ttl=ttl)
+
+@router.get("")
+def network_dynamics_root(request: Request):
+    """Alias root → heatmaps_profiles.json (latest-only)."""
+    mon = _mon_prefix_or_500()
+    latest = _base_latest(mon)
+    uri = f"{latest}/heatmaps_profiles.json"
+    return _proxy_json(uri, request, ttl=_TTL_BY_NAME["heatmaps_profiles"])
+
+
+@router.get("/manifest")
+def network_dynamics_manifest(request: Request):
+    """Manifest de la page Network Dynamics (latest-only)."""
+    mon = _mon_prefix_or_500()
+    latest = _base_latest(mon)
+    uri = f"{latest}/manifest.json"
+    return _proxy_json(uri, request, ttl=60)
+
+
+@router.get("/{name}")
+def network_dynamics_doc(name: NameDynamics, request: Request):
+    """Accès à un artefact Network Dynamics (latest-only)."""
+    mon = _mon_prefix_or_500()
+    latest = _base_latest(mon)
+    uri = f"{latest}/{name}.json"
+    return _proxy_json(uri, request, ttl=_TTL_BY_NAME.get(name, 120))

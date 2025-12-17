@@ -4,41 +4,47 @@
 
 Ce module expose les endpoints :
 
-    /monitoring/network/stations/...
+    /monitoring/network/stations
 
-Ils servent les artefacts JSON produits par le job
-`build_network_stations.py` sur GCS, typiquement organisés comme :
+et sert des artefacts JSON produits par le job `build_network_stations.py`,
+organisés en *latest-only* comme :
 
-    <GCS_MONITORING_PREFIX>/monitoring/network/stations/<latest|TS>/
+    <GCS_MONITORING_PREFIX>/monitoring/network/stations/latest/
+        manifest.json
         kpis.json
         centroids.json
         pca_scatter.json
         pca_circle.json
         stats7.json
 
-Et, pour compatibilité ascendante :
-
-    <GCS_MONITORING_PREFIX>/monitoring/network/stations.json   (legacy)
-
 En mode local (STORAGE_BACKEND=local), ces chemins GCS sont mappés sur :
 
-    <DATA_ROOT>/monitoring/network/stations/<latest|TS>/...
+    <DATA_ROOT>/monitoring/network/stations/latest/...
 
 Principe :
 - le backend ne calcule rien → simple proxy JSON,
 - GCS reste la “source logique” (via GCS_MONITORING_PREFIX),
 - lecture soit via GCS, soit via disque local selon STORAGE_BACKEND,
 - NaN / ±Inf → null avant renvoi.
+
+Compatibilité ascendante (legacy)
+--------------------------------
+L'ancien endpoint global existait sous :
+
+    <GCS_MONITORING_PREFIX>/monitoring/network/stations.json
+
+On conserve un endpoint legacy :
+    GET /monitoring/network/stations-legacy
+afin d’éviter toute collision avec le nouveau router `prefix="/monitoring/network/stations"`.
 """
 
 from __future__ import annotations
 
 import os
 import json
-import re
 import math
 from pathlib import Path
-from typing import Optional, Literal, Tuple, Any, Dict
+from typing import Literal, Tuple, Any, Dict
 
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -49,7 +55,9 @@ try:
 except Exception:  # pragma: no cover - mode local ou lib manquante
     storage = None
 
-router = APIRouter(prefix="/monitoring/network")
+# ───────────────────────── Router (aligned) ─────────────────────────
+router = APIRouter(prefix="/monitoring/network/stations", tags=["monitoring-network"])
+legacy_router = APIRouter(prefix="/monitoring/network", tags=["monitoring-network"])
 
 # ───────────────────────── Backend (local vs GCS) ─────────────────────────
 
@@ -57,11 +65,11 @@ STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "gcs").lower()
 USE_LOCAL = STORAGE_BACKEND == "local"
 
 # Repo root ≈ <repo>/
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DATA_ROOT = Path(os.getenv("DATA_ROOT", REPO_ROOT / "data"))
 
 # Préfixe GCS commun pour le mapping local :
-#   gs://.../velib/monitoring/... → data/monitoring/...
+#   gs://.../velib/monitoring/... → DATA_ROOT/monitoring/...
 GCS_LOCAL_ROOT_PREFIX = (
     os.getenv(
         "GCS_LOCAL_ROOT_PREFIX",
@@ -70,6 +78,7 @@ GCS_LOCAL_ROOT_PREFIX = (
     + "/"
 )
 
+# ───────────────────────── Helpers ─────────────────────────
 
 def _split_gs(uri: str) -> Tuple[str, str]:
     """Découpe une URI `gs://bucket/key` en `(bucket, key)`."""
@@ -90,7 +99,7 @@ def _local_path_from_gs(uri: str) -> Path:
         raise ValueError(
             f"Cannot map GCS URI to local path:\n  uri={uri}\n  prefix={GCS_LOCAL_ROOT_PREFIX}"
         )
-    rel = uri[len(GCS_LOCAL_ROOT_PREFIX):]  # "monitoring/network/stations/..."
+    rel = uri[len(GCS_LOCAL_ROOT_PREFIX) :]  # "monitoring/network/stations/..."
     path = DATA_ROOT / rel
     if not path.exists():
         raise FileNotFoundError(path)
@@ -112,8 +121,7 @@ def _read_json_any(gs_uri: str) -> Any:
 
     bkt, key = _split_gs(gs_uri)
     client = storage.Client()
-    bucket = client.bucket(bkt)
-    blob = bucket.blob(key)
+    blob = client.bucket(bkt).blob(key)
     if not blob.exists():
         raise FileNotFoundError(f"GCS blob not found: {gs_uri}")
     data = blob.download_as_bytes()
@@ -124,7 +132,7 @@ def _read_json_any(gs_uri: str) -> Any:
 
 
 def _mon_prefix_or_500() -> str:
-    """Retourne `GCS_MONITORING_PREFIX` normalisé ou lève une 500."""
+    """Retourne `GCS_MONITORING_PREFIX` normalisé (racine, sans forcer /monitoring)."""
     mon_raw = os.environ.get("GCS_MONITORING_PREFIX", "")
     mon = mon_raw.strip().strip("'\"").rstrip("/")
     if not mon.startswith("gs://"):
@@ -133,22 +141,7 @@ def _mon_prefix_or_500() -> str:
             f"Lu='{mon_raw}' nettoyé='{mon}' (backend={STORAGE_BACKEND})"
         )
         raise HTTPException(status_code=500, detail="GCS_MONITORING_PREFIX manquant ou invalide")
-    print(f"[network_stations] GCS_MONITORING_PREFIX='{mon}' (backend={STORAGE_BACKEND})")
     return mon
-
-
-# Timestamp "version" attendu pour le time-travel: 2025-10-23T14-30-00Z
-_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z$")
-
-
-def _sanitize_at(at: Optional[str]) -> str:
-    """Normalise le paramètre `at` (time-travel) en nom de dossier."""
-    if not at or at.strip().lower() in ("", "latest"):
-        return "latest"
-    s = at.strip()
-    if not _AT_RE.match(s):
-        return "latest"
-    return s
 
 
 def _json_sanitize(obj):
@@ -172,20 +165,17 @@ def _proxy_json(gs_uri: str, request: Request, ttl: int = 120) -> JSONResponse:
         raise HTTPException(status_code=502, detail=f"Erreur lecture backend: {e}")
 
     safe = _json_sanitize(payload)
-
     resp = JSONResponse(safe)
     resp.headers["Cache-Control"] = f"public, max-age={max(0, int(ttl))}"
     resp.headers.setdefault("Access-Control-Allow-Origin", "*")
     return resp
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Endpoints STATIONS
-# ──────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── Latest-only spec ─────────────────────────
 
-DocNameStations = Literal["kpis", "centroids", "pca_scatter", "pca_circle", "stats7"]
+NameStations = Literal["kpis", "centroids", "pca_scatter", "pca_circle", "stats7"]
 
-_TTL_BY_DOC: Dict[str, int] = {
+_TTL_BY_NAME: Dict[str, int] = {
     "kpis": 60,
     "centroids": 300,
     "pca_scatter": 300,
@@ -194,38 +184,51 @@ _TTL_BY_DOC: Dict[str, int] = {
 }
 
 
-@router.get("/stations/available")
-def network_stations_available():
-    """Index des documents *stations* + rappel du time-travel."""
-    docs = list(_TTL_BY_DOC.keys())
-    return {
-        "docs": docs,
-        "time_travel": "utiliser ?at=YYYY-MM-DDTHH-MM-SSZ ou sans param pour latest",
-    }
-
-
-@router.get("/stations/{doc}")
-def network_stations_doc(doc: DocNameStations, request: Request, at: Optional[str] = None):
-    """Proxy JSON pour les documents générés par le job Network Stations."""
-    mon = _mon_prefix_or_500()   # ex: gs://velib-forecast-472820_cloudbuild/velib
-    folder = _sanitize_at(at)    # 'latest' ou timestamp normalisé
-
+def _base_latest(mon: str) -> str:
+    """Retourne le préfixe logique .../monitoring/network/stations/latest."""
     base = f"{mon}/monitoring" if not mon.endswith("/monitoring") else mon
-    gs_uri = f"{base}/network/stations/{folder}/{doc}.json"
-    ttl = _TTL_BY_DOC.get(doc, 120)
-    print(f"[network_stations] reading {gs_uri} (backend={STORAGE_BACKEND})")
-    return _proxy_json(gs_uri, request, ttl=ttl)
+    return f"{base}/network/stations/latest"
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Legacy minimal : ancien JSON global si présent
-# ──────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── Routes (aligned) ─────────────────────────
 
-@router.get("/stations")
+@router.get("")
+def network_stations_root(request: Request):
+    """Alias root → kpis.json (latest-only)."""
+    mon = _mon_prefix_or_500()
+    latest = _base_latest(mon)
+    uri = f"{latest}/kpis.json"
+    return _proxy_json(uri, request, ttl=_TTL_BY_NAME["kpis"])
+
+
+@router.get("/manifest")
+def network_stations_manifest(request: Request):
+    """Manifest de la page Network Stations (latest-only)."""
+    mon = _mon_prefix_or_500()
+    latest = _base_latest(mon)
+    uri = f"{latest}/manifest.json"
+    return _proxy_json(uri, request, ttl=60)
+
+
+@router.get("/{name}")
+def network_stations_doc(name: NameStations, request: Request):
+    """Accès à un artefact Network Stations (latest-only)."""
+    mon = _mon_prefix_or_500()
+    latest = _base_latest(mon)
+    uri = f"{latest}/{name}.json"
+    return _proxy_json(uri, request, ttl=_TTL_BY_NAME.get(name, 120))
+
+
+# ───────────────────────── Legacy endpoint (optional) ─────────────────────────
+
+@legacy_router.get("/stations-legacy")
 def network_stations_legacy(request: Request):
-    """Legacy endpoint — renvoie l'ancien JSON global si encore présent."""
+    """Legacy endpoint — renvoie l'ancien JSON global si encore présent.
+
+    Chemin logique :
+        <GCS_MONITORING_PREFIX>/monitoring/network/stations.json
+    """
     mon = _mon_prefix_or_500()
     base = f"{mon}/monitoring" if not mon.endswith("/monitoring") else mon
-    gs_uri = f"{base}/network/stations.json"
-    print(f"[network_stations] reading legacy {gs_uri} (backend={STORAGE_BACKEND})")
-    return _proxy_json(gs_uri, request, ttl=120)
+    uri = f"{base}/network/stations.json"
+    return _proxy_json(uri, request, ttl=120)
