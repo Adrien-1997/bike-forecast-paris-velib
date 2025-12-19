@@ -134,7 +134,7 @@ function AppEmbedPage() {
   const userCenteredOnce = useRef(false); // évite de recentrer plusieurs fois
   const mapRef = useRef<LeafletMap | null>(null);
 
-  // ⬇️ Horizon contrôlé par l'interrupteur (par défaut sur 60 min)
+  // Horizon contrôlé par l'interrupteur (par défaut sur 60 min)
   const [H, setH] = useState<number>(60);
 
   // État de chargement / erreur pour la barre de statut
@@ -450,7 +450,7 @@ function AppEmbedPage() {
   );
 }
 
-// 🚫 Désactive le header/footer pour cette page "embed"
+// Désactive le header/footer pour cette page "embed"
 (AppEmbedPage as any).noChrome = true;
 
 export default AppEmbedPage;

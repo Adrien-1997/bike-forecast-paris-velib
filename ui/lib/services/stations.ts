@@ -78,7 +78,7 @@ function toNum(x: unknown): number | undefined {
  * - En cas d’erreur réseau / JSON invalide : `[]`.
  */
 export async function getStations(): Promise<Station[]> {
-  const arr = await getJSON<any[]>("/stations").catch(() => []);
+  const arr = await getJSON<any[]>("/serving/stations").catch(() => []);
   const rows: Station[] = [];
 
   for (const raw of arr) {

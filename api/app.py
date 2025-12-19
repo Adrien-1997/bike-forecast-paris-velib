@@ -77,12 +77,12 @@ except Exception:
 # Endpoints principaux (avant monitoring) :
 # - /health, /forecast, /badges, /snapshot, …
 try:
-    from api.routes import health, forecast, badges, snapshot
+    from api.routes import health, forecast, badges, snapshot, weather, stations
 except Exception:
     try:
-        from .routes import health, forecast, badges, snapshot
+        from .routes import health, forecast, badges, snapshot, weather, stations
     except Exception:
-        from routes import health, forecast, badges, snapshot
+        from routes import health, forecast, badges, snapshot, weather, stations
 
 # ─────────── Routes monitoring ───────────
 # Endpoints de monitoring structurés par sous-pages :
@@ -203,6 +203,8 @@ app.include_router(health.router)
 app.include_router(forecast.router)
 app.include_router(badges.router)
 app.include_router(snapshot.router)
+app.include_router(weather.router)
+app.include_router(stations.router)
 
 # Monitoring
 app.include_router(network_overview.router)

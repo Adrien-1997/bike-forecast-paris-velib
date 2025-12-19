@@ -52,7 +52,7 @@ export type LiveWeather = {
  */
 export async function getWeather(): Promise<LiveWeather> {
   try {
-    return await json<LiveWeather>('/weather/live');
+    return await json<LiveWeather>('/serving/weather');
   } catch (e) {
     console.warn('[getWeather] failed', e);
     return null;
