@@ -2,31 +2,35 @@
 
 """Stations endpoint for Vélib’ Forecast.
 
-This router exposes a `/stations` endpoint that returns a **minimal list of
-stations** for the UI (map, dropdowns, etc.) with the following fields:
+This router exposes a lightweight `/serving/stations` endpoint that returns a
+**minimal list of stations** for the UI (map, dropdowns, etc.) with:
 
-- station_id (string)
-- name
-- lat, lon
-- capacity
-- num_bikes_available
-- num_docks_available
+- `station_id` (string)
+- `name`
+- `lat`, `lon`
+- `capacity`
+- `num_bikes_available`
+- `num_docks_available`
 
 Strategy (data sources, in order of priority)
 ---------------------------------------------
-1. Live snapshot (GBFS) via `core.snapshot_live.fetch_live_snapshot()`:
+1) Live snapshot (GBFS) via `core.snapshot_live.fetch_live_snapshot()`:
    - freshest source,
-   - returns current bikes, capacity, coordinates, etc.
+   - provides current bikes + capacity + coordinates.
 
-2. Fallback: `latest_forecast.json` bundle:
+2) Fallback: forecast bundle JSON (`.../serving/forecast/latest_forecast.json`):
    - used if the live snapshot is unavailable,
-   - only exposes capacity (no live bikes),
-   - still allows the UI to build a static map of stations.
+   - bikes/docks default to 0 when missing,
+   - still enables the UI to render a (degraded) station list.
 
-The endpoint is deliberately tolerant:
-- if keys are missing or the bundle is malformed, it returns `[]` instead of
-  raising errors;
-- all outputs are JSON-safe (NaN/inf/null handled by `_json_safe_df`).
+Failure model
+-------------
+- On any failure (network / parsing / missing blob / unexpected type),
+  the endpoint returns an empty list `[]` (never raises).
+
+Caching
+-------
+- The endpoint sets `Cache-Control: no-store` to avoid client-side caching.
 """
 
 from __future__ import annotations
@@ -34,321 +38,237 @@ from __future__ import annotations
 import json
 import math
 import os
-from typing import Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
-import pandas as pd
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 
-# settings + live snapshot helper
-from core.settings import settings
 from core.snapshot_live import fetch_live_snapshot
 
+# google-cloud-storage is optional: only used when STORAGE_BACKEND != "local"
 try:
     from google.cloud import storage  # type: ignore
 except Exception:  # pragma: no cover
     storage = None  # type: ignore
 
-router = APIRouter(tags=["stations"])
+router = APIRouter(prefix="/serving/stations", tags=["serving-stations"])
 
+# ───────────────────────────── Backend selection (local vs GCS) ─────────────────────────────
 
-# ───────────────────────── Helpers JSON ─────────────────────────
-def _json_safe_df(df: pd.DataFrame) -> list[dict]:
-    """Convert a DataFrame to a list of JSON-safe records.
+STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "gcs").lower()
+USE_LOCAL = STORAGE_BACKEND == "local"
 
-    Behaviour
-    ---------
-    - If `df` is None or empty → return `[]`.
-    - Datetime columns:
-        * converted to UTC,
-        * formatted as ISO-8601 with `Z` suffix (`YYYY-MM-DDTHH:MM:SSZ`).
-    - Inf / -Inf → replaced with NaN.
-    - NaN, null-like values → converted to `None`.
-    - NumPy scalars (`np.int64`, `np.float32`, etc.) → converted to native
-      Python scalars via `.item()` when possible.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DATA_ROOT = Path(os.getenv("DATA_ROOT", REPO_ROOT / "data"))
 
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input DataFrame.
-
-    Returns
-    -------
-    list[dict]
-        List of JSON-serializable records.
-    """
-    if df is None or df.empty:
-        return []
-    df = df.copy()
-
-    # Datetimes → ISO 8601 Z
-    for c in df.columns:
-        if pd.api.types.is_datetime64_any_dtype(df[c]):
-            s = pd.to_datetime(df[c], errors="coerce", utc=True)
-            df[c] = s.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # Inf/NaN → None (via NaN first)
-    df = df.replace([np.inf, -np.inf], np.nan)
-    recs = df.to_dict(orient="records")
-
-    for r in recs:
-        for k, v in list(r.items()):
-            if pd.isna(v):
-                r[k] = None
-                continue
-            # Convert numpy scalars to plain Python types when possible
-            if hasattr(v, "item") and callable(getattr(v, "item", None)):
-                try:
-                    v = v.item()
-                except Exception:
-                    pass
-            if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-                r[k] = None
-            else:
-                r[k] = v
-    return recs
-
-
-# ───────────────────────── GCS / Serving helpers ─────────────────────────
-def _serving_forecast_prefix() -> str:
-    """
-    Source of truth for the `latest_forecast.json` bundle.
-
-    Priority
-    --------
-    1) ENV `SERVING_FORECAST_PREFIX`
-    2) `settings.SERVING_FORECAST_PREFIX`
-    3) `settings.GCS_SERVING_PREFIX` (legacy)
-
-    Returns
-    -------
-    str
-        GCS prefix (without trailing slash), or empty string if not configured.
-    """
-    env_val = (os.environ.get("SERVING_FORECAST_PREFIX") or "").strip()
-    if env_val:
-        return env_val.rstrip("/")
-
-    base = (
-        getattr(settings, "SERVING_FORECAST_PREFIX", None)
-        or getattr(settings, "GCS_SERVING_PREFIX", "")
-        or ""
-    )
-    return base.rstrip("/")
-
-
-def _bundle_uri() -> str:
-    """Build the URI / path for `latest_forecast.json`.
-
-    Returns
-    -------
-    str
-        - `gs://.../latest_forecast.json` when a GCS prefix is configured;
-        - `"latest_forecast.json"` (local file) when no prefix is available.
-    """
-    base = _serving_forecast_prefix()
-    # if base is empty → try local file "latest_forecast.json"
-    return f"{base}/latest_forecast.json" if base else "latest_forecast.json"
+GCS_LOCAL_ROOT_PREFIX = (
+    os.getenv(
+        "GCS_LOCAL_ROOT_PREFIX",
+        "gs://velib-forecast-472820_cloudbuild/velib/",
+    ).rstrip("/")
+    + "/"
+)
 
 
 def _split_gs(uri: str) -> Tuple[str, str]:
-    """Split a `gs://bucket/key` URI into `(bucket, key)`.
+    """Split a `gs://bucket/key` URI into `(bucket, key)`."""
+    if not uri.startswith("gs://"):
+        raise ValueError(f"Bad GCS URI: {uri}")
+    bucket, key = uri[5:].split("/", 1)
+    return bucket, key
 
-    Parameters
-    ----------
-    uri : str
-        GCS URI starting with `gs://`.
 
-    Returns
-    -------
-    tuple[str, str]
-        `(bucket, key)`.
+def _local_path_from_gs(uri: str) -> Path:
+    """Map a velib gs:// URI to local DATA_ROOT path (STORAGE_BACKEND=local)."""
+    if not uri.startswith(GCS_LOCAL_ROOT_PREFIX):
+        raise FileNotFoundError(f"Local mapping failed for URI: {uri}")
+    rel = uri[len(GCS_LOCAL_ROOT_PREFIX) :]
+    return DATA_ROOT / rel.lstrip("/")
 
-    Raises
-    ------
-    AssertionError
-        If the URI does not start with `gs://`.
+
+def _read_json_any(uri: str) -> Optional[dict]:
+    """Read a JSON document from either local disk or GCS, depending on STORAGE_BACKEND.
+
+    Returns None on any error.
     """
-    assert uri.startswith("gs://"), f"Invalid GCS URI: {uri}"
-    b, k = uri[5:].split("/", 1)
-    return b, k
+    if not uri:
+        return None
 
-
-def _read_forecast_bundle_latest() -> dict:
-    """
-    Read `latest_forecast.json` bundle and return it as a dict.
-
-    Expected shape (minimal example)
-    --------------------------------
-    {
-      "generated_at": "...",
-      "horizons": [15, 60],
-      "data": {
-        "15": [...],
-        "60": [...]
-      }
-    }
-
-    Returns
-    -------
-    dict
-        Parsed JSON bundle, or `{}` if:
-        - file / blob is missing,
-        - JSON is invalid,
-        - GCS is unavailable.
-    """
-    uri = _bundle_uri()
-
-    # Local read if no GCS available or if URI is not gs://
-    if not uri.startswith("gs://") or storage is None:
+    if USE_LOCAL:
         try:
-            with open(uri, "r", encoding="utf-8") as f:
-                return json.load(f)
+            path = _local_path_from_gs(uri)
+            if not path.exists():
+                return None
+            return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
-            return {}
+            return None
 
-    # GCS read
+    if storage is None or not uri.startswith("gs://"):
+        return None
     try:
         bkt, key = _split_gs(uri)
         cli = storage.Client()
-        blob = cli.bucket(bkt).get_blob(key)
-        if not blob:
-            return {}
+        blob = cli.bucket(bkt).blob(key)
+        if not blob.exists():
+            return None
         data = blob.download_as_bytes()
         return json.loads(data.decode("utf-8"))
     except Exception:
-        return {}
+        return None
 
 
-def _to_int_series(s: pd.Series, default: int = 0) -> pd.Series:
-    """Convert a Series to `int` dtype with safe coercion and default fill.
+def _json_sanitize(obj: Any) -> Any:
+    """Replace NaN/±Inf with None recursively (JSON-safe)."""
+    if isinstance(obj, dict):
+        return {k: _json_sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_sanitize(v) for v in obj]
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    return obj
 
-    Parameters
-    ----------
-    s : pd.Series
-        Input series (any dtype).
-    default : int, default 0
-        Value used to fill NaNs after coercion.
 
-    Returns
-    -------
-    pd.Series
-        Integer series (`int`) with NaNs replaced by `default`.
+# ───────────────────────────── Helpers: fallback bundle ─────────────────────────────
+
+def _forecast_bundle_uri_or_empty() -> str:
+    """Return the gs:// URI for the latest forecast bundle (or empty string).
+
+    Priority:
+    - ENV `GCS_FORECAST_PREFIX` or `SERVING_FORECAST_PREFIX`
+    Output:
+    - `<prefix>/latest_forecast.json`
     """
-    v = pd.to_numeric(s, errors="coerce").fillna(default)
-    return v.astype(int)
+    raw = (
+        os.environ.get("GCS_FORECAST_PREFIX", "")
+        or os.environ.get("SERVING_FORECAST_PREFIX", "")
+    )
+    base = raw.strip().strip("'\"").rstrip("/")
+    if not base.startswith("gs://"):
+        return ""
+    return f"{base}/latest_forecast.json"
 
 
-# ───────────────────────── Route: /stations ─────────────────────────
-@router.get("/stations")
-def list_stations():
-    """
-    Minimal list for the map:
-      station_id (string), name, lat, lon, capacity,
-      num_bikes_available, num_docks_available.
-
-    Data sources (priority)
-    -----------------------
-    1) **Live snapshot** (GBFS via `fetch_live_snapshot()`):
-       - returns the freshest information,
-       - includes current bikes and capacity per station.
-
-    2) **Fallback**: `latest_forecast.json` bundle:
-       - used when live snapshot is unavailable or fails,
-       - no "live bikes" count (bikes = 0 by construction),
-       - still exposes `station_id` + `capacity` to build the map.
-
-    Returns
-    -------
-    list[dict]
-        JSON-safe list of station records, as produced by `_json_safe_df`.
-        Returns `[]` on any failure / missing data.
-    """
-    # 1) Primary source: live
-    try:
-        live = fetch_live_snapshot()
-    except Exception as e:
-        print(f"[/stations] live snapshot error: {e}")
-        live = pd.DataFrame()
-
-    if live is not None and not live.empty:
-        df = live.copy()
-
-        # Canonical station_id (string)
-        if "station_id" in df.columns:
-            station_id = df["station_id"].astype("string")
-        elif "stationcode" in df.columns:
-            station_id = df["stationcode"].astype("string")
-        elif "id" in df.columns:
-            station_id = df["id"].astype("string")
-        else:
-            # no usable key → empty list
-            return []
-
-        capacity = _to_int_series(df.get("capacity", pd.Series([0] * len(df))))
-        bikes = _to_int_series(
-            df.get("bikes", df.get("num_bikes_available", pd.Series([0] * len(df))))
-        )
-
-        out = pd.DataFrame(
-            {
-                "station_id": station_id.astype(str),
-                "name": df.get("name"),
-                "lat": df.get("lat"),
-                "lon": df.get("lon"),
-                "capacity": capacity,
-                "num_bikes_available": bikes,
-                "num_docks_available": (capacity - bikes).clip(lower=0),
-            }
-        ).drop_duplicates(subset=["station_id"], keep="last")
-        return _json_safe_df(out)
-
-    # 2) Fallback: forecast bundle JSON
-    try:
-        bundle = _read_forecast_bundle_latest()
-    except Exception as e:
-        print(f"[/stations] forecast bundle fallback error: {e}")
-        bundle = {}
-
-    if not bundle or "data" not in bundle:
+def _stations_from_bundle(doc: dict) -> List[dict]:
+    """Extract a degraded stations list from a `latest_forecast.json`-like bundle."""
+    data = doc.get("data")
+    if not isinstance(data, dict):
         return []
 
-    # Use horizon 15 if present, otherwise any non-empty horizon
-    data = bundle.get("data", {})
-    rows = data.get("15") or next(
-        (v for _, v in data.items() if isinstance(v, list) and v),
-        [],
-    )
+    # prefer horizon "15" then any non-empty list
+    rows = data.get("15")
+    if not isinstance(rows, list) or not rows:
+        rows = next((v for v in data.values() if isinstance(v, list) and v), [])
     if not rows:
         return []
 
-    fc = pd.DataFrame(rows)
+    out: Dict[str, dict] = {}
 
-    # station_id (string) from station_id OR stationcode
-    if "station_id" in fc.columns:
-        station_id = fc["station_id"].astype("string")
-    elif "stationcode" in fc.columns:
-        station_id = fc["stationcode"].astype("string")
-    else:
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+
+        sid = r.get("station_id") or r.get("stationcode") or r.get("id")
+        if sid is None:
+            continue
+        sid = str(sid)
+
+        cap = r.get("capacity")
+        try:
+            cap_i = int(cap) if cap is not None else 0
+        except Exception:
+            cap_i = 0
+
+        # If the bundle contains coordinates/names, keep them; otherwise None
+        rec = out.get(sid, {})
+        rec.update(
+            {
+                "station_id": sid,
+                "name": r.get("name", rec.get("name")),
+                "lat": r.get("lat", rec.get("lat")),
+                "lon": r.get("lon", rec.get("lon")),
+                "capacity": cap_i,
+                "num_bikes_available": 0,
+                "num_docks_available": max(cap_i, 0),
+            }
+        )
+        out[sid] = rec
+
+    return list(out.values())
+
+
+# ───────────────────────────── Route ─────────────────────────────
+
+@router.get("")
+def list_stations(response: Response) -> List[dict]:
+    """Return a minimal list of stations for the UI.
+
+    Notes
+    -----
+    - Primary source: live GBFS snapshot (freshest).
+    - Fallback: latest forecast bundle (degraded).
+    - On any failure: returns [].
+    """
+    # Always reflect latest state → no caching.
+    response.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
+
+    # 1) Primary source: live snapshot
+    try:
+        df = fetch_live_snapshot()
+    except Exception as e:  # pragma: no cover
+        print(f"[stations] fetch_live_snapshot() failed: {e}")
+        df = None
+
+    if df is not None and hasattr(df, "to_dict") and getattr(df, "empty", True) is False:
+        try:
+            recs = df.to_dict(orient="records")
+        except Exception as e:  # pragma: no cover
+            print(f"[stations] to_dict(orient='records') failed: {e}")
+            recs = []
+
+        out: Dict[str, dict] = {}
+        for r in recs:
+            if not isinstance(r, dict):
+                continue
+
+            sid = r.get("station_id") or r.get("stationcode") or r.get("id")
+            if sid is None:
+                continue
+            sid = str(sid)
+
+            # canonical fields in your snapshot schema are: bikes, capacity, lat, lon, name
+            cap = r.get("capacity")
+            bikes = r.get("bikes", r.get("num_bikes_available"))
+
+            try:
+                cap_i = int(cap) if cap is not None else 0
+            except Exception:
+                cap_i = 0
+            try:
+                bikes_i = int(bikes) if bikes is not None else 0
+            except Exception:
+                bikes_i = 0
+
+            out[sid] = {
+                "station_id": sid,
+                "name": r.get("name"),
+                "lat": r.get("lat"),
+                "lon": r.get("lon"),
+                "capacity": cap_i,
+                "num_bikes_available": max(bikes_i, 0),
+                "num_docks_available": max(cap_i - bikes_i, 0),
+            }
+
+        if out:
+            return _json_sanitize(list(out.values()))
+
+    # 2) Fallback: latest_forecast.json bundle
+    uri = _forecast_bundle_uri_or_empty()
+    if not uri:
         return []
 
-    if "capacity" in fc.columns:
-        capacity = _to_int_series(fc["capacity"])
-    else:
-        capacity = _to_int_series(fc.get("capacity_bin", pd.Series([0] * len(fc))))
+    doc = _read_json_any(uri)
+    if not isinstance(doc, dict):
+        return []
 
-    bikes = pd.Series([0] * len(fc), dtype=int)  # no live bikes in forecast bundle
-
-    out = pd.DataFrame(
-        {
-            "station_id": station_id.astype(str),
-            "name": None,
-            "lat": None,
-            "lon": None,
-            "capacity": capacity,
-            "num_bikes_available": bikes,
-            "num_docks_available": (capacity - bikes).clip(lower=0),
-        }
-    ).drop_duplicates(subset=["station_id"], keep="last")
-
-    return _json_safe_df(out)
+    stations = _stations_from_bundle(doc)
+    return _json_sanitize(stations) if stations else []

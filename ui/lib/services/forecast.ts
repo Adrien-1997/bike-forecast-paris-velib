@@ -85,7 +85,7 @@ async function safeJson<T = any>(
  * - `h` : horizon en minutes (typiquement 15 ou 60).
  *
  * Détails :
- * - appelle l’endpoint `/forecast/latest?h=${h}` en GET ;
+ * - appelle l’endpoint `/serving/forecast?h=${h}` en GET ;
  * - passe la réponse brute à `selectForecastRows(payload, h)` qui :
  *     • sait extraire le bon tableau de lignes selon la forme JSON courante,
  *     • normalise la structure pour coller au type `Forecast`;
@@ -94,8 +94,8 @@ async function safeJson<T = any>(
  * Retour :
  * - `Promise<Forecast[]>` toujours défini (jamais `null` ou `undefined`).
  */
-export async function getLatestForecast(h = 15): Promise<Forecast[]> {
-  const payload = await safeJson<any>(`/forecast/latest?h=${h}`, { method: 'GET' })
+export async function getLatestForecast(h = 60): Promise<Forecast[]> {
+  const payload = await safeJson<any>(`/serving/forecast/?h=${h}`, { method: 'GET' })
   const rows = selectForecastRows(payload, h)
   return Array.isArray(rows) ? (rows as Forecast[]) : []
 }

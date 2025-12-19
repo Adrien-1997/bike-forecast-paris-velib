@@ -1,9 +1,9 @@
 # api/routes/snapshot.py
 
-"""Live snapshot endpoint for Vélib’ Forecast.
+"""Live serving snapshot endpoint for Vélib’ Forecast.
 
-This router exposes a lightweight `/snapshot` endpoint that returns the
-**current state of the Vélib' network** (sans météo) using:
+This router exposes a lightweight `/serving/snapshot` endpoint that returns the
+**current state of the Vélib' network** (without weather) using:
 
 - `core.snapshot_live.fetch_live_snapshot()` :
   - queries Smovengo GBFS endpoints,
@@ -20,18 +20,18 @@ Failure model
 - If the return value is not a pandas DataFrame (no `.to_dict`), it also
   returns `[]`.
 
-This keeps `/snapshot` **safe and predictable**, even when Smovengo is down
+This keeps `/serving/snapshot` **safe and predictable**, even when Smovengo is down
 or the machine is offline.
 """
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import List
 
 from fastapi import APIRouter
 from core.snapshot_live import fetch_live_snapshot
 
-router = APIRouter(prefix="/snapshot", tags=["snapshot"])
+router = APIRouter(prefix="/serving/snapshot", tags=["serving-snapshot"])
 
 
 @router.get("")
@@ -62,12 +62,10 @@ def get_snapshot() -> List[dict]:
     try:
         df = fetch_live_snapshot()
     except Exception as e:  # pragma: no cover
-        # We log to stdout but keep the API behaviour stable.
         print(f"[snapshot] fetch_live_snapshot() failed: {e}")
         return []
 
     if not hasattr(df, "to_dict"):
-        # Defensive: unexpected type
         print("[snapshot] fetch_live_snapshot() did not return a DataFrame-like object")
         return []
 

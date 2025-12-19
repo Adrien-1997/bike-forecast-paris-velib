@@ -9,7 +9,7 @@ l’API publique de Vélib' Forecast :
 - Résolution souple du module `core` pour partager des utilitaires (settings…).
 - Chargement des `Settings` Pydantic (chemins GCS, CORS, météo, monitoring…).
 - Montage des routers :
-    * routes "legacy" : health, stations, forecast, badges, snapshot, weather,
+    * routes "legacy" : health, forecast, badges, snapshot,
     * routes "monitoring" : network overview/dynamics/stations, model perf/explain,
       data health/drift/freshness, intro.
 - Middleware global :
@@ -31,22 +31,28 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
 # ─────────── .env ───────────
-# On tente d'abord de charger un .env dans le cwd (utile en local),
-# puis un .env à la racine du repo (utile en prod/Cloud Run si monté).
+# Objectif: charger implicitement api/.env (en priorité), puis fallback racine repo.
 try:
-    from dotenv import load_dotenv, find_dotenv
-    found = find_dotenv(filename=".env", usecwd=True)
-    if found:
-        load_dotenv(found, override=False)
-    repo_root = Path(__file__).resolve().parents[2]
-    env_file = repo_root / ".env"
-    if env_file.exists():
-        load_dotenv(env_file, override=False)
-    print(f"[api] .env chargé ✓ (found='{found}', repo_root='{repo_root}')")
+    from dotenv import load_dotenv
+
+    api_dir = Path(__file__).resolve().parent
+    repo_root = api_dir.parent
+    env_candidates = [
+        api_dir / ".env",
+    ]
+
+    loaded_any = False
+    for p in env_candidates:
+        if p.exists():
+            load_dotenv(p, override=False)
+            loaded_any = True
+
+    print(
+        f"[api] .env loaded={loaded_any} "
+        f"(checked={[str(p) for p in env_candidates]})"
+    )
 except Exception as e:
-    # L’API reste fonctionnelle même si .env n’est pas trouvé : on se repose
-    # alors uniquement sur les variables d’environnement déjà présentes.
-    print(f"[api] .env non chargé ({e})")
+    print(f"[api] .env not loaded ({e})")
 
 # ─────────── Alias 'core' ───────────
 # Permet d'importer `core` de façon homogène dans tout le projet, que l’on soit
@@ -69,14 +75,14 @@ except Exception:
 
 # ─────────── Routes legacy ───────────
 # Endpoints principaux (avant monitoring) :
-# - /healthz, /stations, /forecast, /badges, /snapshot, /weather, …
+# - /health, /forecast, /badges, /snapshot, …
 try:
-    from api.routes import health, stations, forecast, badges, snapshot, weather
+    from api.routes import health, forecast, badges, snapshot, weather, stations
 except Exception:
     try:
-        from .routes import health, stations, forecast, badges, snapshot, weather
+        from .routes import health, forecast, badges, snapshot, weather, stations
     except Exception:
-        from routes import health, stations, forecast, badges, snapshot, weather
+        from routes import health, forecast, badges, snapshot, weather, stations
 
 # ─────────── Routes monitoring ───────────
 # Endpoints de monitoring structurés par sous-pages :
@@ -106,7 +112,7 @@ except Exception:
             model_explainability,
             data_health,
             data_drift,
-            data_freshness,   # ✅ ajout ici
+            data_freshness,
             intro,
         )
     except Exception:
@@ -118,17 +124,17 @@ except Exception:
             model_explainability,
             data_health,
             data_drift,
-            data_freshness,   # ✅ ajout ici
+            data_freshness,
             intro,
         )
 
 # ─────────── App ───────────
 # Application FastAPI principale (titre/version utilisés aussi pour OpenAPI).
-app = FastAPI(title="velib-api", version="0.2.0")
+app = FastAPI(title="velib-api", version="1.0")
 
 # ─────────── Token global (middleware) ───────────
 # API_GLOBAL_TOKEN (env) permet de protéger l'ensemble des endpoints avec un
-# simple Bearer token "global" (pas de gestion fine utilisateur / scopes).
+# Bearer token "global" (pas de gestion fine utilisateur / scopes).
 GLOBAL_TOKEN = os.getenv("API_GLOBAL_TOKEN", "").strip()
 
 @app.middleware("http")
@@ -138,27 +144,34 @@ async def enforce_global_token(request: Request, call_next):
     Règles :
     - OPTIONS (preflight CORS) toujours autorisées,
     - si GLOBAL_TOKEN n'est pas configuré → API entièrement ouverte (utile en dev),
-    - routes racine "/" et "/healthz" toujours publiques,
+    - routes publiques (health + docs/openapi) toujours accessibles,
     - pour le reste :
         * Authorization: Bearer <token> requis,
         * <token> doit correspondre exactement à API_GLOBAL_TOKEN sinon 403.
     """
-    # Laisser passer les preflights CORS
+    # 1) Laisser passer les preflights CORS
     if request.method == "OPTIONS":
         return await call_next(request)
 
-    # Pas de token configuré → API ouverte (utile dev)
+    # 2) Pas de token configuré → API ouverte (utile dev)
     if not GLOBAL_TOKEN:
         return await call_next(request)
 
-    # (optionnel) routes publiques
-    if request.url.path in ("/", "/healthz"):
+    # 3) Routes publiques (dont Swagger/OpenAPI)
+    public_paths = {
+        "/", "/health",
+        "/docs", "/openapi.json", "/redoc", "/docs/oauth2-redirect",
+    }
+    if request.url.path in public_paths:
         return await call_next(request)
 
+    # 4) Enforcement Bearer token
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Authorization header")
-    if auth.removeprefix("Bearer ").strip() != GLOBAL_TOKEN:
+
+    token = auth.removeprefix("Bearer ").strip()
+    if token != GLOBAL_TOKEN:
         raise HTTPException(status_code=403, detail="Invalid token")
 
     return await call_next(request)
@@ -187,11 +200,11 @@ app.add_middleware(
 # ─────────── Montage des routers ───────────
 # Legacy
 app.include_router(health.router)
-app.include_router(stations.router)
 app.include_router(forecast.router)
 app.include_router(badges.router)
 app.include_router(snapshot.router)
 app.include_router(weather.router)
+app.include_router(stations.router)
 
 # Monitoring
 app.include_router(network_overview.router)
@@ -201,7 +214,7 @@ app.include_router(model_performance.router)
 app.include_router(model_explainability.router)
 app.include_router(data_health.router)
 app.include_router(data_drift.router)
-app.include_router(data_freshness.router)   # ✅ nouveau
+app.include_router(data_freshness.router)
 app.include_router(intro.router)
 
 # ─────────── Debug ───────────

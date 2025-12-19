@@ -47,7 +47,7 @@ try:
 except Exception:  # pragma: no cover - mode local ou lib manquante
     storage = None
 
-router = APIRouter(prefix="/monitoring/network")
+router = APIRouter(prefix="/monitoring/network/overview", tags=["monitoring-network"])
 
 # ───────────────────────── Backend (local vs GCS) ─────────────────────────
 
@@ -181,7 +181,7 @@ def _proxy_json(gs_uri: str, request: Request, ttl: int = 120) -> JSONResponse:
 # Endpoints OVERVIEW
 # ──────────────────────────────────────────────────────────────────────────────
 
-DocNameOverview = Literal[
+NameOverview = Literal[
     "kpis",
     "snapshot_distribution",
     "today_curve",
@@ -191,8 +191,7 @@ DocNameOverview = Literal[
     "stations_tension",
 ]
 
-# TTL (secondes) par type de document
-_TTL_BY_DOC: Dict[str, int] = {
+_TTL_BY_NAME: Dict[str, int] = {
     "kpis": 60,
     "snapshot_distribution": 120,
     "today_curve": 60,
@@ -202,26 +201,33 @@ _TTL_BY_DOC: Dict[str, int] = {
     "stations_tension": 120,
 }
 
-
-@router.get("/overview/available")
-def network_overview_available():
-    """Petit index des documents *network overview* disponibles."""
-    docs = list(_TTL_BY_DOC.keys())
-    return {
-        "docs": docs,
-        "time_travel": "utiliser ?at=YYYY-MM-DDTHH-MM-SSZ ou sans param pour latest",
-    }
-
-
-@router.get("/overview/{doc}")
-def network_overview_doc(doc: DocNameOverview, request: Request, at: Optional[str] = None):
-    """Proxy JSON pour les documents générés par le job Overview."""
-    mon = _mon_prefix_or_500()  # ex: gs://velib-forecast-472820_cloudbuild/velib
-    folder = _sanitize_at(at)   # 'latest' ou timestamp normalisé
-
-    # si l'ENV finit déjà par /monitoring, on ne le redouble pas
+def _base_latest(mon: str) -> str:
     base = f"{mon}/monitoring" if not mon.endswith("/monitoring") else mon
-    gs_uri = f"{base}/network/overview/{folder}/{doc}.json"
-    ttl = _TTL_BY_DOC.get(doc, 120)
-    print(f"[network_overview] reading {gs_uri} (backend={STORAGE_BACKEND})")
-    return _proxy_json(gs_uri, request, ttl=ttl)
+    return f"{base}/network/overview/latest"
+
+
+@router.get("")
+def network_overview_root(request: Request):
+    """Alias root → kpis.json (latest-only)."""
+    mon = _mon_prefix_or_500()
+    latest = _base_latest(mon)
+    uri = f"{latest}/kpis.json"
+    return _proxy_json(uri, request, ttl=_TTL_BY_NAME["kpis"])
+
+
+@router.get("/manifest")
+def network_overview_manifest(request: Request):
+    """Manifest de la page Network Overview (latest-only)."""
+    mon = _mon_prefix_or_500()
+    latest = _base_latest(mon)
+    uri = f"{latest}/manifest.json"
+    return _proxy_json(uri, request, ttl=60)
+
+
+@router.get("/{name}")
+def network_overview_doc(name: NameOverview, request: Request):
+    """Accès à un artefact Network Overview (latest-only)."""
+    mon = _mon_prefix_or_500()
+    latest = _base_latest(mon)
+    uri = f"{latest}/{name}.json"
+    return _proxy_json(uri, request, ttl=_TTL_BY_NAME.get(name, 120))

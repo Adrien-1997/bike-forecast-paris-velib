@@ -63,6 +63,7 @@ GCS_LOCAL_ROOT_PREFIX = (
     + "/"
 )
 
+router = APIRouter(prefix="/monitoring/data", tags=["monitoring-data"])
 
 def _split_gs(uri: str) -> Tuple[str, str]:
     """Découpe une URI `gs://bucket/key` en `(bucket, key)`."""
@@ -159,17 +160,17 @@ def _proxy_json(gs_uri: str, request: Request, ttl: int = 60) -> JSONResponse:
 # ──────────────────────────────────────────────────────────────
 
 @router.get("/freshness")
-def get_data_freshness_latest(request: Request):
-    """Renvoie le `latest.json` de fraîcheur des données.
-
-    Logique :
-      <GCS_MONITORING_PREFIX>/monitoring/data/freshness/latest.json
-
-    En mode local :
-      DATA_ROOT / "monitoring/data/freshness/latest.json"
-    """
+def get_data_freshness(request: Request):
     prefix = _mon_prefix_or_500()
     base = f"{prefix}/monitoring" if not prefix.endswith("/monitoring") else prefix
-    uri = f"{base}/data/freshness/latest.json"
-    print(f"[data_freshness] reading {uri}")
+    uri = f"{base}/data/freshness/latest/freshness.json"
     return _proxy_json(uri, request, ttl=30)
+
+
+@router.get("/freshness/manifest")
+def get_data_freshness_manifest(request: Request):
+    prefix = _mon_prefix_or_500()
+    base = f"{prefix}/monitoring" if not prefix.endswith("/monitoring") else prefix
+    uri = f"{base}/data/freshness/latest/manifest.json"
+    return _proxy_json(uri, request, ttl=30)
+

@@ -41,7 +41,7 @@ try:
 except Exception:  # pragma: no cover - mode local ou lib manquante
     storage = None
 
-router = APIRouter(prefix="/monitoring")
+router = APIRouter(prefix="/monitoring", tags=["monitoring-intro"])
 
 # ───────────────────────── Backend (local vs GCS) ─────────────────────────
 
@@ -172,30 +172,21 @@ def _proxy_json(gs_uri: str, request: Request, ttl: int = 60) -> JSONResponse:
     return resp
 
 
-# ───────────────────────── Endpoints ─────────────────────────
-
-@router.get("/intro/available")
-def intro_available():
-    """Expose la liste des documents *intro* disponibles et le mode time-travel."""
-    return {
-        "docs": ["intro"],
-        "time_travel": "utiliser ?at=YYYY-MM-DDTHH-MM-SSZ ou sans param pour latest",
-    }
-
+# ───────────────────────── Endpoints (aligned: latest-only, single file) ─────────────────────────
 
 @router.get("/intro")
-def intro_doc(request: Request, at: Optional[str] = None):
-    """
-    Sert le document consolidé produit par `build_monitoring_intro.py`.
+def intro_root(request: Request):
+    """Alias root → intro.json (latest-only)."""
+    base = _mon_prefix_or_500()  # ".../monitoring"
+    gs_uri = f"{base}/intro/latest/intro.json"
+    print(f"[monitoring.intro] reading {gs_uri} (backend={STORAGE_BACKEND})")
+    return _proxy_json(gs_uri, request, ttl=60)
 
-    Chemin logique :
-        gs://.../monitoring/intro/<latest|YYYY-MM-DDTHH-MM-SSZ>/intro.json
 
-    En mode local :
-        data/monitoring/intro/<folder>/intro.json
-    """
-    base = _mon_prefix_or_500()
-    folder = _sanitize_at(at)
-    gs_uri = f"{base}/intro/{folder}/intro.json"
+@router.get("/intro/manifest")
+def intro_manifest(request: Request):
+    """Manifest du bundle intro (latest-only)."""
+    base = _mon_prefix_or_500()  # ".../monitoring"
+    gs_uri = f"{base}/intro/latest/manifest.json"
     print(f"[monitoring.intro] reading {gs_uri} (backend={STORAGE_BACKEND})")
     return _proxy_json(gs_uri, request, ttl=60)

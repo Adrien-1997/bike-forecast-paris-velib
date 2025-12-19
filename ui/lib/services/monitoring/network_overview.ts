@@ -230,7 +230,7 @@ const path = (suffix: string) => `/monitoring/network/overview${suffix}`;
  * - Normalise les lat/lon en nombres ou null.
  */
 export async function fetchStationsIndex(): Promise<Record<string, StationMeta>> {
-  const arr = await getJSON<StationMeta[]>("/stations").catch(() => []);
+  const arr = await getJSON<StationMeta[]>("serving/stations").catch(() => []);
   const idx: Record<string, StationMeta> = {};
   for (const s of arr) {
     const sid = String((s as any).station_id);

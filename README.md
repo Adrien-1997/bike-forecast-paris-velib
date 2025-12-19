@@ -44,7 +44,7 @@ avec un **pipeline reproductible**, un **suivi de la qualité des données** et 
 
 ```text
             +--------------------+         +------------------------+
-            |  API Vélib' GBFS   |         |  API météo (Open-Meteo |
+            |  API Vélib' GBFS   |         |  API météo (Open-Meteo)|
             +---------+----------+         +-----------+------------+
                       |                                |
                       v                                v

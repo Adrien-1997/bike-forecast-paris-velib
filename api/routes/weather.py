@@ -5,7 +5,7 @@
 This router exposes lightweight weather-related endpoints.
 
 Currently:
-- `/weather/live`:
+- `/serving/weather`:
     - fetches current weather from Open-Meteo via `core.weather_live.fetch_live_weather`,
     - returns a small JSON payload with:
         * `ts_utc`    (ISO8601 UTC timestamp),
@@ -18,14 +18,17 @@ Currently:
 
 from __future__ import annotations
 
+from typing import Any, Dict
+
 from fastapi import APIRouter, Response
+
 from core.weather_live import fetch_live_weather
 
-router = APIRouter(prefix="/weather", tags=["weather"])
+router = APIRouter(prefix="/serving/weather", tags=["serving-weather"])
 
 
-@router.get("/live")
-def get_weather_live(response: Response):
+@router.get("")
+def get_weather_live(response: Response) -> Dict[str, Any]:
     """Return current weather from Open-Meteo (no caching).
 
     Response example
@@ -43,6 +46,6 @@ def get_weather_live(response: Response):
     - The `Cache-Control` header is set to `no-store` so that browsers and
       intermediate proxies do not cache the response.
     """
-    data = fetch_live_weather()
+    data = fetch_live_weather() or {}
     response.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
     return data

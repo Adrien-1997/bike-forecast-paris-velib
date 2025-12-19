@@ -183,7 +183,7 @@ const path = (suffix: string) => `/monitoring/network/stations${suffix}`;
  *   - toute autre UI ayant besoin d’un accès rapide à la méta station.
  */
 export async function fetchStationsIndex(): Promise<Record<string, StationMeta>> {
-  const arr = await getJSON<StationMeta[]>("/stations").catch(() => []);
+  const arr = await getJSON<StationMeta[]>("serving/stations").catch(() => []);
   const idx: Record<string, StationMeta> = {};
   for (const s of arr) {
     const sid = String((s as any).station_id);
